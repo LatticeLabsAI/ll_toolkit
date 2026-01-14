@@ -1,0 +1,18 @@
+{
+  "test_name": "infrastructure_test",
+  "run_directory": "test_outputs/infrastructure_test_20260114_035519",
+  "timestamp": "2026-01-14T03:55:19.102453",
+  "artifacts": {
+    "logs": [],
+    "outputs": [
+      {
+        "name": "test_output.json",
+        "path": "test_outputs/infrastructure_test_20260114_035519/outputs/test_output.json",
+        "size": 36
+      }
+    ],
+    "intermediates": [],
+    "visualizations": [],
+    "reports": []
+  }
+}

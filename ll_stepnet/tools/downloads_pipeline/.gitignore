@@ -1,0 +1,16 @@
+# Tracking database (machine-specific)
+processed_files.json
+
+# Temporary extraction directories
+temp/
+tmp/
+stepnet_extract_*/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Logs
+*.log

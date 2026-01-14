@@ -1,0 +1,414 @@
+"""
+Tests for LL-STEPNet using actual STEP files.
+"""
+
+import torch
+import sys
+from pathlib import Path
+from datetime import datetime
+
+# Add parent directory to path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from stepnet import (
+    STEPTokenizer,
+    STEPFeatureExtractor,
+    STEPTopologyBuilder,
+    STEPEncoder,
+    STEPForClassification,
+    STEPForPropertyPrediction,
+    STEPForSimilarity
+)
+
+
+# Output file for logging
+LOG_FILE = None
+LOG_PATH = None
+
+
+def log_print(message=""):
+    """Print to both console and log file."""
+    print(message)
+    if LOG_FILE:
+        LOG_FILE.write(message + "\n")
+        LOG_FILE.flush()
+
+
+# STEP test files
+TEST_FILES = [
+    "data/test_files/4in_rod.step",
+    "data/test_files/Button.step",
+    "data/test_files/Pic adapter.step",
+    "data/test_files/Stock_Hinge.step",
+    "data/test_files/Butt pad.step"
+]
+
+
+def read_step_file(file_path: str) -> str:
+    """Read STEP file and extract DATA section."""
+    with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+        content = f.read()
+
+    # Extract DATA section
+    if 'DATA;' in content and 'ENDSEC;' in content:
+        data_start = content.index('DATA;') + 5
+        data_end = content.index('ENDSEC;', data_start)
+        return content[data_start:data_end].strip()
+    else:
+        return content
+
+
+def test_tokenizer_on_files():
+    """Test tokenizer on actual STEP files."""
+    print("\n" + "=" * 60)
+    print("Testing STEPTokenizer on actual STEP files")
+    print("=" * 60)
+
+    tokenizer = STEPTokenizer()
+
+    for file_path in TEST_FILES:
+        print(f"\nProcessing: {Path(file_path).name}")
+
+        # Read file
+        step_content = read_step_file(file_path)
+        lines = [line for line in step_content.split('\n') if line.strip()]
+        print(f"  Lines in DATA section: {len(lines)}")
+
+        # Tokenize first 10 entities
+        sample = '\n'.join(lines[:10])
+        tokens = tokenizer.tokenize(sample)
+        token_ids = tokenizer.encode(sample)
+
+        print(f"  Sample tokens (first 20): {tokens[:20]}")
+        print(f"  Token IDs (first 20): {token_ids[:20]}")
+        print(f"  Total tokens in sample: {len(tokens)}")
+        print(f"  Vocab coverage: {len(set(token_ids))} unique tokens")
+
+        # Verify no errors
+        assert len(tokens) > 0, "Tokenization failed"
+        assert len(token_ids) > 0, "Encoding failed"
+        print("  ✓ PASSED")
+
+
+def test_feature_extraction_on_files():
+    """Test feature extraction on actual STEP files."""
+    print("\n" + "=" * 60)
+    print("Testing STEPFeatureExtractor on actual STEP files")
+    print("=" * 60)
+
+    extractor = STEPFeatureExtractor()
+
+    for file_path in TEST_FILES:
+        print(f"\nProcessing: {Path(file_path).name}")
+
+        # Read file
+        step_content = read_step_file(file_path)
+
+        # Extract features from chunk
+        features_list = extractor.extract_features_from_chunk(step_content)
+
+        print(f"  Total entities extracted: {len(features_list)}")
+
+        if len(features_list) > 0:
+            # Show sample features
+            sample_feature = features_list[0]
+            print(f"  Sample entity:")
+            print(f"    Entity ID: {sample_feature['entity_id']}")
+            print(f"    Entity Type: {sample_feature['entity_type']}")
+            print(f"    Numeric params: {sample_feature['numeric_params'][:5]}...")
+            print(f"    References: {sample_feature['references'][:5]}...")
+
+        # Count entity types
+        entity_types = {}
+        for feat in features_list:
+            etype = feat['entity_type']
+            entity_types[etype] = entity_types.get(etype, 0) + 1
+
+        print(f"  Unique entity types: {len(entity_types)}")
+        print(f"  Top 5 entity types:")
+        for etype, count in sorted(entity_types.items(), key=lambda x: x[1], reverse=True)[:5]:
+            print(f"    {etype}: {count}")
+
+        assert len(features_list) > 0, "Feature extraction failed"
+        print("  ✓ PASSED")
+
+
+def test_topology_building_on_files():
+    """Test topology building on actual STEP files."""
+    print("\n" + "=" * 60)
+    print("Testing STEPTopologyBuilder on actual STEP files")
+    print("=" * 60)
+
+    extractor = STEPFeatureExtractor()
+    builder = STEPTopologyBuilder()
+
+    for file_path in TEST_FILES:
+        print(f"\nProcessing: {Path(file_path).name}")
+
+        # Read file
+        step_content = read_step_file(file_path)
+
+        # Extract features
+        features_list = extractor.extract_features_from_chunk(step_content)
+
+        # Build topology
+        topology = builder.build_complete_topology(features_list)
+
+        print(f"  Topology statistics:")
+        print(f"    Nodes: {topology['num_nodes']}")
+        print(f"    Edges: {topology['num_edges']}")
+        print(f"    Adjacency matrix shape: {topology['adjacency_matrix'].shape}")
+        print(f"    Edge index shape: {topology['edge_index'].shape}")
+
+        # Calculate graph density
+        max_edges = topology['num_nodes'] * (topology['num_nodes'] - 1)
+        if max_edges > 0:
+            density = topology['num_edges'] / max_edges
+            print(f"    Graph density: {density:.4f}")
+
+        assert topology['num_nodes'] > 0, "No nodes in topology"
+        assert 'adjacency_matrix' in topology, "Missing adjacency matrix"
+        print("  ✓ PASSED")
+
+
+def test_encoder_on_files():
+    """Test encoder on actual STEP files."""
+    print("\n" + "=" * 60)
+    print("Testing STEPEncoder on actual STEP files")
+    print("=" * 60)
+
+    tokenizer = STEPTokenizer()
+    extractor = STEPFeatureExtractor()
+    builder = STEPTopologyBuilder()
+    encoder = STEPEncoder(vocab_size=50000, output_dim=1024)
+    encoder.eval()
+
+    for file_path in TEST_FILES[:3]:  # Test on first 3 files for speed
+        print(f"\nProcessing: {Path(file_path).name}")
+
+        # Read file
+        step_content = read_step_file(file_path)
+
+        # Tokenize (truncate to max length)
+        max_length = 2048
+        token_ids = tokenizer.encode(step_content)
+        if len(token_ids) > max_length:
+            token_ids = token_ids[:max_length]
+        else:
+            # Pad
+            token_ids.extend([0] * (max_length - len(token_ids)))
+
+        token_ids_tensor = torch.tensor([token_ids], dtype=torch.long)
+
+        # Build topology
+        features_list = extractor.extract_features_from_chunk(step_content)
+        topology_data = builder.build_complete_topology(features_list)
+
+        # Encode
+        with torch.no_grad():
+            output = encoder(token_ids_tensor, topology_data=topology_data)
+
+        print(f"  Input shape: {token_ids_tensor.shape}")
+        print(f"  Output shape: {output.shape}")
+        print(f"  Output mean: {output.mean().item():.4f}")
+        print(f"  Output std: {output.std().item():.4f}")
+
+        assert output.shape == (1, 1024), f"Wrong output shape: {output.shape}"
+        print("  ✓ PASSED")
+
+
+def test_classification_on_files():
+    """Test classification model on actual STEP files."""
+    print("\n" + "=" * 60)
+    print("Testing STEPForClassification on actual STEP files")
+    print("=" * 60)
+
+    tokenizer = STEPTokenizer()
+    extractor = STEPFeatureExtractor()
+    builder = STEPTopologyBuilder()
+
+    num_classes = 5
+    class_names = ['rod', 'button', 'adapter', 'hinge', 'pad']
+    model = STEPForClassification(vocab_size=50000, num_classes=num_classes, output_dim=1024)
+    model.eval()
+
+    for file_path in TEST_FILES:
+        print(f"\nProcessing: {Path(file_path).name}")
+
+        # Read file
+        step_content = read_step_file(file_path)
+
+        # Tokenize
+        max_length = 2048
+        token_ids = tokenizer.encode(step_content)
+        if len(token_ids) > max_length:
+            token_ids = token_ids[:max_length]
+        else:
+            token_ids.extend([0] * (max_length - len(token_ids)))
+
+        token_ids_tensor = torch.tensor([token_ids], dtype=torch.long)
+
+        # Build topology
+        features_list = extractor.extract_features_from_chunk(step_content)
+        topology_data = builder.build_complete_topology(features_list)
+
+        # Classify
+        with torch.no_grad():
+            logits = model(token_ids_tensor, topology_data=topology_data)
+            probabilities = torch.softmax(logits, dim=1)
+            predicted_class = torch.argmax(probabilities, dim=1).item()
+
+        print(f"  Predicted class: {class_names[predicted_class]} ({predicted_class})")
+        print(f"  Confidence: {probabilities[0, predicted_class].item():.2%}")
+        print(f"  All probabilities: {probabilities[0].tolist()}")
+
+        assert logits.shape == (1, num_classes), f"Wrong output shape: {logits.shape}"
+        assert torch.allclose(probabilities.sum(), torch.tensor(1.0)), "Probabilities don't sum to 1"
+        print("  ✓ PASSED")
+
+
+def test_property_prediction_on_files():
+    """Test property prediction model on actual STEP files."""
+    print("\n" + "=" * 60)
+    print("Testing STEPForPropertyPrediction on actual STEP files")
+    print("=" * 60)
+
+    tokenizer = STEPTokenizer()
+    extractor = STEPFeatureExtractor()
+    builder = STEPTopologyBuilder()
+
+    num_properties = 6
+    property_names = ['volume', 'surface_area', 'mass', 'bbox_x', 'bbox_y', 'bbox_z']
+    model = STEPForPropertyPrediction(vocab_size=50000, num_properties=num_properties, output_dim=1024)
+    model.eval()
+
+    for file_path in TEST_FILES[:3]:  # Test on first 3 for speed
+        print(f"\nProcessing: {Path(file_path).name}")
+
+        # Read file
+        step_content = read_step_file(file_path)
+
+        # Tokenize
+        max_length = 2048
+        token_ids = tokenizer.encode(step_content)
+        if len(token_ids) > max_length:
+            token_ids = token_ids[:max_length]
+        else:
+            token_ids.extend([0] * (max_length - len(token_ids)))
+
+        token_ids_tensor = torch.tensor([token_ids], dtype=torch.long)
+
+        # Build topology
+        features_list = extractor.extract_features_from_chunk(step_content)
+        topology_data = builder.build_complete_topology(features_list)
+
+        # Predict properties
+        with torch.no_grad():
+            properties = model(token_ids_tensor, topology_data=topology_data)
+
+        print(f"  Predicted properties:")
+        for name, value in zip(property_names, properties[0]):
+            print(f"    {name}: {value.item():.4f}")
+
+        assert properties.shape == (1, num_properties), f"Wrong output shape: {properties.shape}"
+        print("  ✓ PASSED")
+
+
+def test_similarity_on_files():
+    """Test similarity model on actual STEP files."""
+    print("\n" + "=" * 60)
+    print("Testing STEPForSimilarity on actual STEP files")
+    print("=" * 60)
+
+    tokenizer = STEPTokenizer()
+    extractor = STEPFeatureExtractor()
+    builder = STEPTopologyBuilder()
+
+    embedding_dim = 512
+    model = STEPForSimilarity(vocab_size=50000, embedding_dim=embedding_dim)
+    model.eval()
+
+    embeddings_list = []
+
+    # Get embeddings for all files
+    for file_path in TEST_FILES:
+        print(f"\nProcessing: {Path(file_path).name}")
+
+        # Read file
+        step_content = read_step_file(file_path)
+
+        # Tokenize
+        max_length = 2048
+        token_ids = tokenizer.encode(step_content)
+        if len(token_ids) > max_length:
+            token_ids = token_ids[:max_length]
+        else:
+            token_ids.extend([0] * (max_length - len(token_ids)))
+
+        token_ids_tensor = torch.tensor([token_ids], dtype=torch.long)
+
+        # Build topology
+        features_list = extractor.extract_features_from_chunk(step_content)
+        topology_data = builder.build_complete_topology(features_list)
+
+        # Get embedding
+        with torch.no_grad():
+            embedding = model(token_ids_tensor, topology_data=topology_data)
+
+        print(f"  Embedding shape: {embedding.shape}")
+        print(f"  L2 norm: {torch.norm(embedding, p=2).item():.4f}")
+
+        embeddings_list.append(embedding)
+
+        assert embedding.shape == (1, embedding_dim), f"Wrong shape: {embedding.shape}"
+        assert torch.allclose(torch.norm(embedding, p=2, dim=1), torch.ones(1)), "Not L2 normalized"
+        print("  ✓ Embedding generated")
+
+    # Compute similarity matrix
+    print("\nComputing pairwise similarities...")
+    all_embeddings = torch.cat(embeddings_list, dim=0)  # [5, 512]
+    similarity_matrix = torch.matmul(all_embeddings, all_embeddings.T)  # [5, 5]
+
+    print("\nSimilarity matrix:")
+    print("         ", end="")
+    for fp in TEST_FILES:
+        print(f"{Path(fp).stem[:8]:>8s} ", end="")
+    print()
+
+    for i, fp in enumerate(TEST_FILES):
+        print(f"{Path(fp).stem[:8]:>8s} ", end="")
+        for j in range(len(TEST_FILES)):
+            print(f"{similarity_matrix[i, j].item():8.4f} ", end="")
+        print()
+
+    # Verify diagonal is 1.0 (self-similarity)
+    for i in range(len(TEST_FILES)):
+        assert similarity_matrix[i, i].item() == 1.0, f"Self-similarity not 1.0 at index {i}"
+
+    print("\n✓ All self-similarities are 1.0")
+    print("✓ PASSED")
+
+
+def main():
+    print("\n" + "=" * 60)
+    print("LL-STEPNet Tests with Actual STEP Files")
+    print("=" * 60)
+    print(f"\nTest files:")
+    for fp in TEST_FILES:
+        print(f"  - {Path(fp).name}")
+
+    test_tokenizer_on_files()
+    test_feature_extraction_on_files()
+    test_topology_building_on_files()
+    test_encoder_on_files()
+    test_classification_on_files()
+    test_property_prediction_on_files()
+    test_similarity_on_files()
+
+    print("\n" + "=" * 60)
+    print("ALL TESTS PASSED! ✓")
+    print("=" * 60)
+
+
+if __name__ == '__main__':
+    main()

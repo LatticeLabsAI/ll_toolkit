@@ -1,0 +1,18 @@
+{
+  "test_name": "infrastructure_test",
+  "start_time": "2026-01-14T03:55:19.101944",
+  "phases": [
+    {
+      "name": "initialization",
+      "duration": 0.00013208389282226562
+    }
+  ],
+  "timings": {
+    "initialization": 0.00013208389282226562
+  },
+  "errors": [],
+  "warnings": [],
+  "test_metric": 42,
+  "end_time": "2026-01-14T03:55:19.102291",
+  "total_duration": 0.000347
+}

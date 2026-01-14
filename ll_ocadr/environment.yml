@@ -1,0 +1,11 @@
+name: ll-ocadr
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pytorch>=2.0.0
+  - pythonocc-core>=7.8.0
+  - pip
+  - pip:
+    - -r requirements.txt

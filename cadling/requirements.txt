@@ -1,0 +1,28 @@
+# Core dependencies
+pydantic>=2.0,<3.0
+numpy>=1.24,<2.0
+pillow>=10.0
+typing-extensions>=4.0
+rich>=13.0
+
+# CAD processing (note: pythonocc-core requires conda installation)
+numpy-stl>=3.0
+trimesh>=4.0
+networkx>=3.0
+
+# ML dependencies
+torch>=2.0
+torch-geometric>=2.3
+transformers>=4.35
+
+# Local dependencies
+-e ../ll_stepnet
+
+# Development dependencies
+pytest>=7.0
+pytest-cov>=4.0
+pytest-xdist>=3.0
+black>=23.0
+ruff>=0.1
+mypy>=1.0
+pre-commit>=3.0

@@ -1,0 +1,147 @@
+
+============================================================
+LL-STEPNet Tests with Actual STEP Files
+Timestamp: 2026-01-09 22:55:50
+Output file: /Users/ryanoboyle/LatticeLabs_toolkit/ll_stepnet/test_results/test_results_20260109_225550.txt
+============================================================
+
+Test files:
+  - 4in_rod.step
+  - Button.step
+  - Pic adapter.step
+  - Stock_Hinge.step
+  - Butt pad.step
+
+============================================================
+Testing STEPTokenizer on actual STEP files
+============================================================
+
+Processing: 4in_rod.step
+  Lines in DATA section: 452
+  Sample tokens (first 20): ['#10', '=', 'MECHANICAL_DESIGN_GEOMETRIC_PRESENTATION_REPRESENTATION', '(', "''", ',', '(', '#17', ')', ',', '#334', ')', ';', '#11', '=', 'ITEM_DEFINED_TRANSFORMATION', '(', '$', ',', '$']
+  Token IDs (first 20): [21173, 30, 4805, 31, 27898, 33, 31, 34258, 32, 33, 42763, 32, 34, 44824, 30, 23797, 31, 28, 33, 28]
+  Total tokens in sample: 71
+  Vocab coverage: 29 unique tokens
+  ✓ PASSED
+
+Processing: Button.step
+  Lines in DATA section: 1123
+  Sample tokens (first 20): ['#10', '=', 'MECHANICAL_DESIGN_GEOMETRIC_PRESENTATION_REPRESENTATION', '(', "''", ',', '(', '#17', ')', ',', '#1002', ')', ';', '#11', '=', 'ITEM_DEFINED_TRANSFORMATION', '(', '$', ',', '$']
+  Token IDs (first 20): [21173, 30, 4805, 31, 27898, 33, 31, 34258, 32, 33, 9245, 32, 34, 44824, 30, 23797, 31, 28, 33, 28]
+  Total tokens in sample: 63
+  Vocab coverage: 27 unique tokens
+  ✓ PASSED
+
+Processing: Pic adapter.step
+  Lines in DATA section: 3388
+  Sample tokens (first 20): ['#10', '=', 'MECHANICAL_DESIGN_GEOMETRIC_PRESENTATION_REPRESENTATION', '(', "''", ',', '(', '#21', ')', ',', '#3195', ')', ';', '#11', '=', 'ITEM_DEFINED_TRANSFORMATION', '(', '$', ',', '$']
+  Token IDs (first 20): [21173, 30, 4805, 31, 27898, 33, 31, 33677, 32, 33, 8420, 32, 34, 44824, 30, 23797, 31, 28, 33, 28]
+  Total tokens in sample: 74
+  Vocab coverage: 26 unique tokens
+  ✓ PASSED
+
+Processing: Stock_Hinge.step
+  Lines in DATA section: 5546
+  Sample tokens (first 20): ['#10', '=', 'MECHANICAL_DESIGN_GEOMETRIC_PRESENTATION_REPRESENTATION', '(', "''", ',', '(', '#21', ')', ',', '#4879', ')', ';', '#11', '=', 'ITEM_DEFINED_TRANSFORMATION', '(', '$', ',', '$']
+  Token IDs (first 20): [21173, 30, 4805, 31, 27898, 33, 31, 33677, 32, 33, 33901, 32, 34, 44824, 30, 23797, 31, 28, 33, 28]
+  Total tokens in sample: 74
+  Vocab coverage: 26 unique tokens
+  ✓ PASSED
+
+Processing: Butt pad.step
+  Lines in DATA section: 31563
+  Sample tokens (first 20): ['#10', '=', 'MECHANICAL_DESIGN_GEOMETRIC_PRESENTATION_REPRESENTATION', '(', "''", ',', '(', '#17', ')', ',', '#24463', ')', ';', '#11', '=', 'ITEM_DEFINED_TRANSFORMATION', '(', '$', ',', '$']
+  Token IDs (first 20): [21173, 30, 4805, 31, 27898, 33, 31, 34258, 32, 33, 10602, 32, 34, 44824, 30, 23797, 31, 28, 33, 28]
+  Total tokens in sample: 69
+  Vocab coverage: 28 unique tokens
+  ✓ PASSED
+
+============================================================
+Testing STEPFeatureExtractor on actual STEP files
+============================================================
+
+Processing: 4in_rod.step
+  Total entities extracted: 371
+  Sample entity:
+    Entity ID: 10
+    Entity Type: MECHANICAL_DESIGN_GEOMETRIC_PRESENTATION_REPRESENTATION
+    Numeric params: [17.0, 334.0]...
+    References: [17, 334]...
+  Unique entity types: 57
+  Top 5 entity types:
+    CARTESIAN_POINT: 171
+    ORIENTED_EDGE: 26
+    DIRECTION: 23
+    EDGE_CURVE: 13
+    VERTEX_POINT: 10
+  ✓ PASSED
+
+Processing: Button.step
+  Total entities extracted: 1036
+  Sample entity:
+    Entity ID: 10
+    Entity Type: MECHANICAL_DESIGN_GEOMETRIC_PRESENTATION_REPRESENTATION
+    Numeric params: [17.0, 1002.0]...
+    References: [17, 1002]...
+  Unique entity types: 57
+  Top 5 entity types:
+    DIRECTION: 175
+    CARTESIAN_POINT: 169
+    ORIENTED_EDGE: 162
+    EDGE_CURVE: 81
+    AXIS2_PLACEMENT_3D: 60
+  ✓ PASSED
+
+Processing: Pic adapter.step
+  Total entities extracted: 3248
+  Sample entity:
+    Entity ID: 10
+    Entity Type: MECHANICAL_DESIGN_GEOMETRIC_PRESENTATION_REPRESENTATION
+    Numeric params: [21.0, 3195.0]...
+    References: [21, 3195]...
+  Unique entity types: 57
+  Top 5 entity types:
+    CARTESIAN_POINT: 562
+    ORIENTED_EDGE: 556
+    DIRECTION: 518
+    EDGE_CURVE: 278
+    LINE: 238
+  ✓ PASSED
+
+Processing: Stock_Hinge.step
+  Total entities extracted: 5104
+  Sample entity:
+    Entity ID: 10
+    Entity Type: MECHANICAL_DESIGN_GEOMETRIC_PRESENTATION_REPRESENTATION
+    Numeric params: [21.0, 4879.0]...
+    References: [21, 4879]...
+  Unique entity types: 61
+  Top 5 entity types:
+    CARTESIAN_POINT: 2528
+    ORIENTED_EDGE: 500
+    DIRECTION: 436
+    EDGE_CURVE: 250
+    None: 182
+  ✓ PASSED
+
+Processing: Butt pad.step
+  Total entities extracted: 26159
+  Sample entity:
+    Entity ID: 10
+    Entity Type: MECHANICAL_DESIGN_GEOMETRIC_PRESENTATION_REPRESENTATION
+    Numeric params: [17.0, 24463.0]...
+    References: [17, 24463]...
+  Unique entity types: 64
+  Top 5 entity types:
+    CARTESIAN_POINT: 20100
+    None: 1610
+    ORIENTED_EDGE: 960
+    DIRECTION: 809
+    EDGE_CURVE: 480
+  ✓ PASSED
+
+============================================================
+Testing STEPTopologyBuilder on actual STEP files
+============================================================
+
+Processing: 4in_rod.step

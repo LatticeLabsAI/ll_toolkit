@@ -1,0 +1,321 @@
+
+============================================================
+LL-STEPNet Tests with Actual STEP Files
+Timestamp: 2026-01-09 22:57:19
+Output file: /Users/ryanoboyle/LatticeLabs_toolkit/ll_stepnet/test_results/test_results_20260109_225719.txt
+============================================================
+
+Test files:
+  - 4in_rod.step
+  - Button.step
+  - Pic adapter.step
+  - Stock_Hinge.step
+  - Butt pad.step
+
+============================================================
+Testing STEPTokenizer on actual STEP files
+============================================================
+
+Processing: 4in_rod.step
+  Lines in DATA section: 452
+  Sample tokens (first 20): ['#10', '=', 'MECHANICAL_DESIGN_GEOMETRIC_PRESENTATION_REPRESENTATION', '(', "''", ',', '(', '#17', ')', ',', '#334', ')', ';', '#11', '=', 'ITEM_DEFINED_TRANSFORMATION', '(', '$', ',', '$']
+  Token IDs (first 20): [1924, 30, 32734, 31, 22330, 33, 31, 37503, 32, 33, 37887, 32, 34, 2132, 30, 30221, 31, 28, 33, 28]
+  Total tokens in sample: 71
+  Vocab coverage: 28 unique tokens
+  ✓ PASSED
+
+Processing: Button.step
+  Lines in DATA section: 1123
+  Sample tokens (first 20): ['#10', '=', 'MECHANICAL_DESIGN_GEOMETRIC_PRESENTATION_REPRESENTATION', '(', "''", ',', '(', '#17', ')', ',', '#1002', ')', ';', '#11', '=', 'ITEM_DEFINED_TRANSFORMATION', '(', '$', ',', '$']
+  Token IDs (first 20): [1924, 30, 32734, 31, 22330, 33, 31, 37503, 32, 33, 26598, 32, 34, 2132, 30, 30221, 31, 28, 33, 28]
+  Total tokens in sample: 63
+  Vocab coverage: 27 unique tokens
+  ✓ PASSED
+
+Processing: Pic adapter.step
+  Lines in DATA section: 3388
+  Sample tokens (first 20): ['#10', '=', 'MECHANICAL_DESIGN_GEOMETRIC_PRESENTATION_REPRESENTATION', '(', "''", ',', '(', '#21', ')', ',', '#3195', ')', ';', '#11', '=', 'ITEM_DEFINED_TRANSFORMATION', '(', '$', ',', '$']
+  Token IDs (first 20): [1924, 30, 32734, 31, 22330, 33, 31, 29407, 32, 33, 16759, 32, 34, 2132, 30, 30221, 31, 28, 33, 28]
+  Total tokens in sample: 74
+  Vocab coverage: 26 unique tokens
+  ✓ PASSED
+
+Processing: Stock_Hinge.step
+  Lines in DATA section: 5546
+  Sample tokens (first 20): ['#10', '=', 'MECHANICAL_DESIGN_GEOMETRIC_PRESENTATION_REPRESENTATION', '(', "''", ',', '(', '#21', ')', ',', '#4879', ')', ';', '#11', '=', 'ITEM_DEFINED_TRANSFORMATION', '(', '$', ',', '$']
+  Token IDs (first 20): [1924, 30, 32734, 31, 22330, 33, 31, 29407, 32, 33, 44129, 32, 34, 2132, 30, 30221, 31, 28, 33, 28]
+  Total tokens in sample: 74
+  Vocab coverage: 26 unique tokens
+  ✓ PASSED
+
+Processing: Butt pad.step
+  Lines in DATA section: 31563
+  Sample tokens (first 20): ['#10', '=', 'MECHANICAL_DESIGN_GEOMETRIC_PRESENTATION_REPRESENTATION', '(', "''", ',', '(', '#17', ')', ',', '#24463', ')', ';', '#11', '=', 'ITEM_DEFINED_TRANSFORMATION', '(', '$', ',', '$']
+  Token IDs (first 20): [1924, 30, 32734, 31, 22330, 33, 31, 37503, 32, 33, 4141, 32, 34, 2132, 30, 30221, 31, 28, 33, 28]
+  Total tokens in sample: 69
+  Vocab coverage: 28 unique tokens
+  ✓ PASSED
+
+============================================================
+Testing STEPFeatureExtractor on actual STEP files
+============================================================
+
+Processing: 4in_rod.step
+  Total entities extracted: 371
+  Sample entity:
+    Entity ID: 10
+    Entity Type: MECHANICAL_DESIGN_GEOMETRIC_PRESENTATION_REPRESENTATION
+    Numeric params: [17.0, 334.0]...
+    References: [17, 334]...
+  Unique entity types: 57
+  Top 5 entity types:
+    CARTESIAN_POINT: 171
+    ORIENTED_EDGE: 26
+    DIRECTION: 23
+    EDGE_CURVE: 13
+    VERTEX_POINT: 10
+  ✓ PASSED
+
+Processing: Button.step
+  Total entities extracted: 1036
+  Sample entity:
+    Entity ID: 10
+    Entity Type: MECHANICAL_DESIGN_GEOMETRIC_PRESENTATION_REPRESENTATION
+    Numeric params: [17.0, 1002.0]...
+    References: [17, 1002]...
+  Unique entity types: 57
+  Top 5 entity types:
+    DIRECTION: 175
+    CARTESIAN_POINT: 169
+    ORIENTED_EDGE: 162
+    EDGE_CURVE: 81
+    AXIS2_PLACEMENT_3D: 60
+  ✓ PASSED
+
+Processing: Pic adapter.step
+  Total entities extracted: 3248
+  Sample entity:
+    Entity ID: 10
+    Entity Type: MECHANICAL_DESIGN_GEOMETRIC_PRESENTATION_REPRESENTATION
+    Numeric params: [21.0, 3195.0]...
+    References: [21, 3195]...
+  Unique entity types: 57
+  Top 5 entity types:
+    CARTESIAN_POINT: 562
+    ORIENTED_EDGE: 556
+    DIRECTION: 518
+    EDGE_CURVE: 278
+    LINE: 238
+  ✓ PASSED
+
+Processing: Stock_Hinge.step
+  Total entities extracted: 5104
+  Sample entity:
+    Entity ID: 10
+    Entity Type: MECHANICAL_DESIGN_GEOMETRIC_PRESENTATION_REPRESENTATION
+    Numeric params: [21.0, 4879.0]...
+    References: [21, 4879]...
+  Unique entity types: 61
+  Top 5 entity types:
+    CARTESIAN_POINT: 2528
+    ORIENTED_EDGE: 500
+    DIRECTION: 436
+    EDGE_CURVE: 250
+    None: 182
+  ✓ PASSED
+
+Processing: Butt pad.step
+  Total entities extracted: 26159
+  Sample entity:
+    Entity ID: 10
+    Entity Type: MECHANICAL_DESIGN_GEOMETRIC_PRESENTATION_REPRESENTATION
+    Numeric params: [17.0, 24463.0]...
+    References: [17, 24463]...
+  Unique entity types: 64
+  Top 5 entity types:
+    CARTESIAN_POINT: 20100
+    None: 1610
+    ORIENTED_EDGE: 960
+    DIRECTION: 809
+    EDGE_CURVE: 480
+  ✓ PASSED
+
+============================================================
+Testing STEPTopologyBuilder on actual STEP files
+============================================================
+
+Processing: 4in_rod.step
+  Topology statistics:
+    Nodes: 362
+    Edges: 258
+    Adjacency matrix shape: torch.Size([362, 362])
+    Edge index shape: torch.Size([2, 258])
+    Node features shape: torch.Size([362, 129])
+    Graph density: 0.0020
+  ✓ PASSED
+
+Processing: Button.step
+  Topology statistics:
+    Nodes: 1030
+    Edges: 1159
+    Adjacency matrix shape: torch.Size([1030, 1030])
+    Edge index shape: torch.Size([2, 1159])
+    Node features shape: torch.Size([1030, 129])
+    Graph density: 0.0011
+  ✓ PASSED
+
+Processing: Pic adapter.step
+  Topology statistics:
+    Nodes: 3231
+    Edges: 3705
+    Adjacency matrix shape: torch.Size([3231, 3231])
+    Edge index shape: torch.Size([2, 3705])
+    Node features shape: torch.Size([3231, 129])
+    Graph density: 0.0004
+  ✓ PASSED
+
+Processing: Stock_Hinge.step
+  Topology statistics:
+    Nodes: 4922
+    Edges: 3368
+    Adjacency matrix shape: torch.Size([4922, 4922])
+    Edge index shape: torch.Size([2, 3368])
+    Node features shape: torch.Size([4922, 129])
+    Graph density: 0.0001
+  ✓ PASSED
+
+Processing: Butt pad.step
+  Topology statistics:
+    Nodes: 24491
+    Edges: 6040
+    Adjacency matrix shape: torch.Size([24491, 24491])
+    Edge index shape: torch.Size([2, 6040])
+    Node features shape: torch.Size([24491, 129])
+    Graph density: 0.0000
+  ✓ PASSED
+
+============================================================
+Testing STEPEncoder on actual STEP files
+============================================================
+
+Processing: 4in_rod.step
+  Input shape: torch.Size([1, 2048])
+  Output shape: torch.Size([1, 1024])
+  Output mean: 0.0402
+  Output std: 1.1112
+  ✓ PASSED
+
+Processing: Button.step
+  Input shape: torch.Size([1, 2048])
+  Output shape: torch.Size([1, 1024])
+  Output mean: 0.1283
+  Output std: 3.9189
+  ✓ PASSED
+
+Processing: Pic adapter.step
+  Input shape: torch.Size([1, 2048])
+  Output shape: torch.Size([1, 1024])
+  Output mean: 0.3652
+  Output std: 11.5608
+  ✓ PASSED
+
+============================================================
+Testing STEPForClassification on actual STEP files
+============================================================
+
+Processing: 4in_rod.step
+  Predicted class: rod (0)
+  Confidence: 30.16%
+  All probabilities: [0.3015904724597931, 0.28291887044906616, 0.16994687914848328, 0.10440456122159958, 0.1411391943693161]
+  ✓ PASSED
+
+Processing: Button.step
+  Predicted class: rod (0)
+  Confidence: 50.31%
+  All probabilities: [0.503071665763855, 0.3596055209636688, 0.0747729167342186, 0.013055192306637764, 0.04949469491839409]
+  ✓ PASSED
+
+Processing: Pic adapter.step
+  Predicted class: rod (0)
+  Confidence: 75.68%
+  All probabilities: [0.7568355798721313, 0.2393116056919098, 0.00290036597289145, 2.112593938363716e-05, 0.0009313161135651171]
+  ✓ PASSED
+
+Processing: Stock_Hinge.step
+  Predicted class: rod (0)
+  Confidence: 66.83%
+  All probabilities: [0.6682863831520081, 0.3048519492149353, 0.017394637688994408, 0.0007475324673578143, 0.008719551376998425]
+  ✓ PASSED
+
+Processing: Butt pad.step
+  Predicted class: rod (0)
+  Confidence: 60.66%
+  All probabilities: [0.6066179275512695, 0.3308592438697815, 0.038127120584249496, 0.00323346140794456, 0.021162360906600952]
+  ✓ PASSED
+
+============================================================
+Testing STEPForPropertyPrediction on actual STEP files
+============================================================
+
+Processing: 4in_rod.step
+  Predicted properties:
+    volume: 0.3186
+    surface_area: 0.7694
+    mass: 0.2315
+    bbox_x: -0.4479
+    bbox_y: -0.1383
+    bbox_z: 0.2167
+  ✓ PASSED
+
+Processing: Button.step
+  Predicted properties:
+    volume: 1.6242
+    surface_area: 2.4022
+    mass: 0.0831
+    bbox_x: -1.4425
+    bbox_y: -0.8504
+    bbox_z: 0.7537
+  ✓ PASSED
+
+Processing: Pic adapter.step
+  Predicted properties:
+    volume: 4.8383
+    surface_area: 7.0149
+    mass: -0.1624
+    bbox_x: -4.6939
+    bbox_y: -1.9794
+    bbox_z: 2.5688
+  ✓ PASSED
+
+============================================================
+Testing STEPForSimilarity on actual STEP files
+============================================================
+
+Processing: 4in_rod.step
+  Embedding shape: torch.Size([1, 512])
+  L2 norm: 1.0000
+  ✓ Embedding generated
+
+Processing: Button.step
+  Embedding shape: torch.Size([1, 512])
+  L2 norm: 1.0000
+  ✓ Embedding generated
+
+Processing: Pic adapter.step
+  Embedding shape: torch.Size([1, 512])
+  L2 norm: 1.0000
+  ✓ Embedding generated
+
+Processing: Stock_Hinge.step
+  Embedding shape: torch.Size([1, 512])
+  L2 norm: 1.0000
+  ✓ Embedding generated
+
+Processing: Butt pad.step
+  Embedding shape: torch.Size([1, 512])
+  L2 norm: 1.0000
+  ✓ Embedding generated
+
+Computing pairwise similarities...
+
+Similarity matrix:

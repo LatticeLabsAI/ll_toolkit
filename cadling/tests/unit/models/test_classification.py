@@ -1,0 +1,487 @@
+"""Unit tests for CAD part classification model."""
+
+import pytest
+from pathlib import Path
+from unittest.mock import Mock, patch, MagicMock
+import torch
+
+
+class TestCADPartClassifier:
+    """Test CADPartClassifier model initialization and configuration."""
+
+    def test_model_initialization_without_artifacts(self):
+        """Test model initializes without artifacts path."""
+        from cadling.models.classification import CADPartClassifier
+
+        model = CADPartClassifier()
+
+        assert model.model is None
+        assert model.artifacts_path is None
+        assert model.vocab_size == 50000
+        assert model.output_dim == 1024
+        assert len(model.class_names) == 9
+        assert "bracket" in model.class_names
+        assert "unknown" in model.class_names
+
+    def test_model_initialization_with_custom_class_names(self):
+        """Test model initializes with custom class names."""
+        from cadling.models.classification import CADPartClassifier
+
+        custom_classes = ["part_a", "part_b", "part_c"]
+        model = CADPartClassifier(class_names=custom_classes)
+
+        assert model.class_names == custom_classes
+        assert len(model.class_names) == 3
+
+    def test_model_initialization_with_custom_vocab_size(self):
+        """Test model initializes with custom vocab size."""
+        from cadling.models.classification import CADPartClassifier
+
+        model = CADPartClassifier(vocab_size=30000, output_dim=512)
+
+        assert model.vocab_size == 30000
+        assert model.output_dim == 512
+
+    def test_model_has_required_attributes(self):
+        """Test model has all required attributes."""
+        from cadling.models.classification import CADPartClassifier
+
+        model = CADPartClassifier()
+
+        assert hasattr(model, "tokenizer")
+        assert hasattr(model, "feature_extractor")
+        assert hasattr(model, "topology_builder")
+        assert hasattr(model, "class_names")
+        assert hasattr(model, "vocab_size")
+        assert hasattr(model, "output_dim")
+
+    def test_model_has_required_methods(self):
+        """Test model has all required methods."""
+        from cadling.models.classification import CADPartClassifier
+
+        model = CADPartClassifier()
+
+        assert callable(model.__call__)
+        assert callable(model.supports_batch_processing)
+        assert callable(model.get_batch_size)
+        assert callable(model.requires_gpu)
+
+
+class TestCADPartClassifierMethods:
+    """Test CADPartClassifier helper methods."""
+
+    def test_supports_batch_processing(self):
+        """Test that model supports batch processing."""
+        from cadling.models.classification import CADPartClassifier
+
+        model = CADPartClassifier()
+
+        assert model.supports_batch_processing() is True
+
+    def test_get_batch_size(self):
+        """Test that model returns correct batch size."""
+        from cadling.models.classification import CADPartClassifier
+
+        model = CADPartClassifier()
+
+        assert model.get_batch_size() == 32
+
+    def test_requires_gpu(self):
+        """Test that model indicates GPU benefit."""
+        from cadling.models.classification import CADPartClassifier
+
+        model = CADPartClassifier()
+
+        assert model.requires_gpu() is True
+
+
+class TestCADPartClassifierCall:
+    """Test CADPartClassifier __call__ method."""
+
+    def test_call_without_model_loaded(self):
+        """Test that __call__ skips when model not loaded."""
+        from cadling.models.classification import CADPartClassifier
+        from cadling.datamodel.step import STEPDocument, STEPEntityItem
+        from cadling.datamodel.base_models import CADItemLabel, CADDocumentOrigin, InputFormat, CADDocumentOrigin, InputFormat
+
+        model = CADPartClassifier()  # No artifacts_path
+
+        # Create mock document and items
+        doc = STEPDocument(
+            name="test.step",
+            origin=CADDocumentOrigin(
+                filename="test.step",
+                format=InputFormat.STEP,
+                binary_hash="test_hash",
+            ),
+            hash="test_hash",
+        )
+
+        item = STEPEntityItem(
+            label=CADItemLabel(text="Test Entity"),
+            entity_id=1,
+            entity_type="CARTESIAN_POINT",
+            text="#1=CARTESIAN_POINT('',(-0.5,0.,0.));",
+        )
+
+        # Call should return without error and without adding properties
+        model(doc, [item])
+
+        assert "predicted_class" not in item.properties
+        assert "class_confidence" not in item.properties
+
+    def test_call_with_non_step_entity(self):
+        """Test that __call__ skips non-STEP entities."""
+        from cadling.models.classification import CADPartClassifier
+        from cadling.datamodel.step import STEPDocument
+        from cadling.datamodel.base_models import CADItem, CADItemLabel, CADDocumentOrigin, InputFormat
+
+        model = CADPartClassifier()
+
+        doc = STEPDocument(
+            name="test.step",
+            origin=CADDocumentOrigin(
+                filename="test.step",
+                format=InputFormat.STEP,
+                binary_hash="test_hash",
+            ),
+            hash="test_hash",
+        )
+
+        # Create non-STEP item
+        item = CADItem(
+            item_type="mesh",
+            label=CADItemLabel(text="Mesh Item"),
+        )
+
+        # Mock the model to be loaded
+        model.model = Mock()
+
+        # Call should skip this item
+        model(doc, [item])
+
+        # Model should not have been called
+        model.model.assert_not_called()
+
+    @patch("cadling.models.classification.torch")
+    def test_call_with_mocked_model(self, mock_torch):
+        """Test classification with mocked model inference."""
+        from cadling.models.classification import CADPartClassifier
+        from cadling.datamodel.step import STEPDocument, STEPEntityItem
+        from cadling.datamodel.base_models import CADItemLabel, CADDocumentOrigin, InputFormat
+
+        model = CADPartClassifier()
+
+        # Mock the STEPForClassification model
+        mock_model = Mock()
+        mock_logits = Mock()
+        mock_logits.shape = (1, 9)
+        mock_model.return_value = mock_logits
+        model.model = mock_model
+
+        # Mock torch operations
+        mock_probs = torch.tensor([[0.1, 0.5, 0.15, 0.05, 0.02, 0.03, 0.05, 0.05, 0.05]])
+        mock_torch.softmax.return_value = mock_probs
+        mock_torch.argmax.return_value = Mock(item=lambda: 1)  # Index 1 (housing)
+        mock_torch.tensor.return_value = Mock()
+        mock_torch.topk.return_value = (
+            torch.tensor([0.5, 0.15, 0.1]),
+            torch.tensor([1, 2, 0]),
+        )
+
+        # Create document and item
+        doc = STEPDocument(
+            name="test.step",
+            origin=CADDocumentOrigin(filename="test.step", format=InputFormat.STEP, binary_hash="test_hash"),
+            hash="test_hash",
+        )
+
+        item = STEPEntityItem(
+            label=CADItemLabel(text="Test Entity"),
+            entity_id=1,
+            entity_type="CYLINDRICAL_SURFACE",
+            text="#1=CYLINDRICAL_SURFACE('',#2,0.5);",
+        )
+
+        # Run classification
+        with torch.no_grad():
+            model(doc, [item])
+
+        # Check that properties were added
+        assert "predicted_class" in item.properties
+        assert item.properties["predicted_class"] == "housing"
+        assert "class_confidence" in item.properties
+        assert "top_classes" in item.properties
+        assert len(item.properties["top_classes"]) == 3
+
+    def test_tokenization_truncation(self):
+        """Test that long entity text is truncated correctly."""
+        from cadling.models.classification import CADPartClassifier
+        from cadling.datamodel.step import STEPDocument, STEPEntityItem
+        from cadling.datamodel.base_models import CADItemLabel, CADDocumentOrigin, InputFormat
+
+        model = CADPartClassifier()
+
+        # Create very long entity text
+        long_text = "#1=CARTESIAN_POINT('',(-0.5,0.,0.));" * 100
+
+        # Mock tokenizer to return many tokens
+        model.tokenizer.encode = Mock(return_value=list(range(1000)))
+
+        # Mock model
+        mock_model = Mock()
+        mock_model.return_value = torch.zeros(1, 9)
+        model.model = mock_model
+
+        doc = STEPDocument(
+            name="test.step",
+            origin=CADDocumentOrigin(
+                filename="test.step",
+                format=InputFormat.STEP,
+                binary_hash="test_hash",
+            ),
+            hash="test_hash",
+        )
+
+        item = STEPEntityItem(
+            label=CADItemLabel(text="Long Entity"),
+            entity_id=1,
+            entity_type="ADVANCED_BREP_SHAPE_REPRESENTATION",
+            text=long_text,
+        )
+
+        # Mock torch operations
+        with patch("cadling.models.classification.torch") as mock_torch:
+            mock_torch.tensor.return_value = Mock()
+            mock_torch.softmax.return_value = torch.ones(1, 9) / 9
+            mock_torch.argmax.return_value = Mock(item=lambda: 0)
+            mock_torch.topk.return_value = (torch.ones(3) / 9, torch.tensor([0, 1, 2]))
+            mock_torch.no_grad.return_value.__enter__ = Mock()
+            mock_torch.no_grad.return_value.__exit__ = Mock()
+
+            model(doc, [item])
+
+        # Verify tokenizer was called
+        model.tokenizer.encode.assert_called_once_with(long_text)
+
+    def test_provenance_tracking(self):
+        """Test that provenance is added to classified items."""
+        from cadling.models.classification import CADPartClassifier
+        from cadling.datamodel.step import STEPDocument, STEPEntityItem
+        from cadling.datamodel.base_models import CADItemLabel, CADDocumentOrigin, InputFormat
+
+        model = CADPartClassifier()
+
+        # Mock the model
+        mock_model = Mock()
+        mock_model.return_value = torch.zeros(1, 9)
+        model.model = mock_model
+
+        doc = STEPDocument(
+            name="test.step",
+            origin=CADDocumentOrigin(
+                filename="test.step",
+                format=InputFormat.STEP,
+                binary_hash="test_hash",
+            ),
+            hash="test_hash",
+        )
+
+        item = STEPEntityItem(
+            label=CADItemLabel(text="Test Entity"),
+            entity_id=1,
+            entity_type="PLANE",
+            text="#1=PLANE('',#2);",
+        )
+
+        # Mock torch operations
+        with patch("cadling.models.classification.torch") as mock_torch:
+            mock_torch.tensor.return_value = Mock()
+            mock_torch.softmax.return_value = torch.ones(1, 9) / 9
+            mock_torch.argmax.return_value = Mock(item=lambda: 0)
+            mock_torch.topk.return_value = (torch.ones(3) / 9, torch.tensor([0, 1, 2]))
+            mock_torch.no_grad.return_value.__enter__ = Mock()
+            mock_torch.no_grad.return_value.__exit__ = Mock()
+
+            model(doc, [item])
+
+            # Verify provenance was added
+            assert len(item.prov) > 0
+            assert any(
+                prov.component_type == "enrichment_model" and
+                prov.component_name == "CADPartClassifier"
+                for prov in item.prov
+            )
+
+
+class TestCADPartClassifierBatchProcessing:
+    """Test CADPartClassifier batch processing."""
+
+    def test_batch_processing_multiple_items(self):
+        """Test classifying multiple items in a batch."""
+        from cadling.models.classification import CADPartClassifier
+        from cadling.datamodel.step import STEPDocument, STEPEntityItem
+        from cadling.datamodel.base_models import CADItemLabel, CADDocumentOrigin, InputFormat
+
+        model = CADPartClassifier()
+
+        # Mock the model
+        mock_model = Mock()
+        mock_model.return_value = torch.zeros(1, 9)
+        model.model = mock_model
+
+        doc = STEPDocument(
+            name="test.step",
+            origin=CADDocumentOrigin(
+                filename="test.step",
+                format=InputFormat.STEP,
+                binary_hash="test_hash",
+            ),
+            hash="test_hash",
+        )
+
+        # Create multiple items
+        items = [
+            STEPEntityItem(
+                label=CADItemLabel(text=f"Entity {i}"),
+                entity_id=i,
+                entity_type="CARTESIAN_POINT",
+                text=f"#={i}CARTESIAN_POINT('',({i},{i},{i}));",
+            )
+            for i in range(5)
+        ]
+
+        # Mock torch operations
+        with patch("cadling.models.classification.torch") as mock_torch:
+            mock_torch.tensor.return_value = Mock()
+            mock_torch.softmax.return_value = torch.ones(1, 9) / 9
+            mock_torch.argmax.return_value = Mock(item=lambda: 0)
+            mock_torch.topk.return_value = (torch.ones(3) / 9, torch.tensor([0, 1, 2]))
+            mock_torch.no_grad.return_value.__enter__ = Mock()
+            mock_torch.no_grad.return_value.__exit__ = Mock()
+
+            model(doc, items)
+
+        # All items should have been classified
+        for item in items:
+            assert "predicted_class" in item.properties
+
+
+class TestCADPartClassifierTopK:
+    """Test top-k prediction functionality."""
+
+    def test_top_k_predictions_format(self):
+        """Test that top-k predictions have correct format."""
+        from cadling.models.classification import CADPartClassifier
+        from cadling.datamodel.step import STEPDocument, STEPEntityItem
+        from cadling.datamodel.base_models import CADItemLabel, CADDocumentOrigin, InputFormat
+
+        model = CADPartClassifier()
+
+        # Mock the model
+        mock_model = Mock()
+        mock_model.return_value = torch.zeros(1, 9)
+        model.model = mock_model
+
+        doc = STEPDocument(
+            name="test.step",
+            origin=CADDocumentOrigin(
+                filename="test.step",
+                format=InputFormat.STEP,
+                binary_hash="test_hash",
+            ),
+            hash="test_hash",
+        )
+
+        item = STEPEntityItem(
+            label=CADItemLabel(text="Test Entity"),
+            entity_id=1,
+            entity_type="CYLINDRICAL_SURFACE",
+            text="#1=CYLINDRICAL_SURFACE('',#2,0.5);",
+        )
+
+        # Mock torch operations with specific probabilities
+        with patch("cadling.models.classification.torch") as mock_torch:
+            mock_torch.tensor.return_value = Mock()
+            mock_probs = torch.tensor([[0.5, 0.3, 0.1, 0.05, 0.02, 0.01, 0.01, 0.01, 0.0]])
+            mock_torch.softmax.return_value = mock_probs
+            mock_torch.argmax.return_value = Mock(item=lambda: 0)
+            mock_torch.topk.return_value = (
+                torch.tensor([0.5, 0.3, 0.1]),
+                torch.tensor([0, 1, 2]),
+            )
+            mock_torch.no_grad.return_value.__enter__ = Mock()
+            mock_torch.no_grad.return_value.__exit__ = Mock()
+
+            model(doc, [item])
+
+        # Check top_classes format
+        assert "top_classes" in item.properties
+        top_classes = item.properties["top_classes"]
+
+        assert len(top_classes) == 3
+        for pred in top_classes:
+            assert "class" in pred
+            assert "confidence" in pred
+            assert isinstance(pred["class"], str)
+            assert isinstance(pred["confidence"], float)
+
+
+class TestIntegration:
+    """Integration tests for CADPartClassifier."""
+
+    def test_classifier_without_ll_stepnet(self):
+        """Test classifier gracefully handles missing ll_stepnet."""
+        pytest.importorskip("ll_stepnet", reason="ll_stepnet not available")
+
+        from cadling.models.classification import CADPartClassifier
+
+        # Should initialize without error even if model path doesn't exist
+        model = CADPartClassifier()
+
+        assert model.model is None
+
+    def test_classifier_with_custom_classes(self):
+        """Test classifier with custom class taxonomy."""
+        from cadling.models.classification import CADPartClassifier
+        from cadling.datamodel.step import STEPDocument, STEPEntityItem
+        from cadling.datamodel.base_models import CADItemLabel, CADDocumentOrigin, InputFormat
+
+        custom_classes = ["mechanical_part", "structural_part", "fastener"]
+        model = CADPartClassifier(class_names=custom_classes)
+
+        assert model.class_names == custom_classes
+        assert len(model.class_names) == 3
+
+        # Mock model for testing
+        model.model = Mock()
+        model.model.return_value = torch.zeros(1, 3)
+
+        doc = STEPDocument(
+            name="test.step",
+            origin=CADDocumentOrigin(
+                filename="test.step",
+                format=InputFormat.STEP,
+                binary_hash="test_hash",
+            ),
+            hash="test_hash",
+        )
+
+        item = STEPEntityItem(
+            label=CADItemLabel(text="Test Entity"),
+            entity_id=1,
+            entity_type="CYLINDRICAL_SURFACE",
+            text="#1=CYLINDRICAL_SURFACE('',#2,0.5);",
+        )
+
+        with patch("cadling.models.classification.torch") as mock_torch:
+            mock_torch.tensor.return_value = Mock()
+            mock_torch.softmax.return_value = torch.ones(1, 3) / 3
+            mock_torch.argmax.return_value = Mock(item=lambda: 0)
+            mock_torch.topk.return_value = (torch.ones(3) / 3, torch.tensor([0, 1, 2]))
+            mock_torch.no_grad.return_value.__enter__ = Mock()
+            mock_torch.no_grad.return_value.__exit__ = Mock()
+
+            model(doc, [item])
+
+        assert item.properties["predicted_class"] in custom_classes

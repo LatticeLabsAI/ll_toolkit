@@ -1,0 +1,3 @@
+# GeoToken
+
+A Tokenizer that takes in CAD Embeddings that generated to be sections/chunks of the CAD objects that can each seperately be processed then the entire output from all of those processed chunks/segments with the new context can be completely reconstructed without losing detail or resizing like DEEPSEEKOcr does for pdfs/images we will do for CAD(STEP/IGES) and MESH(STL/OBJ), creates tokens that represent those 
