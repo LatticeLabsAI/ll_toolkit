@@ -13,6 +13,7 @@ Classes:
 
 from __future__ import annotations
 
+import html
 import json
 import logging
 from abc import ABC, abstractmethod
@@ -366,14 +367,16 @@ class HTMLSerializer(ChunkSerializer):
         if self.include_styles:
             lines.append(self._get_styles())
 
-        lines.append("</head>", "<body>")
+        lines.append("</head>")
+        lines.append("<body>")
         lines.append("<h1>CAD Chunks</h1>")
 
         # Chunks
         for chunk in chunks:
             lines.append(self.serialize_one(chunk))
 
-        lines.append("</body>", "</html>")
+        lines.append("</body>")
+        lines.append("</html>")
 
         return "\n".join(lines)
 
@@ -513,13 +516,7 @@ class HTMLSerializer(ChunkSerializer):
         Returns:
             Escaped text
         """
-        return (
-            text.replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-            .replace('"', "&quot;")
-            .replace("'", "&#39;")
-        )
+        return html.escape(text, quote=True)
 
     def _highlight_code(self, text: str) -> str:
         """Apply syntax highlighting to code.

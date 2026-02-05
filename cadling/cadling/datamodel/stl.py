@@ -23,6 +23,55 @@ from cadling.datamodel.base_models import (
 )
 
 
+class STLFacet(CADItem):
+    """Individual STL facet (triangle) with vertices and normal.
+
+    Represents a single triangular facet from an STL file with
+    its normal vector and three vertex coordinates.
+
+    Attributes:
+        item_type: Always "stl_facet"
+        normal: Normal vector (nx, ny, nz)
+        v1: First vertex coordinates (x, y, z)
+        v2: Second vertex coordinates (x, y, z)
+        v3: Third vertex coordinates (x, y, z)
+        facet_index: Index of this facet in the original mesh
+    """
+
+    item_type: str = "stl_facet"
+
+    normal: tuple[float, float, float] = (0.0, 0.0, 1.0)
+    v1: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    v2: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    v3: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    facet_index: int = 0
+
+    def compute_area(self) -> float:
+        """Compute area of this triangle facet.
+
+        Returns:
+            Area of the triangular facet
+        """
+        import numpy as np
+
+        a = np.array(self.v1)
+        b = np.array(self.v2)
+        c = np.array(self.v3)
+
+        return 0.5 * np.linalg.norm(np.cross(b - a, c - a))
+
+    def compute_centroid(self) -> tuple[float, float, float]:
+        """Compute centroid of this triangle facet.
+
+        Returns:
+            Centroid coordinates (x, y, z)
+        """
+        cx = (self.v1[0] + self.v2[0] + self.v3[0]) / 3.0
+        cy = (self.v1[1] + self.v2[1] + self.v3[1]) / 3.0
+        cz = (self.v1[2] + self.v2[2] + self.v3[2]) / 3.0
+        return (cx, cy, cz)
+
+
 class MeshItem(CADItem):
     """Mesh data item.
 

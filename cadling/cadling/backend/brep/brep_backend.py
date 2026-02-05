@@ -530,8 +530,8 @@ class BRepViewBackend(CADViewBackend):
             # Enable antialiasing
             try:
                 display.EnableAntiAliasing()
-            except:
-                _log.debug("Antialiasing not available")
+            except Exception as e:
+                _log.debug(f"Antialiasing not available: {e}")
 
             # Render to temporary file then load as PIL Image
             with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_file:
@@ -557,8 +557,8 @@ class BRepViewBackend(CADViewBackend):
                 import os
                 try:
                     os.unlink(tmp_path)
-                except:
-                    pass
+                except OSError:
+                    pass  # File cleanup failed, continue
 
         except Exception as e:
             _log.error(f"Failed to render view {self.view_name}: {e}")

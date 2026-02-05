@@ -189,7 +189,7 @@ class GPTTokenizer(CADTokenizer):
             for tid in token_ids:
                 try:
                     tokens.append(self.encoding.decode([tid]))
-                except:
+                except Exception:
                     tokens.append(f"<{tid}>")
             return tokens
         else:

@@ -89,14 +89,19 @@ class HoleGeometryExtractor:
             return graph_result
 
         # All strategies failed - return defaults with low confidence
-        _log.warning("Failed to extract hole parameters, using defaults")
+        _log.warning(
+            "Failed to extract hole parameters. "
+            f"Attempted {3} strategies (STEP text, OCC geometry, graph features). "
+            "Returning low-confidence defaults."
+        )
         return {
             "diameter": 10.0,
             "depth": 20.0,
             "location": [0.0, 0.0, 0.0],
             "orientation": [0.0, 0.0, 1.0],
             "hole_type": "unknown",
-            "confidence": 0.3,
+            "confidence": 0.2,
+            "extraction_failures": ["step_text", "occ_geometry", "graph_features"],
         }
 
     def _extract_from_step_text(
@@ -354,36 +359,783 @@ class HoleGeometryExtractor:
 
 
 class PocketGeometryExtractor:
-    """Extract pocket parameters (width, length, depth)."""
+    """Extract pocket parameters (width, length, depth) from STEP entities and face graphs.
+
+    Pockets are recessed features with:
+    - Width and length: Dimensions of the pocket opening
+    - Depth: Distance from top surface to pocket bottom
+    - Location: Center of the pocket bottom face
+
+    Uses three-strategy approach for robust extraction.
+    """
+
+    def __init__(self):
+        """Initialize pocket geometry extractor."""
+        self.has_pythonocc = False
+        try:
+            from OCC.Core.BRepAdaptor import BRepAdaptor_Surface
+            from OCC.Core.GeomAbs import GeomAbs_Plane
+
+            self.has_pythonocc = True
+            _log.debug("PocketGeometryExtractor initialized with pythonocc-core")
+        except ImportError:
+            _log.warning("pythonocc-core not available for pocket geometry extraction")
 
     def extract_pocket_parameters(
         self, face_entities: List[Dict], face_ids: List[int], graph: Any
     ) -> Dict[str, Any]:
-        """Extract pocket parameters (placeholder for now)."""
-        _log.debug("PocketGeometryExtractor not yet implemented, using defaults")
+        """Extract pocket parameters from face entities.
+
+        Args:
+            face_entities: List of face entity dictionaries
+            face_ids: List of face indices in the graph
+            graph: Face adjacency graph (PyG Data object)
+
+        Returns:
+            Dictionary with pocket parameters:
+            - width: float (pocket width)
+            - length: float (pocket length)
+            - depth: float (pocket depth)
+            - location: [x, y, z] (pocket center location)
+            - pocket_type: "rectangular" or "circular" or "unknown"
+            - confidence: float (0-1)
+        """
+        # Strategy 1: Try STEP text parsing first (fast and reliable)
+        result = self._extract_from_step_text(face_entities)
+
+        if result and result.get("confidence", 0.0) > 0.7:
+            _log.debug(
+                f"Extracted pocket parameters from STEP text: "
+                f"width={result['width']:.2f}, length={result['length']:.2f}, depth={result['depth']:.2f}"
+            )
+            return result
+
+        # Strategy 2: Try pythonocc geometric analysis (more robust but slower)
+        if self.has_pythonocc and hasattr(graph, "faces"):
+            occ_result = self._extract_from_occ_faces(face_ids, graph)
+            if occ_result and occ_result.get("confidence", 0.0) > 0.5:
+                _log.debug(
+                    f"Extracted pocket parameters from OCC geometry: "
+                    f"width={occ_result['width']:.2f}, depth={occ_result['depth']:.2f}"
+                )
+                return occ_result
+
+        # Strategy 3: Use graph features as fallback
+        graph_result = self._extract_from_graph_features(face_ids, graph)
+
+        if graph_result:
+            _log.debug("Using graph-based pocket parameter estimation")
+            return graph_result
+
+        # All strategies failed - return defaults with low confidence
+        _log.warning(
+            "Failed to extract pocket parameters. "
+            f"Attempted {3} strategies. "
+            "Returning low-confidence defaults."
+        )
         return {
             "width": 20.0,
             "length": 30.0,
             "depth": 15.0,
             "location": [0.0, 0.0, 0.0],
-            "confidence": 0.3,
+            "pocket_type": "unknown",
+            "confidence": 0.2,
+            "extraction_failures": ["step_text", "occ_geometry", "graph_features"],
         }
+
+    def _extract_from_step_text(
+        self, face_entities: List[Dict]
+    ) -> Optional[Dict[str, Any]]:
+        """Extract pocket parameters from STEP entity text.
+
+        Looks for:
+        - POCKET or RECTANGULAR_FACE entities
+        - Multiple planar faces forming recessed region
+        - AXIS2_PLACEMENT_3D for location
+
+        Args:
+            face_entities: List of face entity dictionaries
+
+        Returns:
+            Pocket parameters dict or None if parsing fails
+        """
+        width = None
+        length = None
+        depth = None
+        location = None
+        planar_faces = 0
+
+        # Look for pocket-related entities
+        for face_entity in face_entities:
+            entity_text = face_entity.get("text", "")
+
+            # Look for explicit POCKET entities
+            if "POCKET" in entity_text.upper():
+                _log.debug("Found POCKET entity in STEP text")
+
+                # Try to extract dimensions from POCKET entity
+                # Format varies, look for numeric values
+                numbers = re.findall(r"([\d.eE+-]+)", entity_text)
+                if len(numbers) >= 3:
+                    # Assume first 3 numbers are width, length, depth
+                    width = float(numbers[0])
+                    length = float(numbers[1])
+                    depth = float(numbers[2])
+
+            # Look for planar faces (pocket walls and bottom)
+            if "PLANE" in entity_text or "PLANAR" in entity_text:
+                planar_faces += 1
+
+            # Look for AXIS2_PLACEMENT_3D for location
+            axis_match = re.search(
+                r"AXIS2_PLACEMENT_3D\([^,]*,\s*#\d+\s*,\s*"
+                r"\(\s*([-\d.eE+]+)\s*,\s*([-\d.eE+]+)\s*,\s*([-\d.eE+]+)\s*\)",
+                entity_text,
+            )
+            if axis_match:
+                location = [
+                    float(axis_match.group(1)),
+                    float(axis_match.group(2)),
+                    float(axis_match.group(3)),
+                ]
+                _log.debug(f"Found pocket location at {location}")
+
+        # Compute confidence based on what we found
+        confidence = 0.0
+        if width is not None and length is not None and depth is not None:
+            confidence += 0.7  # Found all dimensions
+        elif planar_faces >= 4:
+            confidence += 0.3  # Found enough planar faces to suggest a pocket
+
+        if location is not None:
+            confidence += 0.3  # Found location
+
+        # Only return if we found reasonable parameters
+        if confidence < 0.5:
+            return None
+
+        # Use defaults if not found
+        if width is None:
+            width = 20.0
+        if length is None:
+            length = 30.0
+        if depth is None:
+            depth = 15.0
+
+        pocket_type = "rectangular" if planar_faces >= 5 else "unknown"
+
+        return {
+            "width": width,
+            "length": length,
+            "depth": depth,
+            "location": location if location else [0.0, 0.0, 0.0],
+            "pocket_type": pocket_type,
+            "confidence": min(confidence, 1.0),
+        }
+
+    def _extract_from_occ_faces(
+        self, face_ids: List[int], graph: Any
+    ) -> Optional[Dict[str, Any]]:
+        """Extract pocket parameters using pythonocc geometric analysis.
+
+        Strategy:
+        1. Identify bottom face (lowest Z centroid among planar faces)
+        2. Identify side faces (vertical/near-vertical normals)
+        3. Extract bounding box of bottom face → width, length
+        4. Calculate depth from Z-difference (top rim - bottom)
+        5. Location = centroid of bottom face
+
+        Args:
+            face_ids: Face indices
+            graph: Graph with TopoDS_Face objects
+
+        Returns:
+            Pocket parameters dict or None
+        """
+        if not self.has_pythonocc:
+            return None
+
+        try:
+            from OCC.Core.BRepAdaptor import BRepAdaptor_Surface
+            from OCC.Core.GeomAbs import GeomAbs_Plane
+            from OCC.Core.GProp import GProp_GProps
+            from OCC.Core.BRepGProp import brepgprop
+            from OCC.Core.Bnd import Bnd_Box
+            from OCC.Core.BRepBndLib import brepbndlib
+
+            # Get TopoDS_Face objects from graph
+            if not hasattr(graph, "faces") or not graph.faces:
+                return None
+
+            planar_faces = []
+            face_data = []
+
+            for face_id in face_ids:
+                if face_id >= len(graph.faces):
+                    continue
+
+                face_entity = graph.faces[face_id]
+
+                # Check if face has OCC face stored
+                if hasattr(face_entity, "_occ_face"):
+                    occ_face = face_entity._occ_face
+
+                    # Analyze surface type
+                    adapter = BRepAdaptor_Surface(occ_face)
+
+                    if adapter.GetType() == GeomAbs_Plane:
+                        planar_faces.append(occ_face)
+
+                        # Get centroid
+                        props = GProp_GProps()
+                        brepgprop.SurfaceProperties(occ_face, props)
+                        centroid = props.CentreOfMass()
+
+                        # Get normal
+                        plane = adapter.Plane()
+                        normal = plane.Axis().Direction()
+
+                        face_data.append({
+                            "face": occ_face,
+                            "centroid": [centroid.X(), centroid.Y(), centroid.Z()],
+                            "normal": [normal.X(), normal.Y(), normal.Z()],
+                        })
+                        _log.debug(f"Found planar face at index {face_id}")
+
+            if len(planar_faces) < 2:
+                return None
+
+            # Find bottom face (lowest Z centroid with horizontal normal)
+            bottom_face_data = None
+            min_z = float('inf')
+
+            for fd in face_data:
+                # Check if normal points roughly upward (horizontal face)
+                normal_z = abs(fd["normal"][2])
+                if normal_z > 0.8:  # Normal is mostly vertical
+                    z = fd["centroid"][2]
+                    if z < min_z:
+                        min_z = z
+                        bottom_face_data = fd
+
+            if bottom_face_data is None:
+                # No clear bottom face, use lowest centroid
+                bottom_face_data = min(face_data, key=lambda x: x["centroid"][2])
+
+            # Get bounding box of bottom face
+            bbox = Bnd_Box()
+            brepbndlib.Add(bottom_face_data["face"], bbox)
+            xmin, ymin, zmin, xmax, ymax, zmax = bbox.Get()
+
+            width = xmax - xmin
+            length = ymax - ymin
+
+            # Calculate depth: max Z of all faces - min Z of bottom face
+            max_z = max(fd["centroid"][2] for fd in face_data)
+            depth = max_z - bottom_face_data["centroid"][2]
+
+            # Determine pocket type
+            aspect_ratio = width / length if length > 0 else 1.0
+            pocket_type = "rectangular"
+            if 0.9 <= aspect_ratio <= 1.1:
+                pocket_type = "square"
+
+            return {
+                "width": width,
+                "length": length,
+                "depth": depth,
+                "location": bottom_face_data["centroid"],
+                "pocket_type": pocket_type,
+                "confidence": 0.9,  # High confidence from geometric analysis
+            }
+
+        except Exception as e:
+            _log.warning(f"OCC pocket extraction failed: {e}")
+            return None
+
+    def _extract_from_graph_features(
+        self, face_ids: List[int], graph: Any
+    ) -> Optional[Dict[str, Any]]:
+        """Extract pocket parameters from graph node features.
+
+        Uses PyG node features:
+        - Dimensions 16-18: Centroids (x, y, z)
+        - Compute bounding box from all face centroids
+
+        Args:
+            face_ids: Face indices
+            graph: PyG Data object
+
+        Returns:
+            Pocket parameters dict or None
+        """
+        try:
+            if not hasattr(graph, "x") or graph.x is None:
+                return None
+
+            features = graph.x.cpu().numpy() if hasattr(graph.x, 'cpu') else np.array(graph.x)
+
+            if len(face_ids) == 0 or features.shape[1] < 19:
+                return None
+
+            # Extract centroids (dimensions 16-18)
+            pocket_face_features = features[face_ids]
+            centroids = pocket_face_features[:, 16:19]
+
+            # Compute bounding box from centroids
+            min_coords = centroids.min(axis=0)
+            max_coords = centroids.max(axis=0)
+
+            width = float(max_coords[0] - min_coords[0])
+            length = float(max_coords[1] - min_coords[1])
+            depth = float(max_coords[2] - min_coords[2])
+
+            # Location is average of all centroids
+            location = centroids.mean(axis=0).tolist()
+
+            # Estimate pocket type from aspect ratio
+            if width > 0 and length > 0:
+                aspect_ratio = width / length
+                pocket_type = "square" if 0.9 <= aspect_ratio <= 1.1 else "rectangular"
+            else:
+                pocket_type = "unknown"
+
+            return {
+                "width": max(width, 1.0),  # Ensure minimum size
+                "length": max(length, 1.0),
+                "depth": max(depth, 1.0),
+                "location": location,
+                "pocket_type": pocket_type,
+                "confidence": 0.6,  # Medium confidence from graph features
+            }
+
+        except Exception as e:
+            _log.warning(f"Graph-based pocket extraction failed: {e}")
+            return None
 
 
 class BossGeometryExtractor:
-    """Extract boss parameters (height, base area)."""
+    """Extract boss parameters (height, base area) from STEP entities and face graphs.
+
+    Bosses are raised features with:
+    - Height: Distance from base surface to boss top
+    - Base area: Area of the boss footprint
+    - Location: Center of the boss top face
+
+    Uses three-strategy approach for robust extraction.
+    """
+
+    def __init__(self):
+        """Initialize boss geometry extractor."""
+        self.has_pythonocc = False
+        try:
+            from OCC.Core.BRepAdaptor import BRepAdaptor_Surface
+            from OCC.Core.GeomAbs import GeomAbs_Plane
+
+            self.has_pythonocc = True
+            _log.debug("BossGeometryExtractor initialized with pythonocc-core")
+        except ImportError:
+            _log.warning("pythonocc-core not available for boss geometry extraction")
 
     def extract_boss_parameters(
         self, face_entities: List[Dict], face_ids: List[int], graph: Any
     ) -> Dict[str, Any]:
-        """Extract boss parameters (placeholder for now)."""
-        _log.debug("BossGeometryExtractor not yet implemented, using defaults")
+        """Extract boss parameters from face entities.
+
+        Args:
+            face_entities: List of face entity dictionaries
+            face_ids: List of face indices in the graph
+            graph: Face adjacency graph (PyG Data object)
+
+        Returns:
+            Dictionary with boss parameters:
+            - height: float (boss height)
+            - base_area: float (boss base area)
+            - width: float (boss width)
+            - length: float (boss length)
+            - location: [x, y, z] (boss center location)
+            - boss_type: "rectangular" or "circular" or "unknown"
+            - confidence: float (0-1)
+        """
+        # Strategy 1: Try STEP text parsing first (fast and reliable)
+        result = self._extract_from_step_text(face_entities)
+
+        if result and result.get("confidence", 0.0) > 0.7:
+            _log.debug(
+                f"Extracted boss parameters from STEP text: "
+                f"height={result['height']:.2f}, base_area={result['base_area']:.2f}"
+            )
+            return result
+
+        # Strategy 2: Try pythonocc geometric analysis (more robust but slower)
+        if self.has_pythonocc and hasattr(graph, "faces"):
+            occ_result = self._extract_from_occ_faces(face_ids, graph)
+            if occ_result and occ_result.get("confidence", 0.0) > 0.5:
+                _log.debug(
+                    f"Extracted boss parameters from OCC geometry: "
+                    f"height={occ_result['height']:.2f}, base_area={occ_result['base_area']:.2f}"
+                )
+                return occ_result
+
+        # Strategy 3: Use graph features as fallback
+        graph_result = self._extract_from_graph_features(face_ids, graph)
+
+        if graph_result:
+            _log.debug("Using graph-based boss parameter estimation")
+            return graph_result
+
+        # All strategies failed - return defaults with low confidence
+        _log.warning(
+            "Failed to extract boss parameters. "
+            f"Attempted {3} strategies. "
+            "Returning low-confidence defaults."
+        )
         return {
             "height": 10.0,
             "base_area": 100.0,
+            "width": 10.0,
+            "length": 10.0,
             "location": [0.0, 0.0, 0.0],
-            "confidence": 0.3,
+            "boss_type": "unknown",
+            "confidence": 0.2,
+            "extraction_failures": ["step_text", "occ_geometry", "graph_features"],
         }
+
+    def _extract_from_step_text(
+        self, face_entities: List[Dict]
+    ) -> Optional[Dict[str, Any]]:
+        """Extract boss parameters from STEP entity text.
+
+        Looks for:
+        - BOSS entities or elevated planar surfaces
+        - Multiple planar faces forming raised region
+        - AXIS2_PLACEMENT_3D for location
+
+        Args:
+            face_entities: List of face entity dictionaries
+
+        Returns:
+            Boss parameters dict or None if parsing fails
+        """
+        height = None
+        width = None
+        length = None
+        location = None
+        planar_faces = 0
+
+        # Look for boss-related entities
+        for face_entity in face_entities:
+            entity_text = face_entity.get("text", "")
+
+            # Look for explicit BOSS entities
+            if "BOSS" in entity_text.upper() or "PROTRUSION" in entity_text.upper():
+                _log.debug("Found BOSS entity in STEP text")
+
+                # Try to extract dimensions from BOSS entity
+                numbers = re.findall(r"([\d.eE+-]+)", entity_text)
+                if len(numbers) >= 2:
+                    # Assume first numbers are width/length/height
+                    width = float(numbers[0])
+                    if len(numbers) >= 3:
+                        length = float(numbers[1])
+                        height = float(numbers[2])
+                    else:
+                        length = width  # Square boss
+                        height = float(numbers[1])
+
+            # Look for planar faces (boss walls and top)
+            if "PLANE" in entity_text or "PLANAR" in entity_text:
+                planar_faces += 1
+
+            # Look for AXIS2_PLACEMENT_3D for location
+            axis_match = re.search(
+                r"AXIS2_PLACEMENT_3D\([^,]*,\s*#\d+\s*,\s*"
+                r"\(\s*([-\d.eE+]+)\s*,\s*([-\d.eE+]+)\s*,\s*([-\d.eE+]+)\s*\)",
+                entity_text,
+            )
+            if axis_match:
+                location = [
+                    float(axis_match.group(1)),
+                    float(axis_match.group(2)),
+                    float(axis_match.group(3)),
+                ]
+                _log.debug(f"Found boss location at {location}")
+
+        # Compute confidence based on what we found
+        confidence = 0.0
+        if height is not None and width is not None:
+            confidence += 0.7  # Found key dimensions
+        elif planar_faces >= 4:
+            confidence += 0.3  # Found enough planar faces to suggest a boss
+
+        if location is not None:
+            confidence += 0.3  # Found location
+
+        # Only return if we found reasonable parameters
+        if confidence < 0.5:
+            return None
+
+        # Use defaults if not found
+        if height is None:
+            height = 10.0
+        if width is None:
+            width = 10.0
+        if length is None:
+            length = width  # Assume square
+
+        base_area = width * length
+
+        boss_type = "rectangular" if planar_faces >= 5 else "unknown"
+        if abs(width - length) / max(width, length) < 0.1:
+            boss_type = "square"
+
+        return {
+            "height": height,
+            "base_area": base_area,
+            "width": width,
+            "length": length,
+            "location": location if location else [0.0, 0.0, 0.0],
+            "boss_type": boss_type,
+            "confidence": min(confidence, 1.0),
+        }
+
+    def _extract_from_occ_faces(
+        self, face_ids: List[int], graph: Any
+    ) -> Optional[Dict[str, Any]]:
+        """Extract boss parameters using pythonocc geometric analysis.
+
+        Strategy:
+        1. Identify top face (highest Z centroid among planar faces)
+        2. Identify side faces (vertical/near-vertical normals)
+        3. Extract bounding box of top face → width, length
+        4. Calculate height from Z-difference (top - base)
+        5. Base area = width * length (or π*r² for circular)
+        6. Location = centroid of top face
+
+        Args:
+            face_ids: Face indices
+            graph: Graph with TopoDS_Face objects
+
+        Returns:
+            Boss parameters dict or None
+        """
+        if not self.has_pythonocc:
+            return None
+
+        try:
+            from OCC.Core.BRepAdaptor import BRepAdaptor_Surface
+            from OCC.Core.GeomAbs import GeomAbs_Plane, GeomAbs_Cylinder
+            from OCC.Core.GProp import GProp_GProps
+            from OCC.Core.BRepGProp import brepgprop
+            from OCC.Core.Bnd import Bnd_Box
+            from OCC.Core.BRepBndLib import brepbndlib
+
+            # Get TopoDS_Face objects from graph
+            if not hasattr(graph, "faces") or not graph.faces:
+                return None
+
+            planar_faces = []
+            cylindrical_faces = []
+            face_data = []
+
+            for face_id in face_ids:
+                if face_id >= len(graph.faces):
+                    continue
+
+                face_entity = graph.faces[face_id]
+
+                # Check if face has OCC face stored
+                if hasattr(face_entity, "_occ_face"):
+                    occ_face = face_entity._occ_face
+
+                    # Analyze surface type
+                    adapter = BRepAdaptor_Surface(occ_face)
+                    surface_type = adapter.GetType()
+
+                    if surface_type == GeomAbs_Plane:
+                        planar_faces.append(occ_face)
+
+                        # Get centroid
+                        props = GProp_GProps()
+                        brepgprop.SurfaceProperties(occ_face, props)
+                        centroid = props.CentreOfMass()
+
+                        # Get normal
+                        plane = adapter.Plane()
+                        normal = plane.Axis().Direction()
+
+                        # Get area
+                        area = props.Mass()
+
+                        face_data.append({
+                            "face": occ_face,
+                            "centroid": [centroid.X(), centroid.Y(), centroid.Z()],
+                            "normal": [normal.X(), normal.Y(), normal.Z()],
+                            "area": area,
+                            "type": "planar",
+                        })
+                        _log.debug(f"Found planar face at index {face_id}")
+
+                    elif surface_type == GeomAbs_Cylinder:
+                        cylindrical_faces.append(occ_face)
+                        # Cylindrical boss (round)
+                        props = GProp_GProps()
+                        brepgprop.SurfaceProperties(occ_face, props)
+                        centroid = props.CentreOfMass()
+
+                        face_data.append({
+                            "face": occ_face,
+                            "centroid": [centroid.X(), centroid.Y(), centroid.Z()],
+                            "type": "cylindrical",
+                        })
+
+            if len(face_data) < 2:
+                return None
+
+            # Find top face (highest Z centroid with horizontal normal)
+            top_face_data = None
+            max_z = float('-inf')
+
+            for fd in face_data:
+                if fd["type"] == "planar":
+                    # Check if normal points roughly upward (horizontal face)
+                    normal_z = abs(fd["normal"][2])
+                    if normal_z > 0.8:  # Normal is mostly vertical
+                        z = fd["centroid"][2]
+                        if z > max_z:
+                            max_z = z
+                            top_face_data = fd
+
+            if top_face_data is None:
+                # No clear top face, use highest centroid
+                planar_data = [fd for fd in face_data if fd["type"] == "planar"]
+                if planar_data:
+                    top_face_data = max(planar_data, key=lambda x: x["centroid"][2])
+                else:
+                    return None
+
+            # Determine boss type and dimensions
+            boss_type = "unknown"
+            width = 0.0
+            length = 0.0
+            base_area = 0.0
+
+            if len(cylindrical_faces) > 0:
+                # Circular boss
+                boss_type = "circular"
+                # Get radius from cylindrical face
+                adapter = BRepAdaptor_Surface(cylindrical_faces[0])
+                cylinder = adapter.Cylinder()
+                radius = cylinder.Radius()
+                width = 2.0 * radius
+                length = 2.0 * radius
+                base_area = np.pi * radius * radius
+            else:
+                # Rectangular boss - use top face bounding box
+                bbox = Bnd_Box()
+                brepbndlib.Add(top_face_data["face"], bbox)
+                xmin, ymin, zmin, xmax, ymax, zmax = bbox.Get()
+
+                width = xmax - xmin
+                length = ymax - ymin
+                base_area = width * length
+
+                # Determine if square or rectangular
+                aspect_ratio = width / length if length > 0 else 1.0
+                if 0.9 <= aspect_ratio <= 1.1:
+                    boss_type = "square"
+                else:
+                    boss_type = "rectangular"
+
+            # Calculate height: max Z of top face - min Z of all faces
+            min_z = min(fd["centroid"][2] for fd in face_data)
+            height = top_face_data["centroid"][2] - min_z
+
+            return {
+                "height": height,
+                "base_area": base_area,
+                "width": width,
+                "length": length,
+                "location": top_face_data["centroid"],
+                "boss_type": boss_type,
+                "confidence": 0.9,  # High confidence from geometric analysis
+            }
+
+        except Exception as e:
+            _log.warning(f"OCC boss extraction failed: {e}")
+            return None
+
+    def _extract_from_graph_features(
+        self, face_ids: List[int], graph: Any
+    ) -> Optional[Dict[str, Any]]:
+        """Extract boss parameters from graph node features.
+
+        Uses PyG node features:
+        - Dimensions 16-18: Centroids (x, y, z)
+        - Compute bounding box from all face centroids
+        - Height = max Z - min Z
+
+        Args:
+            face_ids: Face indices
+            graph: PyG Data object
+
+        Returns:
+            Boss parameters dict or None
+        """
+        try:
+            if not hasattr(graph, "x") or graph.x is None:
+                return None
+
+            features = graph.x.cpu().numpy() if hasattr(graph.x, 'cpu') else np.array(graph.x)
+
+            if len(face_ids) == 0 or features.shape[1] < 19:
+                return None
+
+            # Extract centroids (dimensions 16-18)
+            boss_face_features = features[face_ids]
+            centroids = boss_face_features[:, 16:19]
+
+            # Find top face (highest Z)
+            top_face_idx = np.argmax(centroids[:, 2])
+            top_centroid = centroids[top_face_idx]
+
+            # Compute bounding box from centroids
+            min_coords = centroids.min(axis=0)
+            max_coords = centroids.max(axis=0)
+
+            width = float(max_coords[0] - min_coords[0])
+            length = float(max_coords[1] - min_coords[1])
+            height = float(max_coords[2] - min_coords[2])
+
+            # Base area
+            base_area = width * length
+
+            # Location is top face centroid
+            location = top_centroid.tolist()
+
+            # Estimate boss type from aspect ratio
+            if width > 0 and length > 0:
+                aspect_ratio = width / length
+                if 0.9 <= aspect_ratio <= 1.1:
+                    boss_type = "square"
+                else:
+                    boss_type = "rectangular"
+            else:
+                boss_type = "unknown"
+
+            return {
+                "height": max(height, 1.0),  # Ensure minimum size
+                "base_area": max(base_area, 1.0),
+                "width": max(width, 1.0),
+                "length": max(length, 1.0),
+                "location": location,
+                "boss_type": boss_type,
+                "confidence": 0.6,  # Medium confidence from graph features
+            }
+
+        except Exception as e:
+            _log.warning(f"Graph-based boss extraction failed: {e}")
+            return None
 
 
 class FilletGeometryExtractor:
@@ -449,11 +1201,16 @@ class FilletGeometryExtractor:
             return graph_result
 
         # All strategies failed - return defaults with low confidence
-        _log.warning("Failed to extract fillet parameters, using defaults")
+        _log.warning(
+            "Failed to extract fillet parameters. "
+            f"Attempted {3} strategies (STEP text, OCC geometry, graph features). "
+            "Returning low-confidence defaults."
+        )
         return {
             "radius": 5.0,
-            "confidence": 0.3,
+            "confidence": 0.2,
             "method": "default",
+            "extraction_failures": ["step_text", "occ_geometry", "graph_features"],
         }
 
     def _extract_from_step_text(
@@ -716,12 +1473,17 @@ class ChamferGeometryExtractor:
             return graph_result
 
         # All strategies failed - return defaults with low confidence
-        _log.warning("Failed to extract chamfer parameters, using defaults")
+        _log.warning(
+            "Failed to extract chamfer parameters. "
+            f"Attempted {3} strategies (STEP text, OCC geometry, graph features). "
+            "Returning low-confidence defaults."
+        )
         return {
             "angle": 45.0,
             "distance": 2.0,
-            "confidence": 0.3,
+            "confidence": 0.2,
             "method": "default",
+            "extraction_failures": ["step_text", "occ_geometry", "graph_features"],
         }
 
     def _extract_from_step_text(

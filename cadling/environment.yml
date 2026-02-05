@@ -18,10 +18,11 @@ dependencies:
   # Scientific computing
   - scipy>=1.10
 
-  # ML dependencies
+  # ML dependencies (conda-only to avoid OpenMP conflicts on macOS)
   - pytorch>=2.0
   - torchvision
   - torchaudio
+  - torch-geometric
 
   # Development tools
   - pytest>=7.0

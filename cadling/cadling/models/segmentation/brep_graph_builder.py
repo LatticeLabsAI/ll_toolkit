@@ -142,9 +142,48 @@ class BRepFaceGraphBuilder:
         # Alternative: Use topology_builder to extract faces
         if len(face_entities) == 0:
             _log.debug("No face items found, trying topology extraction")
-            # This would require access to raw STEP entities
-            # For now, return empty list
-            pass
+
+            # Try to extract faces from raw STEP entities using topology builder
+            try:
+                from cadling.backend.step.topology_builder import TopologyBuilder
+
+                topology_builder = TopologyBuilder()
+
+                # Get raw STEP text from document
+                step_text = None
+                if hasattr(doc, 'raw_content') and doc.raw_content:
+                    step_text = doc.raw_content
+                elif hasattr(doc, 'properties') and doc.properties.get("step_text"):
+                    step_text = doc.properties.get("step_text")
+                elif hasattr(doc, '_backend') and hasattr(doc._backend, 'content'):
+                    step_text = doc._backend.content
+
+                if not step_text:
+                    _log.warning("No STEP text available for topology extraction")
+                    return face_entities
+
+                # Parse entities using topology builder
+                if hasattr(topology_builder, 'parse_entities'):
+                    entities = topology_builder.parse_entities(step_text)
+
+                    # Extract face entities (ADVANCED_FACE, FACE_SURFACE, etc.)
+                    for entity in entities:
+                        entity_type = entity.get("type", "")
+                        if entity_type in ["ADVANCED_FACE", "FACE_SURFACE", "FACE_OUTER_BOUND", "FACE_BOUND"]:
+                            face_entities.append({
+                                "entity_id": entity.get("id"),
+                                "entity_type": entity_type,
+                                "text": entity.get("text", ""),
+                            })
+
+                    _log.debug(f"Extracted {len(face_entities)} faces via topology builder")
+                else:
+                    _log.warning("TopologyBuilder does not have parse_entities method")
+
+            except ImportError:
+                _log.debug("TopologyBuilder not available, cannot extract faces from STEP entities")
+            except Exception as e:
+                _log.error(f"Topology extraction failed: {e}")
 
         return face_entities
 
@@ -171,10 +210,7 @@ class BRepFaceGraphBuilder:
         face_to_edges = {}
 
         for i, face_entity in enumerate(face_entities):
-            # Extract edges associated with this face
-            # This requires parsing the face entity geometry
-            # For now, use simplified approach
-
+            # Extract edges associated with this face by parsing the face entity geometry
             # Get entity text and parse for edge references
             entity_text = face_entity.get("text", "")
 
@@ -306,7 +342,8 @@ class BRepFaceGraphBuilder:
                 # Use entity info for area if OCC not available
                 if face_areas[i] == 0:
                     face_areas[i] = entity_info.get("area", 0.0)
-            except:
+            except Exception as e:
+                _log.debug(f"Failed to extract entity info: {e}")
                 face_types.append("OTHER")
 
         # Compute edge features for each pair

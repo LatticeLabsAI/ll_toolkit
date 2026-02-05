@@ -228,8 +228,8 @@ class PythonOCCBackend(RenderableCADBackend):
         # Enable antialiasing for smoother edges
         try:
             display.EnableAntiAliasing()
-        except:
-            _log.debug("Antialiasing not available")
+        except Exception as e:
+            _log.debug(f"Antialiasing not available: {e}")
 
         # Render to temporary file then load as PIL Image
         with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_file:

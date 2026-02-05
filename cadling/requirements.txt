@@ -11,8 +11,8 @@ trimesh>=4.0
 networkx>=3.0
 
 # ML dependencies
-torch>=2.0
-torch-geometric>=2.3
+# NOTE: PyTorch is installed via conda (see environment.yml)
+# This avoids OpenMP library conflicts on macOS
 transformers>=4.35
 
 # Local dependencies

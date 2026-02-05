@@ -182,7 +182,23 @@ class InterferenceCheckModel(EnrichmentModel):
             item_batch: List of CADItem objects (parts) to analyze
         """
         if not self.has_pythonocc:
-            _log.debug("Interference check skipped: pythonocc not available")
+            _log.warning(
+                "Interference check requires pythonocc-core. "
+                "Install with: conda install pythonocc-core -c conda-forge"
+            )
+            doc.properties["interference_check"] = {
+                "status": "unavailable",
+                "reason": "pythonocc-core not installed",
+                "interferences": [],
+                "clearances": [],
+                "containment_issues": [],
+                "num_interferences": 0,
+                "num_clearances_checked": 0,
+                "num_insufficient_clearances": 0,
+                "num_containment_issues": 0,
+                "has_interferences": False,
+                "has_insufficient_clearances": False,
+            }
             return
 
         try:
@@ -212,6 +228,7 @@ class InterferenceCheckModel(EnrichmentModel):
 
             # Store results
             doc.properties["interference_check"] = {
+                "status": "success",
                 "interferences": [inter.to_dict() for inter in interferences],
                 "clearances": [clear.to_dict() for clear in clearances],
                 "containment_issues": containment_issues,
@@ -266,7 +283,16 @@ class InterferenceCheckModel(EnrichmentModel):
 
             _log.debug(f"Checking interferences among {len(solid_items)} parts")
 
+            # Pre-extract bounding boxes for all parts (for O(1) lookup)
+            part_bboxes = {}
+            for i, item in enumerate(solid_items):
+                part_id = f"part_{i}"
+                bbox = self._get_item_bbox(item)
+                if bbox:
+                    part_bboxes[part_id] = bbox
+
             interference_id = 0
+            bbox_filtered_count = 0
 
             # Check all pairs of parts
             for i, item1 in enumerate(solid_items):
@@ -276,14 +302,23 @@ class InterferenceCheckModel(EnrichmentModel):
                 if shape1 is None:
                     continue
 
+                bbox1 = part_bboxes.get(part1_id)
+
                 for j, item2 in enumerate(solid_items[i + 1:], start=i + 1):
                     part2_id = f"part_{j}"
+
+                    # Bounding box pre-filter: skip expensive boolean op if bboxes don't overlap
+                    bbox2 = part_bboxes.get(part2_id)
+                    if bbox1 and bbox2 and not self._bboxes_overlap(bbox1, bbox2):
+                        bbox_filtered_count += 1
+                        continue  # Skip - no possible intersection
+
                     shape2 = self._get_occ_shape(item2)
 
                     if shape2 is None:
                         continue
 
-                    # Compute boolean intersection
+                    # Compute boolean intersection (expensive operation)
                     common_op = BRepAlgoAPI_Common(shape1, shape2)
                     common_op.Build()
 
@@ -325,6 +360,11 @@ class InterferenceCheckModel(EnrichmentModel):
                             f"Interference detected: {part1_id} <-> {part2_id}, "
                             f"volume={intersection_volume:.3f} mm³"
                         )
+
+            if bbox_filtered_count > 0:
+                _log.debug(
+                    f"Skipped {bbox_filtered_count} part pairs via bounding box pre-filtering"
+                )
 
         except Exception as e:
             _log.warning(f"Error checking interferences: {e}")
@@ -470,13 +510,36 @@ class InterferenceCheckModel(EnrichmentModel):
         if len(solid_items) < 2:
             return clearances
 
+        # Pre-extract bounding boxes for all parts
+        part_bboxes = {}
+        for i, item in enumerate(solid_items):
+            part_id = f"part_{i}"
+            bbox = self._get_item_bbox(item)
+            if bbox:
+                part_bboxes[part_id] = bbox
+
         clearance_id = 0
+        bbox_filtered_count = 0
+
+        # Threshold: skip clearance computation if bbox distance > this value
+        # (parts are clearly far apart, clearance will be >> min_clearance)
+        max_distance_threshold = max(self.min_clearance * 100, 100.0)  # mm
 
         # Check all pairs
         for i, item1 in enumerate(solid_items):
             part1_id = f"part_{i}"
+            bbox1 = part_bboxes.get(part1_id)
+
             for j, item2 in enumerate(solid_items[i + 1:], start=i + 1):
                 part2_id = f"part_{j}"
+                bbox2 = part_bboxes.get(part2_id)
+
+                # Bounding box pre-filter: skip if parts are clearly far apart
+                if bbox1 and bbox2:
+                    bbox_dist = self._bbox_min_distance(bbox1, bbox2)
+                    if bbox_dist > max_distance_threshold:
+                        bbox_filtered_count += 1
+                        continue  # Skip - parts are far apart
 
                 clearance = self.compute_clearances(item1, item2)
 
@@ -494,6 +557,12 @@ class InterferenceCheckModel(EnrichmentModel):
                             f"distance={clearance.distance:.3f} mm "
                             f"(min={self.min_clearance} mm)"
                         )
+
+        if bbox_filtered_count > 0:
+            _log.debug(
+                f"Skipped {bbox_filtered_count} part pairs in clearance computation "
+                f"(bbox distance > {max_distance_threshold:.1f} mm)"
+            )
 
         return clearances
 
@@ -594,3 +663,62 @@ class InterferenceCheckModel(EnrichmentModel):
         severity = min(intersection_volume / min_volume, 1.0)
 
         return severity
+
+    def _get_item_bbox(self, item: CADItem) -> Optional[Dict[str, float]]:
+        """Get bounding box from item properties.
+
+        Args:
+            item: CADItem to get bounding box from
+
+        Returns:
+            Dict with min_x, max_x, min_y, max_y, min_z, max_z or None
+        """
+        if "geometry_analysis" in getattr(item, "properties", {}):
+            geom = item.properties["geometry_analysis"]
+            bbox = geom.get("bounding_box")
+            if bbox and all(k in bbox for k in ["min_x", "max_x", "min_y", "max_y", "min_z", "max_z"]):
+                return bbox
+        return None
+
+    def _bboxes_overlap(self, bbox1: Dict[str, float], bbox2: Dict[str, float]) -> bool:
+        """Check if two bounding boxes overlap.
+
+        Fast O(1) check to filter out part pairs that cannot possibly intersect.
+
+        Args:
+            bbox1: First bounding box
+            bbox2: Second bounding box
+
+        Returns:
+            True if bounding boxes overlap, False otherwise
+        """
+        # Check for separation along each axis
+        # If separated on any axis, boxes don't overlap
+        if bbox1["max_x"] < bbox2["min_x"] or bbox2["max_x"] < bbox1["min_x"]:
+            return False
+        if bbox1["max_y"] < bbox2["min_y"] or bbox2["max_y"] < bbox1["min_y"]:
+            return False
+        if bbox1["max_z"] < bbox2["min_z"] or bbox2["max_z"] < bbox1["min_z"]:
+            return False
+        return True
+
+    def _bbox_min_distance(self, bbox1: Dict[str, float], bbox2: Dict[str, float]) -> float:
+        """Compute minimum distance between two bounding boxes.
+
+        Fast O(1) lower bound for actual part distance. Used to skip
+        expensive clearance computations for parts that are clearly far apart.
+
+        Args:
+            bbox1: First bounding box
+            bbox2: Second bounding box
+
+        Returns:
+            Minimum distance between bounding boxes (0 if overlapping)
+        """
+        # Compute gap on each axis (0 if overlapping on that axis)
+        gap_x = max(0, bbox1["min_x"] - bbox2["max_x"], bbox2["min_x"] - bbox1["max_x"])
+        gap_y = max(0, bbox1["min_y"] - bbox2["max_y"], bbox2["min_y"] - bbox1["max_y"])
+        gap_z = max(0, bbox1["min_z"] - bbox2["max_z"], bbox2["min_z"] - bbox1["max_z"])
+
+        # Euclidean distance between boxes
+        return np.sqrt(gap_x**2 + gap_y**2 + gap_z**2)

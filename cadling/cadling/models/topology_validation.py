@@ -41,9 +41,20 @@ class TopologyValidationModel(EnrichmentModel):
         has_pythonocc: Whether pythonocc-core is available
         has_trimesh: Whether trimesh is available
         strict_mode: Whether to fail on any topology error
+        check_self_intersections: Whether to check for self-intersections
+        max_faces_for_self_intersection: Max faces for self-intersection check
 
     Example:
+        # Basic validation
         model = TopologyValidationModel(strict_mode=True)
+
+        # With self-intersection checking (expensive)
+        model = TopologyValidationModel(
+            strict_mode=True,
+            check_self_intersections=True,
+            max_faces_for_self_intersection=5000
+        )
+
         result = converter.convert(
             "part.step",
             pipeline_options=PipelineOptions(
@@ -56,15 +67,25 @@ class TopologyValidationModel(EnrichmentModel):
                 print(f"Topology errors: {validation.get('errors', [])}")
     """
 
-    def __init__(self, strict_mode: bool = False):
+    def __init__(
+        self,
+        strict_mode: bool = False,
+        check_self_intersections: bool = False,
+        max_faces_for_self_intersection: int = 10000,
+    ):
         """Initialize topology validation model.
 
         Args:
             strict_mode: If True, mark items as invalid on any topology error
+            check_self_intersections: If True, check for self-intersections (expensive)
+            max_faces_for_self_intersection: Maximum number of faces to check for
+                self-intersections. Meshes larger than this will skip the check.
         """
         super().__init__()
 
         self.strict_mode = strict_mode
+        self.check_self_intersections = check_self_intersections
+        self.max_faces_for_self_intersection = max_faces_for_self_intersection
 
         # Check for pythonocc-core availability
         self.has_pythonocc = False
@@ -211,7 +232,7 @@ class TopologyValidationModel(EnrichmentModel):
             from OCC.Core.TopoDS import TopoDS_Shape
 
             return isinstance(shape, TopoDS_Shape)
-        except:
+        except ImportError:
             return False
 
     def _is_trimesh(self, shape) -> bool:
@@ -220,7 +241,7 @@ class TopologyValidationModel(EnrichmentModel):
             import trimesh
 
             return isinstance(shape, trimesh.Trimesh)
-        except:
+        except ImportError:
             return False
 
     def _validate_occ_shape(self, shape) -> dict:
@@ -416,8 +437,18 @@ class TopologyValidationModel(EnrichmentModel):
             )
 
         # Check for duplicate faces
-        # Trimesh might have a method for this
-        # For now, just check if there are duplicate vertices
+        # Sort face indices to make [0,1,2] equivalent to [1,2,0] for duplicate detection
+        sorted_faces = np.sort(mesh.faces, axis=1)
+        unique_faces = np.unique(sorted_faces, axis=0)
+        num_duplicate_faces = len(mesh.faces) - len(unique_faces)
+        results["num_duplicate_faces"] = num_duplicate_faces
+
+        if num_duplicate_faces > 0:
+            results["warnings"].append(
+                f"Found {num_duplicate_faces} duplicate faces"
+            )
+
+        # Check for duplicate vertices
         unique_vertices = np.unique(mesh.vertices, axis=0)
         num_duplicate_vertices = len(mesh.vertices) - len(unique_vertices)
         results["num_duplicate_vertices"] = num_duplicate_vertices
@@ -450,25 +481,34 @@ class TopologyValidationModel(EnrichmentModel):
                 f"(expected one of {expected_values})"
             )
 
-        # Check for self-intersections (expensive)
+        # Check for self-intersections (expensive, configurable)
         # Trimesh has mesh.is_self_intersecting but it's slow
-        # We'll skip this for performance unless specifically requested
-        # For now, just check if it's available
-        try:
-            if hasattr(mesh, "is_self_intersecting"):
-                # Only check for small meshes to avoid performance issues
-                if num_faces < 10000:
+        if self.check_self_intersections and hasattr(mesh, "is_self_intersecting"):
+            if num_faces < self.max_faces_for_self_intersection:
+                try:
                     has_self_intersections = mesh.is_self_intersecting
                     results["self_intersecting"] = has_self_intersections
                     if has_self_intersections:
                         results["errors"].append("Mesh has self-intersections")
                         results["is_valid"] = False
-                else:
+                except Exception as e:
                     results["self_intersecting"] = None
                     results["warnings"].append(
-                        "Self-intersection check skipped (mesh too large)"
+                        f"Self-intersection check failed: {e}"
                     )
-        except:
+            else:
+                results["self_intersecting"] = None
+                results["warnings"].append(
+                    f"Self-intersection check skipped (mesh has {num_faces} faces, "
+                    f"limit is {self.max_faces_for_self_intersection})"
+                )
+        elif self.check_self_intersections and not hasattr(mesh, "is_self_intersecting"):
+            results["self_intersecting"] = None
+            results["warnings"].append(
+                "Self-intersection check not available in trimesh version"
+            )
+        else:
+            # Not enabled
             results["self_intersecting"] = None
 
         # Check manifoldness
@@ -480,7 +520,7 @@ class TopologyValidationModel(EnrichmentModel):
                 # Check if there are boundary edges (shared by 1 face)
                 # or non-manifold edges (shared by >2 faces)
                 pass  # Trimesh's is_watertight already checks this
-        except:
+        except Exception:
             pass
 
         _log.debug(

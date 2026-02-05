@@ -16,13 +16,14 @@ Classes:
 
 from __future__ import annotations
 
+import heapq
 import logging
 import numpy as np
-from collections import defaultdict
+from collections import defaultdict, deque
 from typing import TYPE_CHECKING, Iterator, Optional, List, Set, Tuple
 
 from cadling.chunker.base_chunker import BaseCADChunker, CADChunk, CADChunkMeta
-from cadling.datamodel.stl import STLDocument, MeshItem
+from cadling.datamodel.stl import STLDocument, MeshItem, STLFacet
 
 if TYPE_CHECKING:
     from cadling.datamodel.base_models import CADlingDocument
@@ -167,13 +168,20 @@ class STLMeshChunker(BaseCADChunker):
             for edge in edges:
                 edge_to_facets[edge].add(i)
 
-        # Build adjacency graph from shared edges
+        # Build adjacency graph from shared edges (optimized for common 2-face case)
         for edge, facet_set in edge_to_facets.items():
-            facet_list = list(facet_set)
-            for i, f1 in enumerate(facet_list):
-                for f2 in facet_list[i+1:]:
-                    adjacency[f1].add(f2)
-                    adjacency[f2].add(f1)
+            if len(facet_set) == 2:
+                # Fast path: most edges are shared by exactly 2 faces (manifold)
+                f1, f2 = facet_set
+                adjacency[f1].add(f2)
+                adjacency[f2].add(f1)
+            elif len(facet_set) > 2:
+                # Non-manifold edge: use original nested loop approach
+                facet_list = list(facet_set)
+                for i, f1 in enumerate(facet_list):
+                    for f2 in facet_list[i+1:]:
+                        adjacency[f1].add(f2)
+                        adjacency[f2].add(f1)
 
         return {
             "adjacency": adjacency,
@@ -205,12 +213,12 @@ class STLMeshChunker(BaseCADChunker):
 
             # Grow region from seed
             region = [seed_idx]
-            queue = [seed_idx]
+            queue = deque([seed_idx])  # Use deque for O(1) popleft
             visited.add(seed_idx)
             seed_normal = np.array(facets[seed_idx].normal)
 
             while queue and len(region) < self.max_facets_per_chunk:
-                current_idx = queue.pop(0)
+                current_idx = queue.popleft()  # O(1) instead of O(n)
                 current_normal = np.array(facets[current_idx].normal)
 
                 # Check adjacent facets
@@ -259,11 +267,11 @@ class STLMeshChunker(BaseCADChunker):
 
             # BFS to find connected component
             component = []
-            queue = [start_idx]
+            queue = deque([start_idx])  # Use deque for O(1) popleft
             visited.add(start_idx)
 
             while queue:
-                current_idx = queue.pop(0)
+                current_idx = queue.popleft()  # O(1) instead of O(n)
                 component.append(current_idx)
 
                 for neighbor_idx in adjacency.get(current_idx, []):
@@ -330,11 +338,11 @@ class STLMeshChunker(BaseCADChunker):
 
                 # Grow connected region within same curvature class
                 region = []
-                queue = [start_idx]
+                queue = deque([start_idx])  # Use deque for O(1) popleft
                 visited.add(start_idx)
 
                 while queue and len(region) < self.max_facets_per_chunk:
-                    current_idx = queue.pop(0)
+                    current_idx = queue.popleft()  # O(1) instead of O(n)
                     region.append(current_idx)
 
                     for neighbor_idx in adjacency.get(current_idx, []):
@@ -401,13 +409,14 @@ class STLMeshChunker(BaseCADChunker):
             if seed_idx in visited:
                 continue
 
-            # Grow basin
+            # Grow basin using priority queue (heapq for O(log n) operations)
             basin = [seed_idx]
             queue = [(heights[seed_idx], seed_idx)]
+            heapq.heapify(queue)  # Initialize heap
             visited.add(seed_idx)
 
             while queue and len(basin) < self.max_facets_per_chunk:
-                _, current_idx = queue.pop(0)
+                _, current_idx = heapq.heappop(queue)  # O(log n) instead of O(n)
 
                 for neighbor_idx in adjacency.get(current_idx, []):
                     if neighbor_idx in visited:
@@ -417,8 +426,7 @@ class STLMeshChunker(BaseCADChunker):
                     if heights[neighbor_idx] >= heights[current_idx]:
                         basin.append(neighbor_idx)
                         visited.add(neighbor_idx)
-                        queue.append((heights[neighbor_idx], neighbor_idx))
-                        queue.sort()  # Keep queue sorted by height
+                        heapq.heappush(queue, (heights[neighbor_idx], neighbor_idx))  # O(log n)
 
             if basin:
                 segment = MeshSegment(basin)

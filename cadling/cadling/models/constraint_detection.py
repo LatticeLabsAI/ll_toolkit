@@ -17,6 +17,7 @@ Classes:
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
@@ -24,6 +25,13 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 import numpy as np
 
 from cadling.models.base_model import EnrichmentModel
+
+# Try to import scipy for spatial indexing (optional but recommended)
+try:
+    from scipy.spatial import KDTree
+    HAS_SCIPY = True
+except ImportError:
+    HAS_SCIPY = False
 
 if TYPE_CHECKING:
     from cadling.datamodel.base_models import CADItem, CADlingDocument
@@ -295,41 +303,108 @@ class ConstraintDetectionModel(EnrichmentModel):
                 if cylinders:
                     part_cylinders[part_id] = cylinders
 
-            # Compare cylinders between parts
-            part_ids = list(part_cylinders.keys())
+            # Pre-normalize all cylinder axes (avoid repeated normalization in loop)
+            for part_id, cylinders in part_cylinders.items():
+                for cyl in cylinders:
+                    axis = np.array(cyl["axis"])
+                    norm = np.linalg.norm(axis)
+                    if norm > 0:
+                        cyl["axis_normalized"] = axis / norm
+                    else:
+                        cyl["axis_normalized"] = axis
+
+            # Build flat list of all cylinders with part references for spatial indexing
+            all_cylinders = []
+            cylinder_part_map = []  # Maps cylinder index to (part_id, local_idx)
+            for part_id, cylinders in part_cylinders.items():
+                for local_idx, cyl in enumerate(cylinders):
+                    all_cylinders.append(cyl)
+                    cylinder_part_map.append((part_id, local_idx))
+
             mate_id = 0
 
-            for i, part1_id in enumerate(part_ids):
-                for part2_id in part_ids[i + 1:]:
-                    cylinders1 = part_cylinders[part1_id]
-                    cylinders2 = part_cylinders[part2_id]
+            # Use KDTree for O(n log n) spatial queries if scipy available
+            if HAS_SCIPY and len(all_cylinders) > 10:
+                # Build KDTree from cylinder centers
+                centers = np.array([cyl["center"] for cyl in all_cylinders])
+                tree = KDTree(centers)
 
-                    # Check all pairs of cylinders
-                    for cyl1 in cylinders1:
-                        for cyl2 in cylinders2:
-                            # Check if cylinders are concentric
-                            if self._are_concentric(cyl1, cyl2):
-                                mate = Mate(
-                                    mate_id=f"concentric_{mate_id}",
-                                    part1_id=part1_id,
-                                    part2_id=part2_id,
-                                    constraint_type=ConstraintType.CONCENTRIC,
-                                    parameters={
-                                        "radius1": cyl1["radius"],
-                                        "radius2": cyl2["radius"],
-                                        "radial_clearance": abs(cyl1["radius"] - cyl2["radius"]),
-                                    },
-                                    location=cyl1["center"],
-                                    direction=cyl1["axis"],
-                                    confidence=0.85,
-                                )
-                                mates.append(mate)
-                                mate_id += 1
+                # Query nearby cylinders (within 2x max radius as search radius)
+                max_radius = max(cyl["radius"] for cyl in all_cylinders)
+                search_radius = max(max_radius * 2, self.concentric_tolerance * 10)
 
-                                _log.debug(
-                                    f"Found concentric mate: {part1_id} <-> {part2_id}, "
-                                    f"r1={cyl1['radius']:.2f}, r2={cyl2['radius']:.2f}"
-                                )
+                # Find pairs within search radius
+                pairs = tree.query_pairs(r=search_radius, output_type='ndarray')
+
+                for i, j in pairs:
+                    part1_id, _ = cylinder_part_map[i]
+                    part2_id, _ = cylinder_part_map[j]
+
+                    # Skip cylinders from same part
+                    if part1_id == part2_id:
+                        continue
+
+                    cyl1 = all_cylinders[i]
+                    cyl2 = all_cylinders[j]
+
+                    # Check if cylinders are concentric
+                    if self._are_concentric_fast(cyl1, cyl2):
+                        mate = Mate(
+                            mate_id=f"concentric_{mate_id}",
+                            part1_id=part1_id,
+                            part2_id=part2_id,
+                            constraint_type=ConstraintType.CONCENTRIC,
+                            parameters={
+                                "radius1": cyl1["radius"],
+                                "radius2": cyl2["radius"],
+                                "radial_clearance": abs(cyl1["radius"] - cyl2["radius"]),
+                            },
+                            location=cyl1["center"],
+                            direction=cyl1["axis"],
+                            confidence=0.85,
+                        )
+                        mates.append(mate)
+                        mate_id += 1
+
+                        _log.debug(
+                            f"Found concentric mate: {part1_id} <-> {part2_id}, "
+                            f"r1={cyl1['radius']:.2f}, r2={cyl2['radius']:.2f}"
+                        )
+            else:
+                # Fallback: O(n²) comparison for small datasets or no scipy
+                part_ids = list(part_cylinders.keys())
+
+                for i, part1_id in enumerate(part_ids):
+                    for part2_id in part_ids[i + 1:]:
+                        cylinders1 = part_cylinders[part1_id]
+                        cylinders2 = part_cylinders[part2_id]
+
+                        # Check all pairs of cylinders
+                        for cyl1 in cylinders1:
+                            for cyl2 in cylinders2:
+                                # Check if cylinders are concentric
+                                if self._are_concentric_fast(cyl1, cyl2):
+                                    mate = Mate(
+                                        mate_id=f"concentric_{mate_id}",
+                                        part1_id=part1_id,
+                                        part2_id=part2_id,
+                                        constraint_type=ConstraintType.CONCENTRIC,
+                                        parameters={
+                                            "radius1": cyl1["radius"],
+                                            "radius2": cyl2["radius"],
+                                            "radial_clearance": abs(cyl1["radius"] - cyl2["radius"]),
+                                        },
+                                        location=cyl1["center"],
+                                        direction=cyl1["axis"],
+                                        confidence=0.85,
+                                    )
+                                    mates.append(mate)
+                                    mate_id += 1
+
+                                    _log.debug(
+                                        f"Found concentric mate: {part1_id} <-> {part2_id}, "
+                                        f"r1={cyl1['radius']:.2f}, r2={cyl2['radius']:.2f}"
+                                    )
 
         except Exception as e:
             _log.warning(f"Error detecting concentric mates: {e}")
@@ -379,41 +454,107 @@ class ConstraintDetectionModel(EnrichmentModel):
                 if planes:
                     part_planes[part_id] = planes
 
-            # Compare planes between parts
-            part_ids = list(part_planes.keys())
+            # Pre-normalize all plane normals (avoid repeated normalization in loop)
+            for part_id, planes in part_planes.items():
+                for plane in planes:
+                    normal = np.array(plane["normal"])
+                    norm = np.linalg.norm(normal)
+                    if norm > 0:
+                        plane["normal_normalized"] = normal / norm
+                    else:
+                        plane["normal_normalized"] = normal
+
+            # Build flat list of all planes with part references for spatial indexing
+            all_planes = []
+            plane_part_map = []  # Maps plane index to (part_id, local_idx)
+            for part_id, planes in part_planes.items():
+                for local_idx, plane in enumerate(planes):
+                    all_planes.append(plane)
+                    plane_part_map.append((part_id, local_idx))
+
             mate_id = 0
 
-            for i, part1_id in enumerate(part_ids):
-                for part2_id in part_ids[i + 1:]:
-                    planes1 = part_planes[part1_id]
-                    planes2 = part_planes[part2_id]
+            # Use KDTree for O(n log n) spatial queries if scipy available
+            if HAS_SCIPY and len(all_planes) > 10:
+                # Build KDTree from plane points
+                points = np.array([plane["point"] for plane in all_planes])
+                tree = KDTree(points)
 
-                    # Check all pairs of planes
-                    for plane1 in planes1:
-                        for plane2 in planes2:
-                            # Check if planes are in contact
-                            if self._are_planar_contact(plane1, plane2):
-                                mate = Mate(
-                                    mate_id=f"planar_{mate_id}",
-                                    part1_id=part1_id,
-                                    part2_id=part2_id,
-                                    constraint_type=ConstraintType.PLANAR,
-                                    parameters={
-                                        "area1": plane1["area"],
-                                        "area2": plane2["area"],
-                                        "overlap_area": min(plane1["area"], plane2["area"]),
-                                    },
-                                    location=plane1["point"],
-                                    direction=plane1["normal"],
-                                    confidence=0.80,
-                                )
-                                mates.append(mate)
-                                mate_id += 1
+                # Search radius based on typical plane proximity
+                search_radius = self.planar_tolerance * 100  # Generous search radius
 
-                                _log.debug(
-                                    f"Found planar contact: {part1_id} <-> {part2_id}, "
-                                    f"area1={plane1['area']:.2f}, area2={plane2['area']:.2f}"
-                                )
+                # Find pairs within search radius
+                pairs = tree.query_pairs(r=search_radius, output_type='ndarray')
+
+                for i, j in pairs:
+                    part1_id, _ = plane_part_map[i]
+                    part2_id, _ = plane_part_map[j]
+
+                    # Skip planes from same part
+                    if part1_id == part2_id:
+                        continue
+
+                    plane1 = all_planes[i]
+                    plane2 = all_planes[j]
+
+                    # Check if planes are in contact
+                    if self._are_planar_contact_fast(plane1, plane2):
+                        mate = Mate(
+                            mate_id=f"planar_{mate_id}",
+                            part1_id=part1_id,
+                            part2_id=part2_id,
+                            constraint_type=ConstraintType.PLANAR,
+                            parameters={
+                                "area1": plane1["area"],
+                                "area2": plane2["area"],
+                                "overlap_area": min(plane1["area"], plane2["area"]),
+                            },
+                            location=plane1["point"],
+                            direction=plane1["normal"],
+                            confidence=0.80,
+                        )
+                        mates.append(mate)
+                        mate_id += 1
+
+                        _log.debug(
+                            f"Found planar contact: {part1_id} <-> {part2_id}, "
+                            f"area1={plane1['area']:.2f}, area2={plane2['area']:.2f}"
+                        )
+            else:
+                # Fallback: O(n²) comparison for small datasets or no scipy
+                part_ids = list(part_planes.keys())
+
+                for i, part1_id in enumerate(part_ids):
+                    for part2_id in part_ids[i + 1:]:
+                        planes1 = part_planes[part1_id]
+                        planes2 = part_planes[part2_id]
+
+                        # Check all pairs of planes
+                        for plane1 in planes1:
+                            for plane2 in planes2:
+                                # Check if planes are in contact
+                                if self._are_planar_contact_fast(plane1, plane2):
+                                    mate = Mate(
+                                        mate_id=f"planar_{mate_id}",
+                                        part1_id=part1_id,
+                                        part2_id=part2_id,
+                                        constraint_type=ConstraintType.PLANAR,
+                                        parameters={
+                                            "area1": plane1["area"],
+                                            "area2": plane2["area"],
+                                            "overlap_area": min(plane1["area"], plane2["area"]),
+                                        },
+                                        location=plane1["point"],
+                                        direction=plane1["normal"],
+                                        confidence=0.80,
+                                    )
+                                    mates.append(mate)
+                                    mate_id += 1
+
+                                    _log.debug(
+                                        f"Found planar contact: {part1_id} <-> {part2_id}, "
+                                        f"area1={plane1['area']:.2f}, area2={plane2['area']:.2f}"
+                                    )
 
         except Exception as e:
             _log.warning(f"Error detecting planar contacts: {e}")
@@ -651,6 +792,55 @@ class ConstraintDetectionModel(EnrichmentModel):
 
         return True
 
+    def _are_concentric_fast(self, cyl1: Dict, cyl2: Dict) -> bool:
+        """Check if two cylinders are concentric (optimized version).
+
+        Uses pre-normalized axes stored in 'axis_normalized' key to avoid
+        repeated normalization. Falls back to regular _are_concentric if
+        pre-normalized axes not available.
+
+        Args:
+            cyl1, cyl2: Cylinder dicts with radius, axis, center, axis_normalized
+
+        Returns:
+            True if cylinders are concentric within tolerance
+        """
+        # Use pre-normalized axes if available
+        axis1 = cyl1.get("axis_normalized")
+        axis2 = cyl2.get("axis_normalized")
+
+        if axis1 is None or axis2 is None:
+            # Fall back to standard method
+            return self._are_concentric(cyl1, cyl2)
+
+        # Check parallelism (dot product close to ±1)
+        dot_product = abs(np.dot(axis1, axis2))
+        if dot_product < 0.95:  # ~18 degrees tolerance
+            return False
+
+        # Check if centers are aligned radially
+        center1 = np.array(cyl1["center"])
+        center2 = np.array(cyl2["center"])
+
+        # Vector from center1 to center2
+        center_vec = center2 - center1
+
+        # Use first axis for projection (they're parallel)
+        # Project center_vec onto axis to get axial component
+        axial_component = np.dot(center_vec, axis1) * axis1
+
+        # Subtract axial to get radial component
+        radial_component = center_vec - axial_component
+
+        # Radial distance
+        radial_dist = np.linalg.norm(radial_component)
+
+        # Check radial alignment
+        if radial_dist > self.concentric_tolerance:
+            return False
+
+        return True
+
     def _are_planar_contact(self, plane1: Dict, plane2: Dict) -> bool:
         """Check if two planes are in contact.
 
@@ -667,6 +857,49 @@ class ConstraintDetectionModel(EnrichmentModel):
         # Normalize
         normal1 = normal1 / np.linalg.norm(normal1)
         normal2 = normal2 / np.linalg.norm(normal2)
+
+        # Check anti-parallelism (dot product close to -1)
+        dot_product = np.dot(normal1, normal2)
+        if dot_product > -0.95:  # Not facing each other
+            return False
+
+        # Check if planes are co-planar (points lie on each other's plane)
+        point1 = np.array(plane1["point"])
+        point2 = np.array(plane2["point"])
+
+        # Distance from point2 to plane1
+        dist = abs(np.dot(point2 - point1, normal1))
+
+        if dist > self.planar_tolerance:
+            return False
+
+        # Check minimum area overlap
+        min_area = min(plane1["area"], plane2["area"])
+        if min_area < self.min_contact_area:
+            return False
+
+        return True
+
+    def _are_planar_contact_fast(self, plane1: Dict, plane2: Dict) -> bool:
+        """Check if two planes are in contact (optimized version).
+
+        Uses pre-normalized normals stored in 'normal_normalized' key to avoid
+        repeated normalization. Falls back to regular _are_planar_contact if
+        pre-normalized normals not available.
+
+        Args:
+            plane1, plane2: Plane dicts with normal, point, area, normal_normalized
+
+        Returns:
+            True if planes are in contact within tolerance
+        """
+        # Use pre-normalized normals if available
+        normal1 = plane1.get("normal_normalized")
+        normal2 = plane2.get("normal_normalized")
+
+        if normal1 is None or normal2 is None:
+            # Fall back to standard method
+            return self._are_planar_contact(plane1, plane2)
 
         # Check anti-parallelism (dot product close to -1)
         dot_product = np.dot(normal1, normal2)

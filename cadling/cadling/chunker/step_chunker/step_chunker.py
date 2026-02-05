@@ -12,7 +12,7 @@ Classes:
 from __future__ import annotations
 
 import logging
-from collections import defaultdict
+from collections import defaultdict, deque
 from typing import TYPE_CHECKING, Iterator, Optional
 
 from cadling.chunker.base_chunker import BaseCADChunker, CADChunk, CADChunkMeta
@@ -94,6 +94,13 @@ class STEPChunker(BaseCADChunker):
 
         _log.info(f"Grouped {len(doc.items)} entities into {len(entity_groups)} type groups")
 
+        # Pre-compute token counts for all entities (avoid repeated computation in loop)
+        entity_token_cache = {}
+        for entity_type, entities in entity_groups.items():
+            for entity in entities:
+                entity_text = self._item_to_text(entity)
+                entity_token_cache[entity.entity_id] = self._count_tokens(entity_text)
+
         # Create chunks for each group
         chunk_count = 0
         for entity_type, entities in entity_groups.items():
@@ -102,8 +109,7 @@ class STEPChunker(BaseCADChunker):
             current_tokens = 0
 
             for entity in entities:
-                entity_text = self._item_to_text(entity)
-                entity_tokens = self._count_tokens(entity_text)
+                entity_tokens = entity_token_cache[entity.entity_id]  # O(1) lookup
 
                 if current_tokens + entity_tokens > self.max_tokens and current_group:
                     # Yield chunk
@@ -183,14 +189,22 @@ class STEPChunker(BaseCADChunker):
             # Fallback: treat each entity as its own component
             components = [[item.entity_id] for item in doc.items if isinstance(item, STEPEntityItem)]
 
+        # Pre-compute token counts for all entities
+        entity_token_cache = {}
+        for item in doc.items:
+            if isinstance(item, STEPEntityItem):
+                entity_text = self._item_to_text(item)
+                entity_token_cache[item.entity_id] = self._count_tokens(entity_text)
+
         chunk_count = 0
 
         for component_ids in components:
             # Get entities for this component
+            component_ids_set = set(component_ids)  # O(1) lookup
             component_entities = [
                 item
                 for item in doc.items
-                if isinstance(item, STEPEntityItem) and item.entity_id in component_ids
+                if isinstance(item, STEPEntityItem) and item.entity_id in component_ids_set
             ]
 
             # Split component if too large
@@ -198,8 +212,7 @@ class STEPChunker(BaseCADChunker):
             current_tokens = 0
 
             for entity in component_entities:
-                entity_text = self._item_to_text(entity)
-                entity_tokens = self._count_tokens(entity_text)
+                entity_tokens = entity_token_cache[entity.entity_id]  # O(1) lookup
 
                 if current_tokens + entity_tokens > self.max_tokens and current_batch:
                     # Yield chunk
@@ -214,8 +227,7 @@ class STEPChunker(BaseCADChunker):
                     overlap_items = current_batch[-1:]  # Keep last item for context
                     current_batch = overlap_items
                     current_tokens = sum(
-                        self._count_tokens(self._item_to_text(item))
-                        for item in overlap_items
+                        entity_token_cache[item.entity_id] for item in overlap_items
                     )
 
                 current_batch.append(entity)
@@ -293,11 +305,11 @@ class STEPChunker(BaseCADChunker):
 
             # BFS to find connected component
             component = []
-            queue = [entity_id]
+            queue = deque([entity_id])  # Use deque for O(1) popleft
             visited.add(entity_id)
 
             while queue:
-                current_id = queue.pop(0)
+                current_id = queue.popleft()  # O(1) instead of O(n)
                 component.append(current_id)
 
                 # Get neighbors

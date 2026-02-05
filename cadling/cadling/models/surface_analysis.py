@@ -180,12 +180,36 @@ class SurfaceAnalysisModel(EnrichmentModel):
             - is_smooth: bool
         """
         if not self.has_pythonocc:
-            return None
+            _log.warning(
+                "Surface analysis requires pythonocc-core. "
+                "Install with: conda install pythonocc-core -c conda-forge"
+            )
+            return {
+                "status": "unavailable",
+                "reason": "pythonocc-core not installed",
+                "surface_type": "UNKNOWN",
+                "surface_type_confidence": 0.0,
+                "gaussian_curvature": 0.0,
+                "mean_curvature": 0.0,
+                "principal_curvatures": [0.0, 0.0],
+                "is_planar": False,
+                "is_smooth": False,
+            }
 
         # Get OCC face
         occ_face = self._get_occ_face(face_item)
         if occ_face is None:
-            return None
+            return {
+                "status": "error",
+                "reason": "Could not retrieve OCC face from item",
+                "surface_type": "UNKNOWN",
+                "surface_type_confidence": 0.0,
+                "gaussian_curvature": 0.0,
+                "mean_curvature": 0.0,
+                "principal_curvatures": [0.0, 0.0],
+                "is_planar": False,
+                "is_smooth": False,
+            }
 
         try:
             from OCC.Core.BRepAdaptor import BRepAdaptor_Surface
@@ -197,7 +221,9 @@ class SurfaceAnalysisModel(EnrichmentModel):
                 GeomAbs_Torus,
             )
 
-            results = {}
+            results = {
+                "status": "success"
+            }
 
             # 1. Classify surface type using BRepAdaptor
             surface_adaptor = BRepAdaptor_Surface(occ_face)

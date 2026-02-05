@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 import numpy as np
-from collections import defaultdict
+from collections import defaultdict, deque
 from typing import TYPE_CHECKING, Iterator, Optional, List, Tuple, Any
 
 from cadling.chunker.base_chunker import BaseCADChunker, CADChunk, CADChunkMeta
@@ -126,6 +126,7 @@ class MeshChunker(BaseCADChunker):
         overlap_tokens: int = 50,
         octree_max_depth: int = 6,
         num_clusters: int = 8,
+        seed: Optional[int] = None,
     ):
         """Initialize mesh chunker.
 
@@ -136,12 +137,14 @@ class MeshChunker(BaseCADChunker):
             overlap_tokens: Overlap tokens
             octree_max_depth: Maximum octree depth
             num_clusters: Number of k-means clusters
+            seed: Random seed for reproducibility
         """
         super().__init__(max_tokens, overlap_tokens)
         self.strategy = strategy
         self.max_faces_per_chunk = max_faces_per_chunk
         self.octree_max_depth = octree_max_depth
         self.num_clusters = num_clusters
+        self.rng = np.random.default_rng(seed)  # Numpy RNG for reproducibility
 
     def chunk_mesh_data(self, mesh: MeshData, doc_name: str) -> Iterator[CADChunk]:
         """Chunk mesh data into segments.
@@ -349,8 +352,8 @@ class MeshChunker(BaseCADChunker):
         Returns:
             Array of cluster labels
         """
-        # Initialize centroids randomly
-        indices = np.random.choice(len(points), k, replace=False)
+        # Initialize centroids randomly (use seeded RNG for reproducibility)
+        indices = self.rng.choice(len(points), k, replace=False)
         centroids = points[indices].copy()
 
         labels = np.zeros(len(points), dtype=int)
@@ -395,13 +398,13 @@ class MeshChunker(BaseCADChunker):
             if start_idx in visited:
                 continue
 
-            # BFS
+            # BFS using deque for O(1) popleft
             component = []
-            queue = [start_idx]
+            queue = deque([start_idx])
             visited.add(start_idx)
 
             while queue and len(component) < self.max_faces_per_chunk:
-                current = queue.pop(0)
+                current = queue.popleft()  # O(1) instead of O(n)
                 component.append(current)
 
                 for neighbor in adjacency.get(current, []):
@@ -441,11 +444,11 @@ class MeshChunker(BaseCADChunker):
 
             seed_normal = mesh.normals[seed_idx]
             region = []
-            queue = [seed_idx]
+            queue = deque([seed_idx])  # Use deque for O(1) popleft
             visited.add(seed_idx)
 
             while queue and len(region) < self.max_faces_per_chunk:
-                current_idx = queue.pop(0)
+                current_idx = queue.popleft()  # O(1) instead of O(n)
                 region.append(current_idx)
 
                 for neighbor_idx in adjacency.get(current_idx, []):

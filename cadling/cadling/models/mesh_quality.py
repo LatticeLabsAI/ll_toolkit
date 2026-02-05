@@ -167,7 +167,24 @@ class MeshQualityModel(EnrichmentModel):
 
         if mesh is None:
             _log.debug(f"Could not get mesh for item {item.label.text}")
-            return None
+            return {
+                "status": "error",
+                "reason": "Could not retrieve mesh from item",
+                "num_vertices": 0,
+                "num_faces": 0,
+                "edge_lengths": {"min": 0.0, "max": 0.0, "mean": 0.0, "std": 0.0},
+                "aspect_ratio": {"min": 0.0, "max": 0.0, "mean": 0.0, "std": 0.0},
+                "num_poor_aspect_ratio": 0,
+                "percent_poor_aspect_ratio": 0.0,
+                "skewness": {"min": 0.0, "max": 0.0, "mean": 0.0, "std": 0.0},
+                "num_high_skewness": 0,
+                "percent_high_skewness": 0.0,
+                "num_degenerate_faces": 0,
+                "percent_degenerate_faces": 0.0,
+                "is_manifold": False,
+                "quality_score": 0.0,
+                "quality_class": "unknown",
+            }
 
         # Assess mesh quality
         return self._assess_mesh(mesh)
@@ -220,7 +237,9 @@ class MeshQualityModel(EnrichmentModel):
         """
         import trimesh
 
-        results = {}
+        results = {
+            "status": "success"
+        }
 
         # Basic mesh properties
         num_vertices = len(mesh.vertices)

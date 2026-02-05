@@ -70,9 +70,9 @@ cad = [
 ]
 
 # Neural network dependencies
+# NOTE: PyTorch/torch-geometric are installed via conda (see environment.yml)
+# This avoids OpenMP library conflicts on macOS
 ml = [
-    "torch>=2.0",
-    "torch-geometric>=2.3",
     "transformers>=4.35",
 ]
 

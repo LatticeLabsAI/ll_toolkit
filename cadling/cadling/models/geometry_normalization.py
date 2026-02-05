@@ -153,7 +153,13 @@ class GeometryNormalizationModel(EnrichmentModel):
 
         if points is None or len(points) == 0:
             _log.debug(f"Could not extract points for item {item.label.text}")
-            return None
+            return {
+                "status": "error",
+                "reason": "Could not extract points from geometry",
+                "translation": None,
+                "scaling": None,
+                "alignment": None,
+            }
 
         # Compute normalization transformations
         return self._compute_normalization(points)
@@ -212,7 +218,7 @@ class GeometryNormalizationModel(EnrichmentModel):
             from OCC.Core.TopoDS import TopoDS_Shape
 
             return isinstance(shape, TopoDS_Shape)
-        except:
+        except ImportError:
             return False
 
     def _is_trimesh(self, shape) -> bool:
@@ -221,7 +227,7 @@ class GeometryNormalizationModel(EnrichmentModel):
             import trimesh
 
             return isinstance(shape, trimesh.Trimesh)
-        except:
+        except ImportError:
             return False
 
     def _extract_points_from_occ_shape(self, shape) -> Optional[np.ndarray]:
@@ -292,7 +298,12 @@ class GeometryNormalizationModel(EnrichmentModel):
             - alignment: {'rotation_matrix': 3x3, 'eigenvalues': [e1,e2,e3]}
               (only if align_principal_axes=True)
         """
-        results = {}
+        results = {
+            "status": "success",
+            "translation": None,
+            "scaling": None,
+            "alignment": None,
+        }
 
         # 1. Centering
         if self.center:

@@ -14,7 +14,7 @@ Classes:
 from __future__ import annotations
 
 import logging
-from collections import defaultdict
+from collections import defaultdict, deque
 from typing import TYPE_CHECKING, Iterator, Optional, Set, List
 
 from cadling.chunker.base_chunker import BaseCADChunker, CADChunk, CADChunkMeta
@@ -508,13 +508,13 @@ class BRepChunker(BaseCADChunker):
             if entity_id in visited:
                 continue
 
-            # BFS to find connected component
+            # BFS to find connected component using deque for O(1) popleft
             component = set()
-            queue = [entity_id]
+            queue = deque([entity_id])
             visited.add(entity_id)
 
             while queue:
-                current_id = queue.pop(0)
+                current_id = queue.popleft()  # O(1) instead of O(n)
                 component.add(current_id)
 
                 # Add neighbors

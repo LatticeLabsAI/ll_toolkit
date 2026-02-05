@@ -186,6 +186,64 @@ class GeometryAnalysisModel(EnrichmentModel):
 
         return None
 
+    def _get_backend_resource(self, doc: CADlingDocument, resource_name: str):
+        """Get a resource from the document's backend using multiple attribute patterns.
+
+        Tries the following patterns in order:
+        1. backend.{resource_name} (e.g., backend.shape)
+        2. backend._{resource_name} (e.g., backend._shape)
+        3. backend.load_{resource_name}() (e.g., backend.load_shape())
+        4. backend.get_{resource_name}() (e.g., backend.get_shape())
+
+        Args:
+            doc: Document with backend
+            resource_name: Base name of the resource (e.g., "shape", "mesh")
+
+        Returns:
+            The resource if found, None otherwise
+        """
+        if not hasattr(doc, '_backend') or doc._backend is None:
+            _log.debug(f"No backend available for {resource_name} loading")
+            return None
+
+        backend = doc._backend
+
+        # Define attribute patterns to try (in order of likelihood)
+        attr_patterns = [
+            (resource_name, False),           # backend.shape
+            (f"_{resource_name}", False),     # backend._shape
+            (f"load_{resource_name}", True),  # backend.load_shape()
+            (f"get_{resource_name}", True),   # backend.get_shape()
+        ]
+
+        try:
+            for attr_name, is_method in attr_patterns:
+                if hasattr(backend, attr_name):
+                    attr = getattr(backend, attr_name)
+                    if is_method:
+                        # It's a method, call it
+                        if callable(attr):
+                            result = attr()
+                            if result is not None:
+                                _log.debug(f"Loaded {resource_name} from backend.{attr_name}()")
+                                return result
+                    else:
+                        # It's an attribute, return directly if not None
+                        if attr is not None:
+                            _log.debug(f"Loaded {resource_name} from backend.{attr_name}")
+                            return attr
+
+            # No pattern matched
+            _log.debug(
+                f"Backend {type(backend).__name__} does not provide {resource_name} "
+                f"(tried: {', '.join(p[0] for p in attr_patterns)})"
+            )
+            return None
+
+        except Exception as e:
+            _log.error(f"Failed to load {resource_name} from backend: {e}")
+            return None
+
     def _load_occ_shape(self, doc: CADlingDocument):
         """Load shape via pythonocc backend.
 
@@ -195,10 +253,7 @@ class GeometryAnalysisModel(EnrichmentModel):
         Returns:
             OCC shape or None
         """
-        # This would need to interface with the backend
-        # For now, return None and log
-        _log.debug("OCC shape loading not yet implemented in enrichment stage")
-        return None
+        return self._get_backend_resource(doc, "shape")
 
     def _load_trimesh(self, doc: CADlingDocument):
         """Load mesh via trimesh.
@@ -209,9 +264,7 @@ class GeometryAnalysisModel(EnrichmentModel):
         Returns:
             Trimesh object or None
         """
-        # This would need to interface with the backend
-        _log.debug("Trimesh loading not yet implemented in enrichment stage")
-        return None
+        return self._get_backend_resource(doc, "mesh")
 
     def _is_occ_shape(self, shape) -> bool:
         """Check if shape is an OCC shape."""
@@ -219,7 +272,7 @@ class GeometryAnalysisModel(EnrichmentModel):
             from OCC.Core.TopoDS import TopoDS_Shape
 
             return isinstance(shape, TopoDS_Shape)
-        except:
+        except ImportError:
             return False
 
     def _is_trimesh(self, shape) -> bool:
@@ -228,7 +281,7 @@ class GeometryAnalysisModel(EnrichmentModel):
             import trimesh
 
             return isinstance(shape, trimesh.Trimesh)
-        except:
+        except ImportError:
             return False
 
     def _analyze_occ_shape(self, shape) -> dict:
