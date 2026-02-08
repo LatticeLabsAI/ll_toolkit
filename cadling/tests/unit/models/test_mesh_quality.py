@@ -127,10 +127,13 @@ class TestMeshQualityModelCall:
             facets=[[0, 1, 2]],
         )
 
-        # Should return without error and without adding properties
+        # Should return with error status in properties (fallback behavior)
         model(doc, [item])
 
-        assert "mesh_quality" not in item.properties
+        # Now we always add mesh_quality (with error status as fallback)
+        assert "mesh_quality" in item.properties
+        assert item.properties["mesh_quality"]["status"] == "error"
+        assert item.properties["mesh_quality"]["quality_score"] == 0.0
 
     def test_call_with_no_mesh(self):
         """Test __call__ when item has no mesh."""
@@ -164,8 +167,10 @@ class TestMeshQualityModelCall:
 
         model(doc, [item])
 
-        # Should not add quality results if no mesh
-        assert "mesh_quality" not in item.properties
+        # Now we always add mesh_quality (with error status as fallback)
+        assert "mesh_quality" in item.properties
+        assert item.properties["mesh_quality"]["status"] == "error"
+        assert item.properties["mesh_quality"]["quality_score"] == 0.0
 
     def test_call_with_mocked_assessment(self):
         """Test assessment with mocked mesh."""

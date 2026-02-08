@@ -4,11 +4,13 @@ This module provides a command-line interface for:
 - Converting CAD files to structured formats
 - Chunking CAD documents for RAG systems
 - Generating synthetic Q&A pairs for training
+- Generating CAD models from text/image descriptions
 
 Commands:
     convert: Convert CAD file to JSON/Markdown
     chunk: Chunk CAD file for RAG
     generate-qa: Generate Q&A pairs from CAD file
+    generate: Generate CAD model from text/image description
 """
 
 import json
@@ -24,8 +26,9 @@ import click
 def cli():
     """CADling - CAD file processing toolkit.
 
-    CADling converts CAD files (STEP, STL, BRep, IGES) to structured formats
-    suitable for RAG systems and language models.
+    CADling converts CAD files (STEP, STL, BRep, IGES, DXF, PDF) to structured
+    formats suitable for RAG systems and language models. Also supports generating
+    CAD models from text descriptions via LLM code generation.
 
     Examples:
 
@@ -40,8 +43,23 @@ def cli():
         \b
         # Generate Q&A pairs
         cadling generate-qa part.step --num-pairs 100 -o qa_pairs.jsonl
+
+        \b
+        # Generate CAD model from text
+        cadling generate --from-text "A flanged bearing housing" -o bearing.step
     """
     pass
+
+
+# Register the generate command from the generation CLI module
+from cadling.cli.generate import generate_cmd
+
+cli.add_command(generate_cmd, "generate")
+
+# Register the hub command for HuggingFace Hub operations
+from cadling.cli.hub import hub
+
+cli.add_command(hub)
 
 
 @cli.command()
@@ -335,6 +353,8 @@ def info(input_file: str):
             ".brep": "BRep",
             ".iges": "IGES",
             ".igs": "IGES",
+            ".dxf": "DXF",
+            ".pdf": "PDF Drawing",
         }
 
         detected_format = format_map.get(suffix, "Unknown")

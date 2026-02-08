@@ -16,8 +16,28 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, Subset
 import numpy as np
-import matplotlib.pyplot as plt
-from scipy.optimize import curve_fit
+
+# Lazy imports for optional heavy dependencies
+plt = None  # matplotlib.pyplot, imported lazily
+curve_fit = None  # scipy.optimize.curve_fit, imported lazily
+
+
+def _ensure_matplotlib():
+    """Lazily import matplotlib.pyplot."""
+    global plt
+    if plt is None:
+        import matplotlib.pyplot as _plt
+        plt = _plt
+    return plt
+
+
+def _ensure_scipy():
+    """Lazily import scipy.optimize.curve_fit."""
+    global curve_fit
+    if curve_fit is None:
+        from scipy.optimize import curve_fit as _curve_fit
+        curve_fit = _curve_fit
+    return curve_fit
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple, Callable
 from tqdm import tqdm
@@ -425,9 +445,10 @@ class STEPScalingLawAnalyzer:
         self.fit_type = law_type
 
         try:
+            _curve_fit = _ensure_scipy()
             if law_type == 'openai':
                 # Fit: L(D) = (D_c / D)^alpha_D
-                params, _ = curve_fit(
+                params, _ = _curve_fit(
                     power_law_loss,
                     sample_sizes,
                     losses,
@@ -448,7 +469,7 @@ class STEPScalingLawAnalyzer:
 
             elif law_type == 'standard':
                 # Fit: Error(n) = a * n^(-b) + c
-                params, _ = curve_fit(
+                params, _ = _curve_fit(
                     power_law_error,
                     sample_sizes,
                     losses,
@@ -606,11 +627,14 @@ def plot_learning_curve_with_scaling_law(
     loss_mean = np.mean(val_losses, axis=1)
     loss_std = np.std(val_losses, axis=1)
 
+    # Ensure matplotlib is available
+    _plt = _ensure_matplotlib()
+
     # Create figure
     if val_accuracies is not None:
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+        fig, (ax1, ax2) = _plt.subplots(1, 2, figsize=(16, 6))
     else:
-        fig, ax1 = plt.subplots(1, 1, figsize=(10, 6))
+        fig, ax1 = _plt.subplots(1, 1, figsize=(10, 6))
         ax2 = None
 
     # Plot 1: Loss vs Dataset Size
@@ -680,7 +704,8 @@ def plot_learning_curve_with_scaling_law(
 
         # Fit inverse power law to accuracy
         try:
-            params, _ = curve_fit(
+            _curve_fit = _ensure_scipy()
+            params, _ = _curve_fit(
                 inverse_power_law_accuracy,
                 sample_sizes,
                 acc_mean,
@@ -718,13 +743,13 @@ def plot_learning_curve_with_scaling_law(
         ax2.grid(True, alpha=0.3)
         ax2.set_xscale('log')
 
-    plt.tight_layout()
+    _plt.tight_layout()
 
     if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        _plt.savefig(save_path, dpi=300, bbox_inches='tight')
         print(f"\nFigure saved to {save_path}")
 
-    plt.show()
+    _plt.show()
 
 
 # ============================================================================

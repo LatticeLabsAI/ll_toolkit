@@ -258,6 +258,8 @@ class DocumentConverter:
                 ".brep": InputFormat.BREP,
                 ".iges": InputFormat.IGES,
                 ".igs": InputFormat.IGES,
+                ".dxf": InputFormat.DXF,
+                ".pdf": InputFormat.PDF_DRAWING,
             }
 
             if extension in extension_map:
@@ -304,6 +306,14 @@ class DocumentConverter:
         # IGES files start with specific format
         if "IGES" in header_str:
             return InputFormat.IGES
+
+        # DXF files start with section markers
+        if header_str.lstrip().startswith("0\nSECTION") or header_str.lstrip().startswith("0\r\nSECTION"):
+            return InputFormat.DXF
+
+        # PDF files start with %PDF
+        if header_str.startswith("%PDF"):
+            return InputFormat.PDF_DRAWING
 
         raise ValueError(f"Cannot detect format from file content")
 
@@ -398,6 +408,26 @@ class DocumentConverter:
                 backend=CADlingParseBackend,
                 pipeline_cls=SimpleCADPipeline,
                 backend_options=None,
+            )
+
+        elif format == InputFormat.DXF:
+            from cadling.backend.dxf_backend import DXFBackend
+            from cadling.datamodel.backend_options import DXFBackendOptions
+
+            return FormatOption(
+                backend=DXFBackend,
+                pipeline_cls=SimpleCADPipeline,
+                backend_options=DXFBackendOptions(),
+            )
+
+        elif format in (InputFormat.PDF_DRAWING, InputFormat.PDF_RASTER):
+            from cadling.backend.pdf_backend import PDFBackend
+            from cadling.datamodel.backend_options import PDFBackendOptions
+
+            return FormatOption(
+                backend=PDFBackend,
+                pipeline_cls=SimpleCADPipeline,
+                backend_options=PDFBackendOptions(),
             )
 
         else:

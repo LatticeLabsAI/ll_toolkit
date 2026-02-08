@@ -85,6 +85,22 @@ class QuestionType(str, Enum):
     TOLERANCE = "tolerance"
 
 
+class AnnotationLevel(str, Enum):
+    """Level of detail for generated Q&A annotations.
+
+    Controls how much technical detail appears in questions and answers:
+    - ABSTRACT: High-level shape description, functional purpose
+    - INTERMEDIATE: Specific features, relationships between components
+    - DETAILED: Dimensions, material properties, tolerances
+    - EXPERT: Parametric specifications, exact coordinates, construction sequence
+    """
+
+    ABSTRACT = "abstract"
+    INTERMEDIATE = "intermediate"
+    DETAILED = "detailed"
+    EXPERT = "expert"
+
+
 class ChunkerType(str, Enum):
     """CAD chunker types for sampling.
 
@@ -195,6 +211,10 @@ class CADGenerateOptions(LlmOptions):
     cad_specific_prompts: bool = True
     include_context: bool = True
     batch_size: int = Field(default=1, ge=1, le=100)
+    annotation_levels: List[AnnotationLevel] = Field(
+        default_factory=list,
+        description="Annotation levels for controlling Q&A detail. Empty list means no level filtering."
+    )
 
 
 class CADCritiqueOptions(LlmOptions):
@@ -400,6 +420,7 @@ class CADGenQAC(BaseModel):
     answer: str
     context: str
     question_type: Optional[QuestionType] = None
+    annotation_level: Optional[AnnotationLevel] = None
     labels: Dict[str, str] = Field(default_factory=dict)
     critiques: Dict[str, Critique] = Field(default_factory=dict)
     metadata: Dict[str, Any] = Field(default_factory=dict)

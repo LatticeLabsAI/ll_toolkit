@@ -20,7 +20,7 @@ from .pretrain import (
     STEPForHybridLM,
     mask_tokens
 )
-from .data import STEPDataset, STEPCollator, create_dataloader
+from .data import STEPDataset, STEPCollator, GeoTokenDataset, GeoTokenCollator, CadlingDataset, create_dataloader
 from .trainer import STEPTrainer
 from .data_requirements import (
     STEPLearningCurveGenerator,
@@ -41,10 +41,70 @@ from .config import (
     STEPCaptioningConfig,
     STEPSimilarityConfig,
     STEPQAConfig,
+    STEPReserializationConfig,
+    STEPAnnotationConfig,
     TrainingConfig,
     DataConfig,
-    get_config
+    VAEConfig,
+    LatentGANConfig,
+    DiffusionConfig,
+    ConditioningConfig,
+    StreamingCadlingConfig,
+    get_config,
 )
+from .vae import STEPVAE
+from .output_heads import (
+    CommandType,
+    CommandTypeHead,
+    ParameterHeads,
+    CompositeHead,
+    PARAMETER_MASKS,
+)
+from .latent_gan import (
+    LatentGenerator,
+    LatentDiscriminator,
+    LatentGAN,
+)
+from .diffusion import (
+    DDPMScheduler,
+    SinusoidalTimestepEmbedding,
+    CADDenoiser,
+    StructuredDiffusion,
+)
+from .conditioning import (
+    AdaptiveLayer,
+    TextConditioner,
+    ImageConditioner,
+    MultiModalConditioner,
+)
+from .reserialization import (
+    STEPEntityNode,
+    STEPEntityGraph,
+    STEPDFSSerializer,
+    STEPReserializedOutput,
+    reserialize_step,
+)
+from .annotations import (
+    BranchAnnotation,
+    StructuralSummary,
+    STEPStructuralAnnotator,
+    STEPAnnotatedOutput,
+)
+from .vqvae import (
+    VectorQuantizer,
+    DisentangledCodebooks,
+    CodebookDecoder,
+    VQVAEModel,
+)
+from .training import (
+    VAETrainer,
+    GANTrainer,
+    DiffusionTrainer,
+    StreamingVAETrainer,
+    StreamingDiffusionTrainer,
+    StreamingGANTrainer,
+)
+from .generation_pipeline import CADGenerationPipeline
 
 __version__ = "0.1.0"
 
@@ -74,6 +134,9 @@ __all__ = [
     # Data utilities
     "STEPDataset",
     "STEPCollator",
+    "GeoTokenDataset",
+    "GeoTokenCollator",
+    "CadlingDataset",
     "create_dataloader",
 
     # Training
@@ -98,7 +161,71 @@ __all__ = [
     "STEPCaptioningConfig",
     "STEPSimilarityConfig",
     "STEPQAConfig",
+    "STEPReserializationConfig",
+    "STEPAnnotationConfig",
     "TrainingConfig",
     "DataConfig",
+    "VAEConfig",
+    "LatentGANConfig",
+    "DiffusionConfig",
+    "ConditioningConfig",
+    "StreamingCadlingConfig",
     "get_config",
+
+    # VAE
+    "STEPVAE",
+
+    # Output Heads
+    "CommandType",
+    "CommandTypeHead",
+    "ParameterHeads",
+    "CompositeHead",
+    "PARAMETER_MASKS",
+
+    # Latent GAN
+    "LatentGenerator",
+    "LatentDiscriminator",
+    "LatentGAN",
+
+    # Diffusion
+    "DDPMScheduler",
+    "SinusoidalTimestepEmbedding",
+    "CADDenoiser",
+    "StructuredDiffusion",
+
+    # Conditioning
+    "AdaptiveLayer",
+    "TextConditioner",
+    "ImageConditioner",
+    "MultiModalConditioner",
+
+    # Reserialization
+    "STEPEntityNode",
+    "STEPEntityGraph",
+    "STEPDFSSerializer",
+    "STEPReserializedOutput",
+    "reserialize_step",
+
+    # Annotations
+    "BranchAnnotation",
+    "StructuralSummary",
+    "STEPStructuralAnnotator",
+    "STEPAnnotatedOutput",
+
+    # VQ-VAE / CAD Generation
+    "VectorQuantizer",
+    "DisentangledCodebooks",
+    "CodebookDecoder",
+    "VQVAEModel",
+
+    # Generative Training Infrastructure
+    "VAETrainer",
+    "GANTrainer",
+    "DiffusionTrainer",
+    "StreamingVAETrainer",
+    "StreamingDiffusionTrainer",
+    "StreamingGANTrainer",
+
+    # End-to-end Generation Pipeline
+    "CADGenerationPipeline",
 ]

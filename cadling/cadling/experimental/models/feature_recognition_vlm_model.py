@@ -300,9 +300,18 @@ Return as JSON array:
                 # Check if item has rendered images
                 rendered_images = item.properties.get("rendered_images", {})
                 if not rendered_images:
-                    _log.warning(
-                        f"Item {item.self_ref} has no rendered images, skipping"
+                    _log.debug(
+                        f"Item {item.self_ref} has no rendered images, using geometry-based recognition"
                     )
+                    # Use geometry-based fallback
+                    features = self._geometry_based_recognition(doc, item)
+                    if features:
+                        item.properties["machining_features"] = features
+                        item.add_provenance(
+                            component_type="enrichment_model",
+                            component_name=self.__class__.__name__,
+                            notes="geometry_based_fallback",
+                        )
                     continue
 
                 # Detect features from each view
@@ -409,6 +418,103 @@ Return as JSON array:
             context_parts.append(f"Material: {item.properties['material']}")
 
         return "\n".join(context_parts) if context_parts else "No geometric context available"
+
+    def _geometry_based_recognition(
+        self, doc: CADlingDocument, item: CADItem
+    ) -> List[Dict[str, Any]]:
+        """Fallback geometry-based feature recognition when images unavailable.
+
+        Uses STEP entity analysis and geometry properties to detect features
+        without VLM processing.
+
+        Args:
+            doc: The document
+            item: The item to analyze
+
+        Returns:
+            List of detected feature dictionaries
+        """
+        features = []
+
+        # Get entity type from item
+        entity_type = getattr(item, "entity_type", None) or item.properties.get(
+            "entity_type", ""
+        )
+
+        # Get geometry analysis if available
+        geometry_analysis = item.properties.get("geometry_analysis", {})
+        surface_analysis = item.properties.get("surface_analysis", {})
+        surface_type = surface_analysis.get("surface_type", "")
+
+        # Rule 1: Cylindrical surfaces → holes or bosses
+        if "CYLINDRICAL" in entity_type or surface_type == "CYLINDER":
+            # Try to determine if hole or boss from curvature/concavity
+            is_concave = geometry_analysis.get("is_concave", True)
+            radius = geometry_analysis.get("radius", 5.0)
+            bbox = geometry_analysis.get("bounding_box", {})
+
+            if is_concave:
+                features.append({
+                    "feature_type": "hole",
+                    "subtype": "unknown",
+                    "parameters": {
+                        "diameter": radius * 2,
+                        "depth": bbox.get("size_z", 10.0) if bbox else 10.0,
+                    },
+                    "location": geometry_analysis.get("center_of_mass", [0, 0, 0]),
+                    "confidence": 0.5,
+                    "view": "geometry_analysis",
+                    "description": "Cylindrical hole detected from geometry",
+                })
+            else:
+                features.append({
+                    "feature_type": "boss",
+                    "subtype": "circular_boss",
+                    "parameters": {
+                        "diameter": radius * 2,
+                        "height": bbox.get("size_z", 10.0) if bbox else 10.0,
+                    },
+                    "location": geometry_analysis.get("center_of_mass", [0, 0, 0]),
+                    "confidence": 0.5,
+                    "view": "geometry_analysis",
+                    "description": "Cylindrical boss detected from geometry",
+                })
+
+        # Rule 2: Conical surfaces → chamfers or countersinks
+        elif "CONICAL" in entity_type or surface_type == "CONE":
+            semi_angle = geometry_analysis.get("semi_angle", 45.0)
+            features.append({
+                "feature_type": "chamfer",
+                "subtype": None,
+                "parameters": {
+                    "angle": semi_angle,
+                },
+                "location": geometry_analysis.get("center_of_mass", [0, 0, 0]),
+                "confidence": 0.4,
+                "view": "geometry_analysis",
+                "description": "Chamfer detected from conical surface",
+            })
+
+        # Rule 3: Toroidal surfaces → fillets
+        elif "TOROIDAL" in entity_type or surface_type == "TORUS":
+            minor_radius = geometry_analysis.get("minor_radius", 2.0)
+            features.append({
+                "feature_type": "fillet",
+                "subtype": None,
+                "parameters": {
+                    "radius": minor_radius,
+                },
+                "location": geometry_analysis.get("center_of_mass", [0, 0, 0]),
+                "confidence": 0.55,
+                "view": "geometry_analysis",
+                "description": "Fillet detected from toroidal surface",
+            })
+
+        _log.debug(
+            f"Geometry-based recognition found {len(features)} features for {entity_type}"
+        )
+
+        return features
 
     def _parse_features_from_response(
         self, response_text: str, view_name: str

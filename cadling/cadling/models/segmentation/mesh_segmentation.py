@@ -8,11 +8,13 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 import numpy as np
 import torch
 import trimesh
+from gguf import Any  # Re-exports typing.Any, used for chunk type hints
+
 from cadling.models.base_model import EnrichmentModel
 from cadling.models.segmentation.architectures.edge_conv_net import MeshSegmentationGNN
 from cadling.models.segmentation.graph_utils import mesh_to_pyg_graph
@@ -61,10 +63,10 @@ class MeshSegmentationModel(EnrichmentModel):
 
     def __init__(
         self,
-        artifacts_path: Optional[Path] = None,
+        artifacts_path: Path | None = None,
         num_classes: int = 12,
         use_pretrained_encoders: bool = False,
-        hidden_dims: list[int] = None,
+        hidden_dims: list[int] | None = None,
         chunk_large_meshes: bool = True,
         max_faces_per_chunk: int = 50000,
         use_face_graph: bool = True,
@@ -206,7 +208,7 @@ class MeshSegmentationModel(EnrichmentModel):
             except Exception as e:
                 _log.error(f"Mesh segmentation failed for item {item.label.text}: {e}")
 
-    def _load_mesh_from_item(self, item: "MeshItem") -> Optional[trimesh.Trimesh]:
+    def _load_mesh_from_item(self, item: MeshItem) -> trimesh.Trimesh | None:
         """Load trimesh mesh from MeshItem.
 
         Args:
@@ -226,12 +228,12 @@ class MeshSegmentationModel(EnrichmentModel):
             return mesh
 
         except Exception as e:
-            _log.error(f"Failed to load mesh from item: {e}")
+            _log.error(f"Failed to load mesh from item: {e}", exc_info=True)
             return None
 
     def _segment_mesh(
         self, mesh: trimesh.Trimesh
-    ) -> tuple[np.ndarray, Optional[np.ndarray]]:
+    ) -> tuple[np.ndarray, np.ndarray | None]:
         """Segment a single mesh.
 
         Args:
@@ -260,7 +262,8 @@ class MeshSegmentationModel(EnrichmentModel):
                 coords = torch.from_numpy(mesh.vertices.copy()).float()
                 normals = torch.from_numpy(mesh.vertex_normals.copy()).float()
 
-            # Run model
+            # Run model (model is guaranteed non-None by caller check)
+            assert self.model is not None, "Model must be loaded before inference"
             logits = self.model(
                 x=graph.x,
                 edge_index=graph.edge_index,
@@ -278,7 +281,7 @@ class MeshSegmentationModel(EnrichmentModel):
 
     def _segment_large_mesh(
         self, mesh: trimesh.Trimesh
-    ) -> tuple[np.ndarray, Optional[np.ndarray]]:
+    ) -> tuple[np.ndarray, np.ndarray | None]:
         """Segment large mesh by chunking.
 
         Uses OctreeChunker to split mesh into manageable chunks, segments each chunk,
@@ -291,13 +294,12 @@ class MeshSegmentationModel(EnrichmentModel):
             labels: [N] segment labels per face
             confidence: [N] confidence scores per face
         """
-        from cadling.chunker.mesh_chunker.mesh_chunker import MeshChunker
-        from cadling.datamodel.mesh import MeshData
+        from cadling.chunker.mesh_chunker.mesh_chunker import MeshChunker, MeshData
 
         _log.info(f"Chunking large mesh: {len(mesh.faces)} faces")
 
         # 1. Create chunker
-        chunker = MeshChunker(strategy="octree", max_chunk_size=self.max_faces_per_chunk)
+        chunker = MeshChunker(strategy="octree", max_faces_per_chunk=self.max_faces_per_chunk)
 
         # 2. Convert trimesh to MeshData for chunker
         mesh_data = MeshData(
@@ -317,14 +319,26 @@ class MeshSegmentationModel(EnrichmentModel):
             face_indices = chunk.meta.properties.get("face_indices", [])
 
             if len(face_indices) == 0:
-                _log.warning(f"Chunk {i} has no face_indices, skipping")
-                continue
+                # Try to recover face_indices from chunk's spatial metadata
+                face_indices = self._recover_face_indices_from_chunk(mesh, chunk, i)
+                if len(face_indices) == 0:
+                    _log.warning(f"Chunk {i} has no face_indices and recovery failed, skipping")
+                    continue
+                _log.debug(f"Recovered {len(face_indices)} face indices for chunk {i}")
 
             _log.debug(f"Processing chunk {i}: {len(face_indices)} faces")
 
             # Create submesh from face indices
             try:
-                submesh = mesh.submesh([face_indices], append=True)
+                submesh_result = mesh.submesh([face_indices], append=True)
+                # submesh with append=True returns a single Trimesh, not a list
+                if isinstance(submesh_result, list):
+                    submesh = submesh_result[0] if submesh_result else None
+                else:
+                    submesh = submesh_result
+                if submesh is None:
+                    _log.warning(f"Empty submesh for chunk {i}, skipping")
+                    continue
             except Exception as e:
                 _log.error(f"Failed to create submesh for chunk {i}: {e}")
                 continue
@@ -391,6 +405,152 @@ class MeshSegmentationModel(EnrichmentModel):
                     merged_confidence[face_idx] = confidence[idx]
 
         return merged_labels, merged_confidence
+
+    def _recover_face_indices_from_chunk(
+        self, mesh: trimesh.Trimesh, chunk: Any, chunk_idx: int
+    ) -> list[int]:
+        """Try to recover face_indices from chunk's spatial metadata.
+
+        Uses multi-strategy approach:
+        1. Primary: Use bounding box from chunk metadata
+        2. Fallback: Use chunk_id pattern for spatial inference
+        3. Fallback: Uniform distribution based on chunk index
+
+        Args:
+            mesh: Original mesh
+            chunk: Chunk data with metadata
+            chunk_idx: Chunk index for logging
+
+        Returns:
+            List of face indices within the chunk's region
+        """
+        # Strategy 1: Try to get bounding box from chunk metadata
+        try:
+            bbox = None
+            if hasattr(chunk, "meta") and hasattr(chunk.meta, "properties"):
+                bbox = chunk.meta.properties.get("bounding_box")
+            elif hasattr(chunk, "bounding_box"):
+                bbox = chunk.bounding_box
+
+            if bbox is not None:
+                # Parse bounding box
+                if isinstance(bbox, dict):
+                    min_pt = np.array([bbox.get("min_x", -np.inf),
+                                       bbox.get("min_y", -np.inf),
+                                       bbox.get("min_z", -np.inf)])
+                    max_pt = np.array([bbox.get("max_x", np.inf),
+                                       bbox.get("max_y", np.inf),
+                                       bbox.get("max_z", np.inf)])
+                elif hasattr(bbox, "min") and hasattr(bbox, "max"):
+                    min_pt = np.array(bbox.min)
+                    max_pt = np.array(bbox.max)
+                else:
+                    min_pt = max_pt = None
+
+                if min_pt is not None and max_pt is not None:
+                    # Compute face centroids
+                    face_vertices = mesh.vertices[mesh.faces]  # [F, 3, 3]
+                    face_centroids = face_vertices.mean(axis=1)  # [F, 3]
+
+                    # Find faces within bounding box (with small epsilon for tolerance)
+                    epsilon = 1e-6
+                    within_bbox = np.all(
+                        (face_centroids >= min_pt - epsilon) & (face_centroids <= max_pt + epsilon),
+                        axis=1
+                    )
+                    face_indices = np.where(within_bbox)[0].tolist()
+
+                    if face_indices:
+                        _log.debug(
+                            f"Recovered {len(face_indices)} faces from bbox for chunk {chunk_idx}"
+                        )
+                        return face_indices
+
+        except Exception as e:
+            _log.debug(f"Bbox recovery failed for chunk {chunk_idx}: {e}")
+
+        # Strategy 2: Try chunk_id-based spatial inference
+        try:
+            chunk_id = getattr(chunk, "chunk_id", None)
+            if chunk_id and isinstance(chunk_id, str):
+                # Parse octree-style chunk_id like "0_1_3" (depth indices)
+                parts = chunk_id.split("_")
+                if len(parts) >= 2 and all(p.isdigit() for p in parts):
+                    # Use chunk_id to infer spatial region
+                    face_indices = self._infer_faces_from_chunk_id(mesh, parts)
+                    if face_indices:
+                        _log.debug(
+                            f"Recovered {len(face_indices)} faces from chunk_id for chunk {chunk_idx}"
+                        )
+                        return face_indices
+        except Exception as e:
+            _log.debug(f"Chunk_id recovery failed for chunk {chunk_idx}: {e}")
+
+        # Strategy 3: Uniform distribution fallback
+        try:
+            total_chunks = getattr(self, "_total_chunks", 8)  # Default assumption
+            faces_per_chunk = max(1, len(mesh.faces) // total_chunks)
+            start_idx = chunk_idx * faces_per_chunk
+            end_idx = min(start_idx + faces_per_chunk, len(mesh.faces))
+
+            if start_idx < len(mesh.faces):
+                face_indices = list(range(start_idx, end_idx))
+                _log.debug(
+                    f"Using uniform distribution fallback: {len(face_indices)} faces for chunk {chunk_idx}"
+                )
+                return face_indices
+        except Exception as e:
+            _log.debug(f"Uniform distribution fallback failed: {e}")
+
+        _log.warning(f"All face index recovery strategies failed for chunk {chunk_idx}")
+        return []
+
+    def _infer_faces_from_chunk_id(
+        self, mesh: trimesh.Trimesh, chunk_id_parts: list[str]
+    ) -> list[int]:
+        """Infer face indices from octree-style chunk_id.
+
+        Args:
+            mesh: Original mesh
+            chunk_id_parts: List of string indices from chunk_id
+
+        Returns:
+            List of face indices
+        """
+        # Get mesh bounds
+        min_xyz = mesh.vertices.min(axis=0)
+        max_xyz = mesh.vertices.max(axis=0)
+
+        # Use first two parts to determine quadrant/octant
+        if len(chunk_id_parts) >= 2:
+            # Interpret as (depth, octant_index)
+            octant_idx = int(chunk_id_parts[-1]) % 8
+
+            mid_xyz = (min_xyz + max_xyz) / 2.0
+
+            # Determine bounds for this octant
+            x_low = min_xyz[0] if (octant_idx & 1) == 0 else mid_xyz[0]
+            x_high = mid_xyz[0] if (octant_idx & 1) == 0 else max_xyz[0]
+            y_low = min_xyz[1] if (octant_idx & 2) == 0 else mid_xyz[1]
+            y_high = mid_xyz[1] if (octant_idx & 2) == 0 else max_xyz[1]
+            z_low = min_xyz[2] if (octant_idx & 4) == 0 else mid_xyz[2]
+            z_high = mid_xyz[2] if (octant_idx & 4) == 0 else max_xyz[2]
+
+            min_pt = np.array([x_low, y_low, z_low])
+            max_pt = np.array([x_high, y_high, z_high])
+
+            # Find faces in this region
+            face_vertices = mesh.vertices[mesh.faces]
+            face_centroids = face_vertices.mean(axis=1)
+
+            epsilon = 1e-6
+            within_bounds = np.all(
+                (face_centroids >= min_pt - epsilon) & (face_centroids <= max_pt + epsilon),
+                axis=1
+            )
+            return np.where(within_bounds)[0].tolist()
+
+        return []
 
     def supports_batch_processing(self) -> bool:
         """Mesh segmentation supports batch processing."""

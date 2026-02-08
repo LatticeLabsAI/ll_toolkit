@@ -33,6 +33,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime
 
+import numpy as np
+
 from pydantic import BaseModel, Field, field_validator
 
 _log = logging.getLogger(__name__)
@@ -50,6 +52,9 @@ class InputFormat(str, Enum):
     BREP = "brep"
     IGES = "iges"
     CAD_IMAGE = "cad_image"  # Rendered CAD image (for optical recognition)
+    DXF = "dxf"  # 2D technical drawing (AutoCAD DXF)
+    PDF_DRAWING = "pdf_drawing"  # Vector-based PDF engineering drawing
+    PDF_RASTER = "pdf_raster"  # Scanned/raster PDF (needs VLM/OCR path)
 
 
 class ConversionStatus(str, Enum):
@@ -292,6 +297,46 @@ class TopologyGraph(BaseModel):
             List of neighbor node IDs.
         """
         return self.adjacency_list.get(node_id, [])
+
+    def to_numpy_node_features(self) -> Optional[np.ndarray]:
+        """Return node features as a numpy array for GeoToken.
+
+        Converts the internal list-of-lists storage to a numpy array
+        matching the format expected by geotoken.GraphTokenizer.
+
+        Returns:
+            np.ndarray of shape (N, D), dtype float32, or None if no features.
+        """
+        if self.node_features is None:
+            return None
+        return np.array(self.node_features, dtype=np.float32)
+
+    def to_numpy_edge_features(self) -> Optional[np.ndarray]:
+        """Return edge features as a numpy array for GeoToken.
+
+        Returns:
+            np.ndarray of shape (M, D), dtype float32, or None if no features.
+        """
+        if self.edge_features is None:
+            return None
+        return np.array(self.edge_features, dtype=np.float32)
+
+    def to_edge_index(self) -> np.ndarray:
+        """Return edge index as (2, M) int64 array for GeoToken/PyG.
+
+        Converts the adjacency list into the standard COO-format edge
+        index used by PyTorch Geometric and geotoken.GraphTokenizer.
+
+        Returns:
+            np.ndarray of shape (2, M), dtype int64, where M is num_edges.
+        """
+        edges = []
+        for src, targets in self.adjacency_list.items():
+            for tgt in targets:
+                edges.append([src, tgt])
+        if not edges:
+            return np.zeros((2, 0), dtype=np.int64)
+        return np.array(edges, dtype=np.int64).T
 
 
 class ProcessingStep(BaseModel):

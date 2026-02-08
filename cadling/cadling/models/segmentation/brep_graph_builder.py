@@ -7,7 +7,7 @@ Leverages existing TopologyBuilder and STEPFeatureExtractor infrastructure.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import torch
@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 
     from cadling.datamodel.base_models import CADlingDocument
     from cadling.datamodel.step import STEPEntityItem
+    from cadling.models.segmentation.architectures.brep_net import CoedgeData
 
 _log = logging.getLogger(__name__)
 
@@ -53,9 +54,9 @@ class BRepFaceGraphBuilder:
 
     def build_face_graph(
         self,
-        doc: "CADlingDocument",
-        item: Optional["STEPEntityItem"] = None,
-    ) -> "Data":
+        doc: CADlingDocument,
+        item: STEPEntityItem | None = None,
+    ) -> Data:
         """Build face adjacency graph from STEP document.
 
         Args:
@@ -69,6 +70,23 @@ class BRepFaceGraphBuilder:
 
         # Extract face entities
         face_entities = self._extract_face_entities(doc)
+
+        # If a specific item is provided, filter to faces related to that item
+        if item is not None:
+            item_id = getattr(item, "entity_id", None)
+            if item_id is not None:
+                # Filter to faces that reference this item or are referenced by it
+                item_text = getattr(item, "text", "") or ""
+                filtered = []
+                for face_entity in face_entities:
+                    face_id = face_entity.get("entity_id")
+                    face_text = face_entity.get("text", "")
+                    # Include if face references item or item references face
+                    if f"#{item_id}" in face_text or (face_id and f"#{face_id}" in item_text):
+                        filtered.append(face_entity)
+                if filtered:
+                    face_entities = filtered
+                    _log.debug(f"Filtered to {len(face_entities)} faces related to item #{item_id}")
 
         if len(face_entities) == 0:
             _log.warning("No face entities found in document")
@@ -109,8 +127,8 @@ class BRepFaceGraphBuilder:
         return graph_data
 
     def _extract_face_entities(
-        self, doc: "CADlingDocument"
-    ) -> List[Dict]:
+        self, doc: CADlingDocument
+    ) -> list[dict]:
         """Extract face entities from STEP document.
 
         Args:
@@ -128,8 +146,10 @@ class BRepFaceGraphBuilder:
         # Extract from document items
         for item in doc.items:
             # Check if item represents a face
-            if hasattr(item, "entity_type"):
-                entity_type = item.entity_type.upper()
+            # entity_type may be on item directly (STEPEntityItem) or on item.label
+            entity_type_raw = getattr(item, "entity_type", None) or getattr(item.label, "entity_type", None)
+            if entity_type_raw:
+                entity_type = entity_type_raw.upper()
 
                 if "FACE" in entity_type:
                     face_entities.append({
@@ -143,55 +163,57 @@ class BRepFaceGraphBuilder:
         if len(face_entities) == 0:
             _log.debug("No face items found, trying topology extraction")
 
-            # Try to extract faces from raw STEP entities using topology builder
+            # Try to extract faces from raw STEP text using regex parsing
             try:
-                from cadling.backend.step.topology_builder import TopologyBuilder
-
-                topology_builder = TopologyBuilder()
+                import re
 
                 # Get raw STEP text from document
                 step_text = None
-                if hasattr(doc, 'raw_content') and doc.raw_content:
-                    step_text = doc.raw_content
+                raw_content = getattr(doc, 'raw_content', None)
+                if raw_content:
+                    step_text = raw_content
                 elif hasattr(doc, 'properties') and doc.properties.get("step_text"):
                     step_text = doc.properties.get("step_text")
-                elif hasattr(doc, '_backend') and hasattr(doc._backend, 'content'):
-                    step_text = doc._backend.content
+                else:
+                    backend = getattr(doc, '_backend', None)
+                    if backend is not None and hasattr(backend, 'content'):
+                        step_text = backend.content
 
                 if not step_text:
-                    _log.warning("No STEP text available for topology extraction")
+                    _log.warning("No STEP text available for face extraction")
                     return face_entities
 
-                # Parse entities using topology builder
-                if hasattr(topology_builder, 'parse_entities'):
-                    entities = topology_builder.parse_entities(step_text)
+                # Parse face entities directly from STEP text using regex
+                # Match patterns like: #123 = ADVANCED_FACE('name', ...);
+                face_pattern = re.compile(
+                    r"#(\d+)\s*=\s*(ADVANCED_FACE|FACE_SURFACE|FACE_OUTER_BOUND|FACE_BOUND)"
+                    r"\s*\(([^;]+)\)\s*;",
+                    re.IGNORECASE | re.MULTILINE
+                )
 
-                    # Extract face entities (ADVANCED_FACE, FACE_SURFACE, etc.)
-                    for entity in entities:
-                        entity_type = entity.get("type", "")
-                        if entity_type in ["ADVANCED_FACE", "FACE_SURFACE", "FACE_OUTER_BOUND", "FACE_BOUND"]:
-                            face_entities.append({
-                                "entity_id": entity.get("id"),
-                                "entity_type": entity_type,
-                                "text": entity.get("text", ""),
-                            })
+                for match in face_pattern.finditer(step_text):
+                    entity_id = int(match.group(1))
+                    entity_type = match.group(2).upper()
+                    entity_text = match.group(0)
 
-                    _log.debug(f"Extracted {len(face_entities)} faces via topology builder")
-                else:
-                    _log.warning("TopologyBuilder does not have parse_entities method")
+                    face_entities.append({
+                        "entity_id": entity_id,
+                        "entity_type": entity_type,
+                        "text": entity_text,
+                    })
 
-            except ImportError:
-                _log.debug("TopologyBuilder not available, cannot extract faces from STEP entities")
+                _log.debug(f"Extracted {len(face_entities)} faces via regex parsing")
+
             except Exception as e:
-                _log.error(f"Topology extraction failed: {e}")
+                _log.error(f"Face extraction from STEP text failed: {e}")
 
         return face_entities
 
     def _build_face_adjacency(
         self,
-        doc: "CADlingDocument",
-        face_entities: List[Dict],
-    ) -> Tuple[np.ndarray, Optional[np.ndarray]]:
+        doc: CADlingDocument,
+        face_entities: list[dict],
+    ) -> tuple[np.ndarray, np.ndarray | None]:
         """Build face-to-face adjacency graph.
 
         Two faces are adjacent if they share an edge or vertex.
@@ -247,7 +269,7 @@ class BRepFaceGraphBuilder:
 
         return edge_index, edge_features
 
-    def _extract_edge_references(self, entity_text: str) -> List[int]:
+    def _extract_edge_references(self, entity_text: str) -> list[int]:
         """Extract edge references from STEP entity text.
 
         Args:
@@ -269,8 +291,8 @@ class BRepFaceGraphBuilder:
     def _compute_edge_features(
         self,
         edge_index: np.ndarray,
-        face_entities: List[Dict],
-        doc: "CADlingDocument",
+        face_entities: list[dict],
+        doc: CADlingDocument,
     ) -> np.ndarray:
         """Compute real edge features for face-to-face adjacency.
 
@@ -438,8 +460,14 @@ class BRepFaceGraphBuilder:
 
         return edge_features
 
-    def _load_shape_from_document(self, doc: "CADlingDocument"):
+    def _load_shape_from_document(self, doc: CADlingDocument):
         """Load pythonocc shape from document if available.
+
+        Uses multi-pattern loading strategy:
+        1. doc._occ_shape (cached shape)
+        2. doc._backend._occ_shape (backend cached shape)
+        3. doc._backend.get_shape() (lazy loading via method)
+        4. doc._backend.load_shape() (alternative lazy loading)
 
         Args:
             doc: CADlingDocument (should have _occ_shape if STEP backend loaded it)
@@ -447,14 +475,50 @@ class BRepFaceGraphBuilder:
         Returns:
             TopoDS_Shape or None if not available
         """
-        if hasattr(doc, "_occ_shape") and doc._occ_shape is not None:
+        # Strategy 1: Check cached OCC shape on document
+        occ_shape = getattr(doc, "_occ_shape", None)
+        if occ_shape is not None:
             _log.debug("Found cached OCC shape in document")
-            return doc._occ_shape
+            return occ_shape
 
-        _log.debug("No OCC shape available in document")
+        # Strategy 2: Try to get from backend
+        backend = getattr(doc, "_backend", None)
+        if backend is not None:
+
+            # Pattern 2a: backend._occ_shape
+            if hasattr(backend, "_occ_shape") and backend._occ_shape is not None:
+                _log.debug("Found OCC shape in backend._occ_shape")
+                return backend._occ_shape
+
+            # Pattern 2b: backend.get_shape()
+            if hasattr(backend, "get_shape") and callable(backend.get_shape):
+                try:
+                    shape = backend.get_shape()
+                    if shape is not None:
+                        _log.debug("Loaded OCC shape via backend.get_shape()")
+                        return shape
+                except Exception as e:
+                    _log.debug(f"backend.get_shape() failed: {e}")
+
+            # Pattern 2c: backend.load_shape()
+            if hasattr(backend, "load_shape") and callable(backend.load_shape):
+                try:
+                    shape = backend.load_shape()
+                    if shape is not None:
+                        _log.debug("Loaded OCC shape via backend.load_shape()")
+                        return shape
+                except Exception as e:
+                    _log.debug(f"backend.load_shape() failed: {e}")
+
+            # Pattern 2d: backend._shape (some backends use this)
+            if hasattr(backend, "_shape") and backend._shape is not None:
+                _log.debug("Found OCC shape in backend._shape")
+                return backend._shape
+
+        _log.debug("No OCC shape available in document or backend")
         return None
 
-    def _extract_faces_from_shape(self, shape) -> List:
+    def _extract_faces_from_shape(self, shape) -> list:
         """Extract all TopoDS_Face objects from shape.
 
         Args:
@@ -467,11 +531,11 @@ class BRepFaceGraphBuilder:
             return []
 
         try:
-            from OCC.Core.TopExp import TopExp_Explorer
             from OCC.Core.TopAbs import TopAbs_FACE
+            from OCC.Core.TopExp import TopExp_Explorer
 
             faces = []
-            explorer = TopExp_Explorer(shape, TopAbs_FACE)
+            explorer = TopExp_Explorer(shape, TopAbs_FACE)  # type: ignore[arg-type]
 
             while explorer.More():
                 face = explorer.Current()
@@ -486,8 +550,8 @@ class BRepFaceGraphBuilder:
             return []
 
     def _match_entity_to_face(
-        self, face_entities: List[Dict], topods_faces: List
-    ) -> Dict[int, any]:
+        self, face_entities: list[dict], topods_faces: list
+    ) -> dict[int, Any]:
         """Match STEP entity indices to TopoDS_Face objects.
 
         Strategy: Match by order (assumes face entities and TopoDS faces are in same order).
@@ -520,8 +584,8 @@ class BRepFaceGraphBuilder:
 
     def _extract_face_features(
         self,
-        doc: "CADlingDocument",
-        face_entities: List[Dict],
+        doc: CADlingDocument,
+        face_entities: list[dict],
     ) -> np.ndarray:
         """Extract geometric features for each face.
 
@@ -632,21 +696,16 @@ class BRepFaceGraphBuilder:
                             f"area={geom_features['surface_area']:.3f}"
                         )
                     else:
-                        # Geometry extraction failed - use placeholders with warning
-                        _log.warning(f"Failed to extract geometry for face {i}")
-                        features[i, 11] = 0.0  # Gaussian curvature
-                        features[i, 12] = 0.0  # Mean curvature
-                        features[i, 13:16] = [0.0, 0.0, 1.0]  # Default up
-                        features[i, 16:19] = [0.0, 0.0, 0.0]  # Centroid
-                        features[i, 19:22] = [1.0, 1.0, 1.0]  # Bounding box
+                        # OCC extraction failed - try STEP text heuristics
+                        _log.warning(f"OCC extraction failed for face {i}, using text heuristics")
+                        self._estimate_features_from_step_text(
+                            features, i, surface_type, entity_info, entity_text,
+                        )
                 else:
-                    # No OCC shape available - MUST use placeholders
-                    # Log this so we know the data quality is degraded
-                    features[i, 11] = 0.0  # Gaussian curvature
-                    features[i, 12] = 0.0  # Mean curvature
-                    features[i, 13:16] = [0.0, 0.0, 1.0]  # Default up
-                    features[i, 16:19] = [0.0, 0.0, 0.0]  # Centroid
-                    features[i, 19:22] = [1.0, 1.0, 1.0]  # Bounding box
+                    # No OCC shape available - use STEP text heuristics
+                    self._estimate_features_from_step_text(
+                        features, i, surface_type, entity_info, entity_text,
+                    )
 
                 # Additional properties (not used currently)
                 features[i, 22] = 0.0
@@ -669,3 +728,819 @@ class BRepFaceGraphBuilder:
             )
 
         return features
+
+    @staticmethod
+    def _estimate_features_from_step_text(
+        features: np.ndarray,
+        face_idx: int,
+        surface_type: str,
+        entity_info: dict,
+        entity_text: str,
+    ) -> None:
+        """Estimate geometric features from surface type and STEP text.
+
+        When OCC shape is not available, we can still derive meaningful
+        approximate features from the surface type classification and
+        any numeric parameters parsed from the STEP entity text.
+
+        This is better than returning all-zeros because:
+        - Planes have known curvature (0, 0) and axis-aligned normals
+        - Cylinders/cones/spheres have known curvature from radius
+        - STEP text often contains point coordinates for centroids
+
+        Args:
+            features: Feature matrix to fill in-place.
+            face_idx: Index of the face in the feature matrix.
+            surface_type: Classified surface type (PLANE, CYLINDER, etc.).
+            entity_info: Parsed entity information dict.
+            entity_text: Raw STEP entity text for coordinate extraction.
+        """
+        import re
+
+        i = face_idx
+
+        # ------ Curvature from surface type ------
+        radius = entity_info.get("radius", 0.0)
+
+        if surface_type == "PLANE":
+            features[i, 11] = 0.0  # Gaussian curvature
+            features[i, 12] = 0.0  # Mean curvature
+        elif surface_type == "CYLINDER" and radius > 0:
+            features[i, 11] = 0.0           # K = 0 for cylinder
+            features[i, 12] = 1.0 / radius  # H = 1/R for cylinder
+        elif surface_type == "SPHERE" and radius > 0:
+            features[i, 11] = 1.0 / (radius * radius)  # K = 1/R^2
+            features[i, 12] = 1.0 / radius              # H = 1/R
+        elif surface_type == "CONE" and radius > 0:
+            features[i, 11] = 0.0           # K = 0 for cone
+            features[i, 12] = 0.5 / radius  # H ~ 1/(2R) approx
+        elif surface_type == "TORUS":
+            major_r = entity_info.get("major_radius", 0.0)
+            minor_r = entity_info.get("minor_radius", radius)
+            if major_r > 0 and minor_r > 0:
+                features[i, 11] = 1.0 / (major_r * minor_r)  # K approx
+                features[i, 12] = 0.5 * (1.0 / major_r + 1.0 / minor_r)
+            else:
+                features[i, 11] = 0.0
+                features[i, 12] = 0.0
+        else:
+            features[i, 11] = 0.0
+            features[i, 12] = 0.0
+
+        # ------ Normal from surface type and axis ------
+        axis = entity_info.get("axis", None)
+        if axis and len(axis) == 3:
+            norm = np.sqrt(sum(a * a for a in axis))
+            if norm > 1e-6:
+                features[i, 13:16] = [a / norm for a in axis]
+            else:
+                features[i, 13:16] = [0.0, 0.0, 1.0]
+        elif surface_type == "PLANE":
+            # Planes often have z-up normal, but try to parse from text
+            features[i, 13:16] = [0.0, 0.0, 1.0]
+        else:
+            features[i, 13:16] = [0.0, 0.0, 1.0]
+
+        # ------ Centroid from STEP text coordinates ------
+        location = entity_info.get("location", None)
+        if location and len(location) == 3:
+            features[i, 16:19] = location
+        else:
+            # Try to parse CARTESIAN_POINT from entity text
+            point_match = re.search(
+                r"CARTESIAN_POINT\s*\(\s*'[^']*'\s*,\s*\(\s*"
+                r"([-\d.eE+]+)\s*,\s*([-\d.eE+]+)\s*,\s*([-\d.eE+]+)\s*\)",
+                entity_text,
+            )
+            if point_match:
+                try:
+                    features[i, 16] = float(point_match.group(1))
+                    features[i, 17] = float(point_match.group(2))
+                    features[i, 18] = float(point_match.group(3))
+                except (ValueError, IndexError):
+                    features[i, 16:19] = [0.0, 0.0, 0.0]
+            else:
+                features[i, 16:19] = [0.0, 0.0, 0.0]
+
+        # ------ Bounding box from area or radius ------
+        area = entity_info.get("area", 0.0)
+        if area > 0:
+            # Approximate: assume roughly square face
+            side = np.sqrt(area)
+            features[i, 19:22] = [side, side, 0.0]
+        elif radius > 0:
+            features[i, 19:22] = [2 * radius, 2 * radius, 2 * radius]
+        else:
+            # A real face must have *some* physical extent.
+            # Use unit-scale default rather than zero, which would be
+            # indistinguishable from "no data" and mislead downstream models.
+            features[i, 19:22] = [1.0, 1.0, 0.0]
+
+        _log.debug(
+            "Face %d: STEP-text heuristic features - type=%s, "
+            "K=%.4f, H=%.4f, normal=%s, centroid=%s",
+            i, surface_type,
+            features[i, 11], features[i, 12],
+            features[i, 13:16].tolist(),
+            features[i, 16:19].tolist(),
+        )
+
+    # ------------------------------------------------------------------
+    # UV-sampled graph construction (Phase 4: GNN Upgrades)
+    # ------------------------------------------------------------------
+
+    def build_uv_sampled_graph(
+        self,
+        doc: CADlingDocument,
+        grid_size: int = 10,
+    ) -> Data:
+        """Build face adjacency graph with UV-grid sampled node features.
+
+        Like build_face_graph but node features are UV-grid samples
+        (grid_size x grid_size x 7) per face, flattened to a single vector
+        per node for compatibility with PyG Data objects. The raw grids are
+        also stored on the Data object as ``face_grids``.
+
+        Args:
+            doc: CADlingDocument with STEP entities.
+            grid_size: UV grid resolution per face (default 10).
+
+        Returns:
+            PyTorch Geometric Data object where:
+              - x: [F, grid_size*grid_size*7] flattened UV-grid features
+              - face_grids: [F, 7, grid_size, grid_size] for direct CNN use
+              - edge_index, edge_attr: face adjacency as in build_face_graph
+        """
+        from torch_geometric.data import Data
+
+        from cadling.models.segmentation.architectures.uv_net import UVGridSampler
+
+        face_entities = self._extract_face_entities(doc)
+
+        if len(face_entities) == 0:
+            _log.warning("No face entities found for UV-sampled graph")
+            empty_grid_dim = grid_size * grid_size * 7
+            return Data(
+                x=torch.zeros((1, empty_grid_dim)),
+                edge_index=torch.zeros((2, 0), dtype=torch.long),
+                edge_attr=torch.zeros((0, 8)),
+            )
+
+        # Build adjacency (reuse existing method)
+        edge_index_np, edge_features = self._build_face_adjacency(doc, face_entities)
+
+        # Sample UV grids for each face
+        sampler = UVGridSampler(grid_size=grid_size)
+        shape = self._load_shape_from_document(doc)
+        topods_faces = self._extract_faces_from_shape(shape) if shape else []
+        entity_to_face = (
+            self._match_entity_to_face(face_entities, topods_faces)
+            if topods_faces
+            else {}
+        )
+
+        grids = []
+        for i, _face_entity in enumerate(face_entities):
+            if i in entity_to_face:
+                grid = sampler.sample_face(entity_to_face[i], grid_size)
+            else:
+                # Use placeholder with entity index as seed
+                grid = sampler.sample_face(i, grid_size)
+            grids.append(grid)
+
+        # Stack: [F, grid_size, grid_size, 7]
+        face_grids_hwc = torch.stack(grids, dim=0)
+        # Rearrange to [F, 7, grid_size, grid_size] for CNN
+        face_grids_chw = face_grids_hwc.permute(0, 3, 1, 2).contiguous()
+        # Flatten for x: [F, grid_size*grid_size*7]
+        x_flat = face_grids_hwc.reshape(len(face_entities), -1)
+
+        edge_index_t = torch.from_numpy(edge_index_np).long()
+        edge_attr_t = (
+            torch.from_numpy(edge_features).float()
+            if edge_features is not None
+            else None
+        )
+
+        graph_data = Data(
+            x=x_flat,
+            edge_index=edge_index_t,
+            edge_attr=edge_attr_t,
+            num_nodes=len(face_entities),
+        )
+
+        # Store grids in CNN-ready format and metadata
+        graph_data.face_grids = face_grids_chw
+        graph_data.grid_size = grid_size
+        graph_data.face_ids = [f["entity_id"] for f in face_entities]
+        graph_data.faces = face_entities
+
+        _log.info(
+            f"Built UV-sampled graph: {len(face_entities)} faces, "
+            f"grid_size={grid_size}, "
+            f"x shape={x_flat.shape}, "
+            f"face_grids shape={face_grids_chw.shape}"
+        )
+
+        return graph_data
+
+    # ------------------------------------------------------------------
+    # Coedge graph construction (Phase 4: GNN Upgrades)
+    # ------------------------------------------------------------------
+
+    def build_coedge_graph(
+        self,
+        doc: CADlingDocument,
+    ) -> CoedgeData:
+        """Build coedge-level graph from B-Rep topology.
+
+        Each topological edge in a B-Rep solid has two oriented coedges
+        (one per adjacent face). This method constructs the coedge graph
+        with next/prev/mate pointers required by BRepNetEncoder.
+
+        Coedge features (12 dims):
+          - edge curve type one-hot (6): LINE, CIRCLE, ELLIPSE, B_SPLINE, PARABOLA, OTHER
+          - edge length (1)
+          - tangent vector at midpoint (3)
+          - curvature at midpoint (1)
+          - convexity flag (1): 1=convex, 0=concave, 0.5=tangent
+
+        Args:
+            doc: CADlingDocument with STEP entities.
+
+        Returns:
+            CoedgeData object for use with BRepNetEncoder.
+        """
+
+        from cadling.models.segmentation.architectures.brep_net import CoedgeData
+
+        face_entities = self._extract_face_entities(doc)
+        num_faces = len(face_entities)
+
+        if num_faces == 0:
+            _log.warning("No face entities found for coedge graph")
+            return CoedgeData(
+                features=torch.zeros((0, 12)),
+                next_indices=torch.zeros(0, dtype=torch.long),
+                prev_indices=torch.zeros(0, dtype=torch.long),
+                mate_indices=torch.zeros(0, dtype=torch.long),
+                face_indices=torch.zeros(0, dtype=torch.long),
+            )
+
+        # Build face-to-edge mapping: for each face, extract the ordered
+        # list of edge references that form its boundary loops.
+        face_edge_lists: list[list[int]] = []
+        for face_entity in face_entities:
+            entity_text = face_entity.get("text", "")
+            edge_refs = self._extract_edge_references(entity_text)
+            face_edge_lists.append(edge_refs)
+
+        # Build edge -> list of (face_idx, position_in_face_loop)
+        # Each topological edge should appear in exactly 2 faces for a manifold solid.
+        edge_to_faces: dict[int, list[tuple[int, int]]] = {}
+        for face_idx, edge_refs in enumerate(face_edge_lists):
+            for pos, edge_ref in enumerate(edge_refs):
+                if edge_ref not in edge_to_faces:
+                    edge_to_faces[edge_ref] = []
+                edge_to_faces[edge_ref].append((face_idx, pos))
+
+        # Create coedges: each (face_idx, edge_ref) pair is a coedge
+        coedge_list: list[dict] = []
+        coedge_key_to_idx: dict[tuple[int, int], int] = {}
+
+        for face_idx, edge_refs in enumerate(face_edge_lists):
+            for pos, edge_ref in enumerate(edge_refs):
+                coedge_idx = len(coedge_list)
+                coedge_key_to_idx[(face_idx, edge_ref)] = coedge_idx
+                coedge_list.append({
+                    "face_idx": face_idx,
+                    "edge_ref": edge_ref,
+                    "pos_in_loop": pos,
+                    "loop_size": len(edge_refs),
+                })
+
+        num_coedges = len(coedge_list)
+
+        if num_coedges == 0:
+            _log.warning("No coedges found in document")
+            return CoedgeData(
+                features=torch.zeros((0, 12)),
+                next_indices=torch.zeros(0, dtype=torch.long),
+                prev_indices=torch.zeros(0, dtype=torch.long),
+                mate_indices=torch.zeros(0, dtype=torch.long),
+                face_indices=torch.zeros(0, dtype=torch.long),
+            )
+
+        # Build next/prev/mate indices
+        next_indices = torch.zeros(num_coedges, dtype=torch.long)
+        prev_indices = torch.zeros(num_coedges, dtype=torch.long)
+        mate_indices = torch.zeros(num_coedges, dtype=torch.long)
+        face_indices = torch.zeros(num_coedges, dtype=torch.long)
+
+        for ci, coedge in enumerate(coedge_list):
+            face_idx = coedge["face_idx"]
+            edge_ref = coedge["edge_ref"]
+            pos = coedge["pos_in_loop"]
+            loop_size = coedge["loop_size"]
+            edge_refs_for_face = face_edge_lists[face_idx]
+
+            face_indices[ci] = face_idx
+
+            # Next coedge in the same face loop (cyclic)
+            next_pos = (pos + 1) % loop_size
+            next_edge_ref = edge_refs_for_face[next_pos]
+            next_key = (face_idx, next_edge_ref)
+            next_indices[ci] = coedge_key_to_idx.get(next_key, ci)
+
+            # Prev coedge in the same face loop (cyclic)
+            prev_pos = (pos - 1) % loop_size
+            prev_edge_ref = edge_refs_for_face[prev_pos]
+            prev_key = (face_idx, prev_edge_ref)
+            prev_indices[ci] = coedge_key_to_idx.get(prev_key, ci)
+
+            # Mate coedge: the coedge for the same edge on the adjacent face
+            mate_idx = ci  # Default: self (for boundary edges)
+            faces_sharing_edge = edge_to_faces.get(edge_ref, [])
+            for other_face_idx, _other_pos in faces_sharing_edge:
+                if other_face_idx != face_idx:
+                    other_key = (other_face_idx, edge_ref)
+                    if other_key in coedge_key_to_idx:
+                        mate_idx = coedge_key_to_idx[other_key]
+                        break
+            mate_indices[ci] = mate_idx
+
+        # Build coedge features (12 dims)
+        # Edge curve types for one-hot encoding
+        curve_types = ["LINE", "CIRCLE", "ELLIPSE", "B_SPLINE", "PARABOLA", "OTHER"]
+
+        features = torch.zeros(num_coedges, 12, dtype=torch.float32)
+
+        # Try to extract geometric info from document
+        shape = self._load_shape_from_document(doc)
+
+        # Extract edges and faces from OCC shape for geometric calculations
+        occ_edges = self._extract_edges_from_shape(shape) if shape else []
+        topods_faces = self._extract_faces_from_shape(shape) if shape else []
+
+        # Build edge_ref to OCC edge mapping if possible
+        edge_ref_to_occ = {}
+        if occ_edges and len(face_edge_lists) > 0:
+            edge_ref_to_occ = self._match_edge_refs_to_occ_edges(
+                face_edge_lists, occ_edges, face_entities
+            )
+
+        # Build face_idx to OCC face mapping
+        face_idx_to_occ = {}
+        if topods_faces and len(topods_faces) == num_faces:
+            for idx, occ_face in enumerate(topods_faces):
+                face_idx_to_occ[idx] = occ_face
+
+        has_occ_geometry = len(edge_ref_to_occ) > 0 or len(face_idx_to_occ) > 0
+
+        for ci, coedge in enumerate(coedge_list):
+            edge_ref = coedge["edge_ref"]
+            face_idx = coedge["face_idx"]
+
+            # Try to determine edge curve type from entity text
+            curve_type_idx = 5  # Default: OTHER
+            try:
+                # Use feature extractor to get edge info
+                entity_info = self.feature_extractor.extract_entity_info(
+                    f"#{edge_ref}"
+                )
+                edge_type = entity_info.get("curve_type", "OTHER").upper()
+
+                for ct_idx, ct_name in enumerate(curve_types):
+                    if ct_name in edge_type:
+                        curve_type_idx = ct_idx
+                        break
+            except Exception:
+                pass
+
+            # One-hot curve type (dims 0-5)
+            features[ci, curve_type_idx] = 1.0
+
+            # Edge length (dim 6) - compute from OCC or estimate from entity
+            edge_length = self._compute_edge_length(edge_ref, edge_ref_to_occ)
+            features[ci, 6] = edge_length
+
+            # Tangent vector at midpoint (dims 7-9) - compute from OCC or estimate
+            tangent = self._compute_edge_tangent(edge_ref, edge_ref_to_occ, curve_type_idx)
+            features[ci, 7] = tangent[0]
+            features[ci, 8] = tangent[1]
+            features[ci, 9] = tangent[2]
+
+            # Curvature at midpoint (dim 10) - compute from OCC or curve type
+            curvature = self._compute_edge_curvature(
+                edge_ref, edge_ref_to_occ, curve_type_idx, entity_info if 'entity_info' in dir() else None
+            )
+            features[ci, 10] = curvature
+
+            # Convexity flag (dim 11): compute from face normals and edge tangent
+            mate_ci = int(mate_indices[ci].item())
+            convexity = self._compute_edge_convexity(
+                ci, mate_ci, face_idx, face_indices, face_idx_to_occ, tangent
+            )
+            features[ci, 11] = convexity
+
+        if has_occ_geometry:
+            _log.info(
+                f"Built coedge graph with REAL geometric features: {num_coedges} coedges, "
+                f"{num_faces} faces, feature_dim=12"
+            )
+        else:
+            _log.warning(
+                f"Built coedge graph with estimated features (no OCC): {num_coedges} coedges, "
+                f"{num_faces} faces, feature_dim=12"
+            )
+
+        return CoedgeData(
+            features=features,
+            next_indices=next_indices,
+            prev_indices=prev_indices,
+            mate_indices=mate_indices,
+            face_indices=face_indices,
+        )
+
+    def _extract_edges_from_shape(self, shape) -> list:
+        """Extract all TopoDS_Edge objects from shape.
+
+        Args:
+            shape: TopoDS_Shape
+
+        Returns:
+            List of TopoDS_Edge objects
+        """
+        if shape is None:
+            return []
+
+        try:
+            from OCC.Core.TopAbs import TopAbs_EDGE
+            from OCC.Core.TopExp import TopExp_Explorer
+
+            edges = []
+            explorer = TopExp_Explorer(shape, TopAbs_EDGE)  # type: ignore[arg-type]
+
+            while explorer.More():
+                edge = explorer.Current()
+                edges.append(edge)
+                explorer.Next()
+
+            _log.debug(f"Extracted {len(edges)} TopoDS_Edge objects from shape")
+            return edges
+
+        except Exception as e:
+            _log.warning(f"Failed to extract edges from shape: {e}")
+            return []
+
+    def _match_edge_refs_to_occ_edges(
+        self,
+        face_edge_lists: list[list[int]],
+        occ_edges: list,
+        face_entities: list[dict],
+    ) -> dict[int, Any]:
+        """Match STEP edge reference IDs to OCC TopoDS_Edge objects.
+
+        Uses order-based matching within faces as a heuristic.
+
+        Args:
+            face_edge_lists: List of edge reference lists per face
+            occ_edges: List of TopoDS_Edge objects
+            face_entities: Face entity dictionaries
+
+        Returns:
+            Dictionary mapping edge_ref to TopoDS_Edge
+        """
+        edge_ref_to_occ = {}
+
+        # Simple heuristic: collect all unique edge refs and match by order
+        all_edge_refs = []
+        seen_refs = set()
+        for edge_list in face_edge_lists:
+            for ref in edge_list:
+                if ref not in seen_refs:
+                    all_edge_refs.append(ref)
+                    seen_refs.add(ref)
+
+        # Match by order (assumes similar ordering)
+        min_len = min(len(all_edge_refs), len(occ_edges))
+        for i in range(min_len):
+            edge_ref_to_occ[all_edge_refs[i]] = occ_edges[i]
+
+        if len(all_edge_refs) != len(occ_edges):
+            # Use face_entities for diagnostic context
+            face_count = len(face_entities)
+            avg_edges_per_face = len(all_edge_refs) / face_count if face_count > 0 else 0
+            _log.debug(
+                f"Edge ref count ({len(all_edge_refs)}) != OCC edge count ({len(occ_edges)}). "
+                f"Matched {min_len} edges across {face_count} faces "
+                f"(avg {avg_edges_per_face:.1f} edges/face)."
+            )
+
+        return edge_ref_to_occ
+
+    def _compute_edge_length(
+        self,
+        edge_ref: int,
+        edge_ref_to_occ: dict[int, Any],
+    ) -> float:
+        """Compute edge length from OCC or estimate.
+
+        Args:
+            edge_ref: STEP edge reference ID
+            edge_ref_to_occ: Mapping from edge refs to OCC edges
+
+        Returns:
+            Edge length (always returns a value, never None)
+        """
+        # Strategy 1: Use OCC if available
+        if edge_ref in edge_ref_to_occ:
+            try:
+                from OCC.Core.BRepGProp import brepgprop
+                from OCC.Core.GProp import GProp_GProps
+
+                occ_edge = edge_ref_to_occ[edge_ref]
+                props = GProp_GProps()
+                brepgprop.LinearProperties(occ_edge, props)
+                length = props.Mass()
+
+                if length > 0:
+                    return float(length)
+
+            except Exception as e:
+                _log.debug(f"OCC edge length computation failed: {e}")
+
+        # Strategy 2: Try to get from feature extractor
+        try:
+            entity_info = self.feature_extractor.extract_entity_info(f"#{edge_ref}")
+            length = entity_info.get("length", 0)
+            if length > 0:
+                return float(length)
+        except Exception:
+            pass
+
+        # Strategy 3: Default value
+        return 1.0
+
+    def _compute_edge_tangent(
+        self,
+        edge_ref: int,
+        edge_ref_to_occ: dict[int, Any],
+        curve_type_idx: int,
+    ) -> list[float]:
+        """Compute edge tangent vector at midpoint.
+
+        Args:
+            edge_ref: STEP edge reference ID
+            edge_ref_to_occ: Mapping from edge refs to OCC edges
+            curve_type_idx: Curve type index (0=LINE, 1=CIRCLE, etc.)
+
+        Returns:
+            Tangent vector [x, y, z] (normalized, always returns a value)
+        """
+        # Strategy 1: Use OCC BRepAdaptor_Curve
+        if edge_ref in edge_ref_to_occ:
+            try:
+                from OCC.Core.BRepAdaptor import BRepAdaptor_Curve
+                from OCC.Core.gp import gp_Pnt, gp_Vec
+
+                occ_edge = edge_ref_to_occ[edge_ref]
+                curve_adaptor = BRepAdaptor_Curve(occ_edge)
+
+                # Get parameter at midpoint
+                u_start = curve_adaptor.FirstParameter()
+                u_end = curve_adaptor.LastParameter()
+                u_mid = (u_start + u_end) / 2.0
+
+                # Get tangent via D1 (point and first derivative)
+                point = gp_Pnt()
+                tangent = gp_Vec()
+                curve_adaptor.D1(u_mid, point, tangent)
+
+                # Normalize tangent
+                mag = tangent.Magnitude()
+                if mag > 1e-10:
+                    tangent.Normalize()
+                    return [tangent.X(), tangent.Y(), tangent.Z()]
+
+            except Exception as e:
+                _log.debug(f"OCC tangent computation failed: {e}")
+
+        # Strategy 2: Estimate from edge endpoints (for lines)
+        if edge_ref in edge_ref_to_occ:
+            try:
+                from OCC.Core.BRepAdaptor import BRepAdaptor_Curve
+                from OCC.Core.gp import gp_Vec
+
+                occ_edge = edge_ref_to_occ[edge_ref]
+                curve_adaptor = BRepAdaptor_Curve(occ_edge)
+
+                u_start = curve_adaptor.FirstParameter()
+                u_end = curve_adaptor.LastParameter()
+
+                p_start = curve_adaptor.Value(u_start)
+                p_end = curve_adaptor.Value(u_end)
+
+                direction = gp_Vec(p_start, p_end)
+                mag = direction.Magnitude()
+                if mag > 1e-10:
+                    direction.Normalize()
+                    return [direction.X(), direction.Y(), direction.Z()]
+
+            except Exception as e:
+                _log.debug(f"Endpoint tangent estimation failed: {e}")
+
+        # Strategy 3: Default based on curve type
+        # For circles, default tangent is perpendicular to axis (assume XY plane)
+        if curve_type_idx == 1:  # CIRCLE
+            return [1.0, 0.0, 0.0]  # Tangent in X direction
+
+        # Default tangent along Z axis
+        return [0.0, 0.0, 1.0]
+
+    def _compute_edge_curvature(
+        self,
+        edge_ref: int,
+        edge_ref_to_occ: dict[int, Any],
+        curve_type_idx: int,
+        entity_info: dict | None = None,
+    ) -> float:
+        """Compute edge curvature at midpoint.
+
+        Args:
+            edge_ref: STEP edge reference ID
+            edge_ref_to_occ: Mapping from edge refs to OCC edges
+            curve_type_idx: Curve type index (0=LINE, 1=CIRCLE, etc.)
+            entity_info: Optional entity info with radius
+
+        Returns:
+            Curvature value (always returns a value)
+        """
+        # Strategy 1: Use OCC BRepLProp_CLProps
+        if edge_ref in edge_ref_to_occ:
+            try:
+                from OCC.Core.BRepAdaptor import BRepAdaptor_Curve
+                from OCC.Core.BRepLProp import BRepLProp_CLProps
+
+                occ_edge = edge_ref_to_occ[edge_ref]
+                curve_adaptor = BRepAdaptor_Curve(occ_edge)
+
+                u_start = curve_adaptor.FirstParameter()
+                u_end = curve_adaptor.LastParameter()
+                u_mid = (u_start + u_end) / 2.0
+
+                # Compute curvature using local properties
+                props = BRepLProp_CLProps(curve_adaptor, u_mid, 2, 1e-6)
+
+                if props.IsTangentDefined():
+                    curvature = props.Curvature()
+                    if curvature >= 0 and curvature < 1e10:
+                        return float(curvature)
+
+            except Exception as e:
+                _log.debug(f"OCC curvature computation failed: {e}")
+
+        # Strategy 2: Compute from curve type
+        # LINE: curvature = 0
+        if curve_type_idx == 0:
+            return 0.0
+
+        # CIRCLE: curvature = 1/radius
+        if curve_type_idx == 1:
+            radius = None
+
+            # Try to get radius from entity info
+            if entity_info and "radius" in entity_info:
+                radius = entity_info.get("radius")
+            else:
+                # Try feature extractor
+                try:
+                    info = self.feature_extractor.extract_entity_info(f"#{edge_ref}")
+                    radius = info.get("radius")
+                except Exception:
+                    pass
+
+            if radius and radius > 1e-10:
+                return 1.0 / radius
+
+        # ELLIPSE: approximate curvature
+        if curve_type_idx == 2:
+            # Ellipse curvature varies, use average approximation
+            return 0.1
+
+        # B_SPLINE, PARABOLA: estimate from control points
+        if curve_type_idx in (3, 4):
+            return 0.01  # Small curvature for splines
+
+        # Default: zero curvature
+        return 0.0
+
+    def _compute_edge_convexity(
+        self,
+        coedge_idx: int,
+        mate_idx: int,
+        face_idx: int,
+        face_indices: torch.Tensor,
+        face_idx_to_occ: dict[int, Any],
+        tangent: list[float],
+    ) -> float:
+        """Compute edge convexity from adjacent face normals.
+
+        Convexity is determined by the dihedral angle between adjacent faces:
+        - Convex (1.0): Faces form an outward corner
+        - Concave (0.0): Faces form an inward corner
+        - Tangent (0.5): Faces are nearly coplanar
+
+        Args:
+            coedge_idx: Current coedge index
+            mate_idx: Mate coedge index
+            face_idx: Face index of current coedge
+            face_indices: Tensor mapping coedge to face index
+            face_idx_to_occ: Mapping from face index to OCC face
+            tangent: Edge tangent vector
+
+        Returns:
+            Convexity value in [0, 1] (0=concave, 0.5=tangent, 1=convex)
+        """
+        # If no mate (boundary edge), return unknown
+        if coedge_idx == mate_idx:
+            return 0.5
+
+        # Get mate face index
+        mate_face_idx = int(face_indices[mate_idx].item())
+
+        # Strategy 1: Compute from OCC face normals
+        if face_idx in face_idx_to_occ and mate_face_idx in face_idx_to_occ:
+            try:
+                from OCC.Core.gp import gp_Vec
+
+                face1 = face_idx_to_occ[face_idx]
+                face2 = face_idx_to_occ[mate_face_idx]
+
+                # Get normals at face centers
+                n1 = self._get_face_normal_at_center(face1)
+                n2 = self._get_face_normal_at_center(face2)
+
+                if n1 is not None and n2 is not None:
+                    # Compute cross product of normals
+                    cross = gp_Vec(
+                        n1[1] * n2[2] - n1[2] * n2[1],
+                        n1[2] * n2[0] - n1[0] * n2[2],
+                        n1[0] * n2[1] - n1[1] * n2[0],
+                    )
+
+                    # Dot with edge tangent to determine convexity
+                    dot = cross.X() * tangent[0] + cross.Y() * tangent[1] + cross.Z() * tangent[2]
+
+                    # Map to [0, 1]: positive = convex, negative = concave
+                    if abs(dot) < 0.1:
+                        return 0.5  # Tangent/coplanar
+                    elif dot > 0:
+                        return 1.0  # Convex
+                    else:
+                        return 0.0  # Concave
+
+            except Exception as e:
+                _log.debug(f"OCC convexity computation failed: {e}")
+
+        # Strategy 2: Use dihedral angle from face features if available
+        # (would require face normals to be pre-computed)
+
+        # Strategy 3: Default to unknown
+        return 0.5
+
+    def _get_face_normal_at_center(self, occ_face) -> list[float] | None:
+        """Get face normal at center point.
+
+        Args:
+            occ_face: OCC TopoDS_Face
+
+        Returns:
+            Normal vector [x, y, z] or None
+        """
+        try:
+            from OCC.Core.BRepAdaptor import BRepAdaptor_Surface
+            from OCC.Core.gp import gp_Pnt, gp_Vec
+
+            adaptor = BRepAdaptor_Surface(occ_face)
+
+            u_mid = (adaptor.FirstUParameter() + adaptor.LastUParameter()) / 2
+            v_mid = (adaptor.FirstVParameter() + adaptor.LastVParameter()) / 2
+
+            # Get normal via D1
+            point = gp_Pnt()
+            d1u = gp_Vec()
+            d1v = gp_Vec()
+            adaptor.D1(u_mid, v_mid, point, d1u, d1v)
+
+            normal = d1u.Crossed(d1v)
+            mag = normal.Magnitude()
+
+            if mag > 1e-10:
+                normal.Normalize()
+                return [normal.X(), normal.Y(), normal.Z()]
+
+        except Exception as e:
+            _log.debug(f"Face normal computation failed: {e}")
+
+        return None

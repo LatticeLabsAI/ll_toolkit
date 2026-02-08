@@ -8,6 +8,8 @@ Available Backends:
     - DeclarativeCADBackend: For text-based parsing
     - RenderableCADBackend: For rendering support
     - CADViewBackend: View-specific rendering
+    - DXFBackend: 2D DXF drawing parser
+    - PDFBackend: PDF engineering drawing parser (vector + raster)
 """
 
 from cadling.backend.abstract_backend import (
@@ -16,10 +18,14 @@ from cadling.backend.abstract_backend import (
     DeclarativeCADBackend,
     RenderableCADBackend,
 )
+from cadling.backend.dxf_backend import DXFBackend
+from cadling.backend.pdf_backend import PDFBackend
 
 __all__ = [
     "AbstractCADBackend",
     "DeclarativeCADBackend",
     "RenderableCADBackend",
     "CADViewBackend",
+    "DXFBackend",
+    "PDFBackend",
 ]

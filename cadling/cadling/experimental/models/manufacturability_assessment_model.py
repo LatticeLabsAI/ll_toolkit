@@ -602,7 +602,7 @@ Return your assessment as JSON:
                 proc = ManufacturingProcess(proc_name.lower().replace(" ", "_"))
                 suggested_processes.append(proc)
             except ValueError:
-                pass
+                _log.debug(f"Unknown manufacturing process: {proc_name}")
 
         return ManufacturabilityReport(
             overall_score=score,

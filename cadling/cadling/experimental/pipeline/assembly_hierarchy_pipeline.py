@@ -311,6 +311,11 @@ class AssemblyHierarchyPipeline(BaseCADPipeline):
 
         _log.debug(f"[Detect] Found {len(self.component_map) - 1} components")
 
+        # Extract product definition IDs and assign to component nodes
+        prod_def_mapping = self._extract_product_definitions(doc)
+        if prod_def_mapping:
+            self._assign_product_definitions(prod_def_mapping)
+
         # Build hierarchical tree structure from STEP assembly structure
         # Falls back to flat structure if STEP parsing fails
         self._build_hierarchical_tree(doc)
@@ -396,8 +401,48 @@ class AssemblyHierarchyPipeline(BaseCADPipeline):
 
         return None
 
+    @staticmethod
+    def _normalize_bbox(bbox: Dict) -> Dict:
+        """Normalize a bounding box to xmin/xmax/ymin/ymax/zmin/zmax format.
+
+        Handles multiple common representations:
+        - Full min/max format: {xmin, xmax, ymin, ymax, zmin, zmax}
+        - Size format: {x, y, z} → treats as half-extents centered at origin
+        - OCC format: {min: [x,y,z], max: [x,y,z]}
+
+        Args:
+            bbox: Bounding box dict in any supported format
+
+        Returns:
+            Dict with xmin/xmax/ymin/ymax/zmin/zmax keys
+        """
+        if "xmin" in bbox:
+            return bbox
+
+        # Size-based format: {x: 100, y: 50, z: 20}
+        if "x" in bbox and "xmin" not in bbox:
+            x, y, z = bbox["x"], bbox["y"], bbox["z"]
+            return {
+                "xmin": 0.0, "xmax": float(x),
+                "ymin": 0.0, "ymax": float(y),
+                "zmin": 0.0, "zmax": float(z),
+            }
+
+        # OCC format: {min: [x,y,z], max: [x,y,z]}
+        if "min" in bbox and "max" in bbox:
+            mn, mx = bbox["min"], bbox["max"]
+            return {
+                "xmin": mn[0], "xmax": mx[0],
+                "ymin": mn[1], "ymax": mx[1],
+                "zmin": mn[2], "zmax": mx[2],
+            }
+
+        return bbox
+
     def _are_components_adjacent(self, comp1: AssemblyNode, comp2: AssemblyNode) -> bool:
         """Check if bounding boxes are close enough for potential mate.
+
+        Handles multiple bounding box formats via normalization.
 
         Args:
             comp1: First component
@@ -406,10 +451,16 @@ class AssemblyHierarchyPipeline(BaseCADPipeline):
         Returns:
             True if components are adjacent
         """
-        bbox1 = comp1.properties.get("bounding_box")
-        bbox2 = comp2.properties.get("bounding_box")
+        bbox1_raw = comp1.properties.get("bounding_box")
+        bbox2_raw = comp2.properties.get("bounding_box")
 
-        if not bbox1 or not bbox2:
+        if not bbox1_raw or not bbox2_raw:
+            return False
+
+        try:
+            bbox1 = self._normalize_bbox(bbox1_raw)
+            bbox2 = self._normalize_bbox(bbox2_raw)
+        except (KeyError, TypeError, IndexError):
             return False
 
         # Check if boxes overlap or are within tolerance
@@ -896,18 +947,54 @@ class AssemblyHierarchyPipeline(BaseCADPipeline):
     def _get_step_text(self, doc) -> str:
         """Get STEP text from document.
 
+        Inspects several document attributes in order of preference and
+        validates that the returned value is a real string (not a Mock or
+        other non-string object).
+
         Args:
             doc: Document to extract STEP text from
 
         Returns:
-            STEP file content as string
+            STEP file content as string, or empty string if unavailable
         """
-        if hasattr(doc, "raw_content") and doc.raw_content:
-            return doc.raw_content
-        elif hasattr(doc, "_backend") and hasattr(doc._backend, "step_text"):
-            return doc._backend.step_text
-        elif hasattr(doc, "properties") and "step_text" in doc.properties:
-            return doc.properties["step_text"]
+        # 1. doc.raw_content (e.g. from CADDocument)
+        raw = getattr(doc, "raw_content", None)
+        if isinstance(raw, str) and raw:
+            return raw
+
+        # 2. doc._backend.step_text (e.g. from OCC backend)
+        backend = getattr(doc, "_backend", None)
+        if backend is not None:
+            step_text = getattr(backend, "step_text", None)
+            if isinstance(step_text, str) and step_text:
+                return step_text
+
+        # 3. doc.properties["step_text"]
+        props = getattr(doc, "properties", None)
+        if isinstance(props, dict) and "step_text" in props:
+            val = props["step_text"]
+            if isinstance(val, str) and val:
+                return val
+
+        # 4. Try reading from source file path if available
+        source_path = None
+        if isinstance(props, dict):
+            source_path = props.get("source_path") or props.get("file_path")
+        if source_path is None:
+            source_path = getattr(doc, "source_path", None)
+
+        if isinstance(source_path, str) and source_path:
+            try:
+                import os
+                if os.path.isfile(source_path) and source_path.lower().endswith((".step", ".stp")):
+                    with open(source_path, "r", errors="replace") as f:
+                        text = f.read()
+                    if text:
+                        _log.debug(f"Read STEP text from source file: {source_path}")
+                        return text
+            except Exception as e:
+                _log.debug(f"Could not read STEP file {source_path}: {e}")
+
         return ""
 
     def _extract_product_definitions(self, doc) -> Dict[str, str]:
@@ -940,6 +1027,35 @@ class AssemblyHierarchyPipeline(BaseCADPipeline):
 
         return mapping
 
+    def _assign_product_definitions(self, prod_def_mapping: Dict[str, str]) -> None:
+        """Assign product definition IDs to component nodes by name matching.
+
+        Links PRODUCT_DEFINITION entity IDs from the STEP file to the
+        detected component nodes so that the hierarchical tree builder
+        can wire parent-child relationships.
+
+        Args:
+            prod_def_mapping: Mapping of product_name -> entity_id from
+                ``_extract_product_definitions()``.
+        """
+        for node in self.component_map.values():
+            if node.component_id == "root":
+                continue
+
+            # Try exact name match first
+            if node.name in prod_def_mapping:
+                entity_id = prod_def_mapping[node.name]
+                node.properties["product_definition_id"] = entity_id
+                node.product_definition_id = entity_id
+                continue
+
+            # Try case-insensitive match
+            for prod_name, entity_id in prod_def_mapping.items():
+                if prod_name.lower() == node.name.lower():
+                    node.properties["product_definition_id"] = entity_id
+                    node.product_definition_id = entity_id
+                    break
+
     def _build_hierarchical_tree(self, doc) -> None:
         """Build proper assembly hierarchy from STEP structure.
 
@@ -958,44 +1074,62 @@ class AssemblyHierarchyPipeline(BaseCADPipeline):
         step_text = self._get_step_text(doc)
 
         if not step_text:
-            error_msg = "No STEP text available for hierarchy extraction. Cannot build hierarchical tree."
-            _log.error(error_msg)
-            self.assembly_tree.properties["hierarchy_build_status"] = "failed"
-            self.assembly_tree.properties["hierarchy_errors"].append(error_msg)
-            self.assembly_tree.properties["hierarchy_build_method"] = "none"
+            _log.warning(
+                "No STEP text available for hierarchy extraction. "
+                "Adding all components as direct children of root (flat structure)."
+            )
+            # Flat fallback: add all components as direct children of root
+            for comp_id, node in self.component_map.items():
+                if comp_id != "root" and node.parent is None:
+                    self.assembly_tree.add_child(node)
+            self.assembly_tree.properties["hierarchy_build_status"] = "fallback_flat"
+            self.assembly_tree.properties["hierarchy_errors"].append(
+                "No STEP text available for hierarchy extraction."
+            )
+            self.assembly_tree.properties["hierarchy_build_method"] = "flat"
             return
 
         # Extract NEXT_ASSEMBLY_USAGE_OCCURRENCE entities
-        nauo_pattern = r"#(\d+)\s*=\s*NEXT_ASSEMBLY_USAGE_OCCURRENCE\s*\([^)]*\)\s*;\s*"
-        nauo_matches = list(re.finditer(nauo_pattern, step_text, re.IGNORECASE))
+        # Use a permissive pattern that handles nested parens and multi-line
+        nauo_pattern = (
+            r"#(\d+)\s*=\s*NEXT_ASSEMBLY_USAGE_OCCURRENCE\s*\((.+?)\)\s*;"
+        )
+        nauo_matches = list(re.finditer(nauo_pattern, step_text, re.IGNORECASE | re.DOTALL))
 
         if not nauo_matches:
-            error_msg = (
+            # Fallback: try building tree from mate relationships if available
+            _log.warning(
                 "No NEXT_ASSEMBLY_USAGE_OCCURRENCE entities found in STEP file. "
-                "File may not contain assembly structure or may be a single part. "
-                "Cannot build hierarchical tree."
+                "Attempting fallback: mate-based clustering."
             )
-            _log.error(error_msg)
-            self.assembly_tree.properties["hierarchy_build_status"] = "failed"
-            self.assembly_tree.properties["hierarchy_errors"].append(error_msg)
-            self.assembly_tree.properties["hierarchy_build_method"] = "none"
+            self._build_tree_from_mates()
+            # If mate-based fallback also didn't produce a tree, add all
+            # components as direct children of root
+            if not self.assembly_tree.children:
+                for comp_id, node in self.component_map.items():
+                    if comp_id != "root" and node.parent is None:
+                        self.assembly_tree.add_child(node)
+                self.assembly_tree.properties["hierarchy_build_status"] = "fallback_flat"
+                self.assembly_tree.properties["hierarchy_build_method"] = "flat"
             return
 
         # Build parent-child mapping
         parent_child_map = {}  # parent_id -> [child_ids]
 
         for match in nauo_matches:
-            nauo_text = match.group(0)
+            # group(1) = entity ID (e.g. "123" from #123 = NAUO(...))
+            # group(2) = content inside parentheses
+            inner_text = match.group(2)
 
-            # Extract relating (parent) and related (child) references
-            # NAUO format: NEXT_ASSEMBLY_USAGE_OCCURRENCE('id','name',<relating>,<related>,...)
-            ref_pattern = r"#(\d+)"
-            refs = re.findall(ref_pattern, nauo_text)
+            # Extract only the entity references INSIDE the parentheses
+            # NAUO format: ('usage_id','usage_name',#relating,#related,$)
+            # The first two #refs inside the parens are relating (parent)
+            # and related (child) product_definitions
+            refs = re.findall(r"#(\d+)", inner_text)
 
             if len(refs) >= 2:
-                # First ref is typically relating (parent), second is related (child)
-                parent_ref = refs[0]
-                child_ref = refs[1]
+                parent_ref = refs[0]   # relating product_definition
+                child_ref = refs[1]    # related product_definition
 
                 if parent_ref not in parent_child_map:
                     parent_child_map[parent_ref] = []
@@ -1051,6 +1185,20 @@ class AssemblyHierarchyPipeline(BaseCADPipeline):
                 _log.debug(f"Adding orphaned component {node.component_id} to root")
                 self.assembly_tree.add_child(node)
                 num_orphaned += 1
+
+        # If NAUO parsing found relationships but no components were placed
+        # (e.g. no product_definition IDs matched), fall back to flat structure
+        if not self.assembly_tree.children:
+            _log.warning(
+                "NAUO parsing found structure but no components could be placed. "
+                "Falling back to flat structure."
+            )
+            for comp_id, node in self.component_map.items():
+                if comp_id != "root" and node.parent is None:
+                    self.assembly_tree.add_child(node)
+            self.assembly_tree.properties["hierarchy_build_status"] = "fallback_flat"
+            self.assembly_tree.properties["hierarchy_build_method"] = "flat"
+            return
 
         # Mark successful hierarchy build
         self.assembly_tree.properties["hierarchy_build_status"] = "success"

@@ -4,10 +4,15 @@ STEP Feature Extractor - Extracts geometric and topological features from STEP e
 Implements feature extraction from scratch without external dependencies.
 """
 
-from typing import Dict, List, Optional, Tuple, Any
-import re
+from __future__ import annotations
+
+import logging
 import math
+import re
 from collections import Counter
+from typing import Any, Dict, List, Optional, Tuple
+
+_log = logging.getLogger(__name__)
 
 
 class STEPFeatureExtractor:
@@ -417,8 +422,17 @@ class STEPFeatureExtractor:
             if len(params) > 2:
                 axis_ref = self._extract_reference(params[2])
                 if axis_ref and axis_ref in all_entities:
-                    # Extract axis direction
-                    pass
+                    # Extract axis direction - DIRECTION entities have coordinates like CARTESIAN_POINT
+                    direction_entity = all_entities[axis_ref]
+                    direction_features = self._extract_point_features(direction_entity, all_entities)
+                    features["axis_direction"] = direction_features.get("coordinates")
+
+            # Extract reference direction if available
+            if len(params) > 3:
+                ref_dir_ref = self._extract_reference(params[3])
+                if ref_dir_ref and ref_dir_ref in all_entities:
+                    ref_features = self._extract_point_features(all_entities[ref_dir_ref], all_entities)
+                    features["ref_direction"] = ref_features.get("coordinates")
 
         return features
 
@@ -500,8 +514,9 @@ class STEPFeatureExtractor:
                 for num_str in coord_str.split(","):
                     try:
                         coords.append(float(num_str.strip()))
-                    except ValueError:
-                        pass
+                    except ValueError as e:
+                        _log.debug(f"Failed to parse coordinate '{num_str}': {e}")
+                        continue
                 return coords if coords else None
         return None
 
@@ -520,8 +535,8 @@ class STEPFeatureExtractor:
                 if match:
                     try:
                         return float(match.group(0))
-                    except ValueError:
-                        pass
+                    except ValueError as e:
+                        _log.debug(f"Failed to parse float from regex match '{match.group(0)}': {e}")
         return None
 
     def _extract_int(self, param: Any) -> Optional[int]:
@@ -537,8 +552,8 @@ class STEPFeatureExtractor:
                 if match:
                     try:
                         return int(match.group(0))
-                    except ValueError:
-                        pass
+                    except ValueError as e:
+                        _log.debug(f"Failed to parse int from regex match '{match.group(0)}': {e}")
         return None
 
     def _extract_reference(self, param: Any) -> Optional[int]:

@@ -11,6 +11,7 @@ Available Pipelines:
     - VisionPipeline: For optical CAD recognition with VLMs
     - HybridPipeline: Combines text parsing + vision analysis
     - CADVlmPipeline: For vision-based annotation extraction
+    - SegNetPipeline: Segmentation → Tokenization → Reconstruction
     - EnrichmentModel: Base class for enrichment models
 """
 
@@ -21,6 +22,12 @@ from cadling.pipeline.stl_pipeline import STLPipeline
 from cadling.pipeline.vision_pipeline import VisionPipeline
 from cadling.pipeline.hybrid_pipeline import HybridPipeline
 from cadling.pipeline.vlm_pipeline import CADVlmPipeline, CADVlmPipelineOptions
+from cadling.pipeline.segnet_pipeline import (
+    SegNetPipeline,
+    SegNetPipelineResult,
+    SegNetTokenizationResult,
+    ReconstructionResult,
+)
 
 __all__ = [
     "BaseCADPipeline",
@@ -31,5 +38,9 @@ __all__ = [
     "HybridPipeline",
     "CADVlmPipeline",
     "CADVlmPipelineOptions",
+    "SegNetPipeline",
+    "SegNetPipelineResult",
+    "SegNetTokenizationResult",
+    "ReconstructionResult",
     "EnrichmentModel",
 ]

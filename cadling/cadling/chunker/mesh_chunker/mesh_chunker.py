@@ -239,6 +239,54 @@ class MeshChunker(BaseCADChunker):
         except ImportError as e:
             _log.warning(f"Failed to import STL datamodel: {e}. STL mesh extraction unavailable.")
 
+        # Try to get mesh from generic backend
+        if hasattr(doc, "_backend") and doc._backend is not None:
+            backend = doc._backend
+
+            # Try various patterns for getting mesh from backend
+            mesh_obj = None
+
+            # Pattern 1: backend.mesh
+            if hasattr(backend, "mesh") and backend.mesh is not None:
+                mesh_obj = backend.mesh
+            # Pattern 2: backend._mesh
+            elif hasattr(backend, "_mesh") and backend._mesh is not None:
+                mesh_obj = backend._mesh
+            # Pattern 3: backend.get_mesh()
+            elif hasattr(backend, "get_mesh") and callable(backend.get_mesh):
+                try:
+                    mesh_obj = backend.get_mesh()
+                except Exception as e:
+                    _log.debug(f"backend.get_mesh() failed: {e}")
+            # Pattern 4: backend.load_mesh()
+            elif hasattr(backend, "load_mesh") and callable(backend.load_mesh):
+                try:
+                    mesh_obj = backend.load_mesh()
+                except Exception as e:
+                    _log.debug(f"backend.load_mesh() failed: {e}")
+
+            if mesh_obj is not None:
+                try:
+                    # Check if it's a trimesh object
+                    import trimesh
+                    if isinstance(mesh_obj, trimesh.Trimesh):
+                        vertices = np.array(mesh_obj.vertices)
+                        faces = np.array(mesh_obj.faces)
+                        normals = np.array(mesh_obj.face_normals) if hasattr(mesh_obj, "face_normals") else None
+                        _log.debug(f"Extracted mesh from backend: {len(vertices)} vertices, {len(faces)} faces")
+                        return MeshData(vertices, faces, normals)
+                    # Check if it has vertices/faces attributes
+                    elif hasattr(mesh_obj, "vertices") and hasattr(mesh_obj, "faces"):
+                        vertices = np.array(mesh_obj.vertices)
+                        faces = np.array(mesh_obj.faces)
+                        normals = np.array(mesh_obj.normals) if hasattr(mesh_obj, "normals") else None
+                        _log.debug(f"Extracted mesh from backend object: {len(vertices)} vertices, {len(faces)} faces")
+                        return MeshData(vertices, faces, normals)
+                except ImportError:
+                    _log.debug("trimesh not available for mesh type checking")
+                except Exception as e:
+                    _log.warning(f"Failed to extract mesh from backend: {e}")
+
         return None
 
     def _segment_by_octree(self, mesh: MeshData) -> List[List[int]]:
@@ -264,23 +312,33 @@ class MeshChunker(BaseCADChunker):
 
         return segments
 
-    def _build_octree(self, node: OctreeNode, mesh: MeshData, depth: int):
-        """Recursively build octree.
+    def _build_octree(
+        self,
+        node: OctreeNode,
+        mesh: MeshData,
+        depth: int,
+        candidate_faces: Optional[List[int]] = None,
+    ):
+        """Recursively build octree with proper face partitioning.
 
         Args:
             node: Current octree node
             mesh: Mesh data
             depth: Current depth
+            candidate_faces: Face indices to consider (from parent). If None, consider all.
         """
-        if depth >= self.octree_max_depth:
-            # Assign all remaining faces to this leaf
-            node.face_indices = list(range(mesh.num_faces))
-            return
-
         min_xyz, max_xyz = node.bounds
 
-        # Assign faces to this node
-        for face_idx in range(mesh.num_faces):
+        # Determine which faces to consider
+        if candidate_faces is None:
+            # Root node: consider all faces
+            faces_to_check = range(mesh.num_faces)
+        else:
+            # Child node: only consider faces from parent
+            faces_to_check = candidate_faces
+
+        # Assign faces whose centroids fall within this node's bounds
+        for face_idx in faces_to_check:
             face = mesh.faces[face_idx]
             face_verts = mesh.vertices[face]
             face_center = face_verts.mean(axis=0)
@@ -289,14 +347,39 @@ class MeshChunker(BaseCADChunker):
             if np.all(face_center >= min_xyz) and np.all(face_center <= max_xyz):
                 node.face_indices.append(face_idx)
 
+        # Stop at max depth - keep faces in this leaf
+        if depth >= self.octree_max_depth:
+            return
+
         # Subdivide if too many faces
-        if len(node.face_indices) > self.max_faces_per_chunk and depth < self.octree_max_depth:
+        if len(node.face_indices) > self.max_faces_per_chunk:
             node.subdivide()
 
-            # Distribute faces to children
-            for child in node.children:
-                if child is not None:
-                    self._build_octree(child, mesh, depth + 1)
+            mid_xyz = (min_xyz + max_xyz) / 2.0
+
+            # Distribute parent's faces to children based on octant
+            child_faces: List[List[int]] = [[] for _ in range(8)]
+
+            for face_idx in node.face_indices:
+                face = mesh.faces[face_idx]
+                face_center = mesh.vertices[face].mean(axis=0)
+
+                # Determine which octant the face belongs to
+                octant = 0
+                if face_center[0] >= mid_xyz[0]:
+                    octant |= 1
+                if face_center[1] >= mid_xyz[1]:
+                    octant |= 2
+                if face_center[2] >= mid_xyz[2]:
+                    octant |= 4
+
+                child_faces[octant].append(face_idx)
+
+            # Recursively build children that have faces
+            for i, child in enumerate(node.children):
+                if child is not None and child_faces[i]:
+                    # Pass only the faces assigned to this child
+                    self._build_octree(child, mesh, depth + 1, child_faces[i])
 
             node.face_indices = []  # Clear parent's faces
             node.is_leaf = False

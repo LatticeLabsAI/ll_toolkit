@@ -192,8 +192,16 @@ class CADVlmPipeline(BaseCADPipeline):
         # Process each view
         for view_name in views_to_render:
             if view_name not in available_views:
-                _log.warning(f"View '{view_name}' not available, skipping")
-                continue
+                # Try to find closest available view
+                closest_view = self._find_closest_view(view_name, available_views)
+                if closest_view:
+                    _log.info(
+                        f"View '{view_name}' not available, substituting with '{closest_view}'"
+                    )
+                    view_name = closest_view
+                else:
+                    _log.warning(f"View '{view_name}' not available and no substitute found, skipping")
+                    continue
 
             try:
                 # Render view
@@ -304,6 +312,73 @@ class CADVlmPipeline(BaseCADPipeline):
             _log.error(f"Annotation extraction failed for {view_name}: {e}")
 
         return annotations
+
+    def _find_closest_view(
+        self, requested_view: str, available_views: List[str]
+    ) -> Optional[str]:
+        """Find the closest available view when requested view is unavailable.
+
+        Uses view naming conventions to find similar views:
+        - "front_left" → "front" or "left"
+        - "top_iso" → "top" or "iso"
+        - "bottom_right" → "bottom" or "right"
+
+        Args:
+            requested_view: Name of the requested view
+            available_views: List of available view names
+
+        Returns:
+            Name of closest available view, or None if no match found
+        """
+        if not available_views:
+            return None
+
+        requested_lower = requested_view.lower()
+
+        # Define view relationships (ordered by preference)
+        view_relationships = {
+            "front_left": ["front", "left", "iso", "front_right"],
+            "front_right": ["front", "right", "iso", "front_left"],
+            "back_left": ["back", "left", "rear", "back_right"],
+            "back_right": ["back", "right", "rear", "back_left"],
+            "top_front": ["top", "front", "iso"],
+            "top_back": ["top", "back", "rear"],
+            "bottom_front": ["bottom", "front"],
+            "bottom_back": ["bottom", "back"],
+            "top_iso": ["top", "iso", "isometric"],
+            "front_iso": ["front", "iso", "isometric"],
+            "iso": ["isometric", "front", "top"],
+            "isometric": ["iso", "front", "top"],
+            "rear": ["back", "back_left", "back_right"],
+        }
+
+        # Check direct relationships
+        if requested_lower in view_relationships:
+            for candidate in view_relationships[requested_lower]:
+                for available in available_views:
+                    if candidate in available.lower():
+                        return available
+
+        # Try splitting compound view name and matching components
+        components = requested_lower.replace("_", " ").replace("-", " ").split()
+        for component in components:
+            for available in available_views:
+                if component in available.lower():
+                    _log.debug(
+                        f"Matched component '{component}' from '{requested_view}' "
+                        f"to available view '{available}'"
+                    )
+                    return available
+
+        # Last resort: return first available view
+        if available_views:
+            _log.debug(
+                f"No close match for '{requested_view}', using first available: "
+                f"'{available_views[0]}'"
+            )
+            return available_views[0]
+
+        return None
 
     def _assemble_document(self, conv_res: ConversionResult) -> ConversionResult:
         """Assemble document with de-duplication and conflict resolution.

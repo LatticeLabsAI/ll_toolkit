@@ -238,9 +238,18 @@ Extract the complete note text.
                 # Check if item has rendered images
                 rendered_images = item.properties.get("rendered_images", {})
                 if not rendered_images:
-                    _log.warning(
-                        f"Item {item.self_ref} has no rendered images, skipping PMI extraction"
+                    _log.debug(
+                        f"Item {item.self_ref} has no rendered images, using STEP text extraction"
                     )
+                    # Use STEP text-based PMI extraction fallback
+                    annotations = self._extract_pmi_from_step_text(doc, item)
+                    if annotations:
+                        item.properties["pmi_annotations"] = annotations
+                        item.add_provenance(
+                            component_type="enrichment_model",
+                            component_name=self.__class__.__name__,
+                            notes="step_text_fallback",
+                        )
                     continue
 
                 # Extract PMI from each requested view
@@ -358,6 +367,126 @@ Extract the complete note text.
             context_parts.append(f"Mass: {item.properties['mass']}")
 
         return "\n".join(context_parts) if context_parts else "No geometric context available"
+
+    def _extract_pmi_from_step_text(
+        self, doc: CADlingDocument, item: CADItem
+    ) -> List[Dict[str, Any]]:
+        """Extract PMI from STEP entity text when rendered images unavailable.
+
+        Parses GEOMETRIC_TOLERANCE, DATUM_FEATURE, DIMENSION_CALLOUT and
+        other PMI-related STEP entities.
+
+        Args:
+            doc: The document
+            item: The item to analyze
+
+        Returns:
+            List of PMI annotation dictionaries
+        """
+        import re
+
+        annotations = []
+
+        # Get STEP entity text from various sources
+        step_text = ""
+        if hasattr(item, "raw_text"):
+            step_text = item.raw_text
+        elif "step_entity_text" in item.properties:
+            step_text = item.properties["step_entity_text"]
+        elif hasattr(doc, "_step_content"):
+            step_text = doc._step_content
+
+        if not step_text:
+            return annotations
+
+        # Pattern for GEOMETRIC_TOLERANCE entities
+        # e.g., GEOMETRIC_TOLERANCE('flatness',0.01)
+        geom_tolerance_pattern = r"GEOMETRIC_TOLERANCE\s*\(\s*'([^']+)'\s*,\s*([\d.]+)\s*\)"
+        for match in re.finditer(geom_tolerance_pattern, step_text, re.IGNORECASE):
+            tolerance_type = match.group(1)
+            tolerance_value = float(match.group(2))
+            annotations.append({
+                "type": "geometric_tolerance",
+                "text": f"{tolerance_type}: {tolerance_value}",
+                "value": tolerance_value,
+                "unit": "mm",
+                "confidence": 0.7,
+                "view": "step_text",
+                "subtype": tolerance_type,
+            })
+
+        # Pattern for DATUM_FEATURE entities
+        # e.g., DATUM_FEATURE('A')
+        datum_pattern = r"DATUM_FEATURE\s*\(\s*'([^']+)'\s*\)"
+        for match in re.finditer(datum_pattern, step_text, re.IGNORECASE):
+            datum_label = match.group(1)
+            annotations.append({
+                "type": "datum",
+                "text": f"Datum {datum_label}",
+                "value": datum_label,
+                "unit": None,
+                "confidence": 0.8,
+                "view": "step_text",
+                "subtype": "datum_feature",
+            })
+
+        # Pattern for dimensional values
+        # e.g., LENGTH_MEASURE(25.4) or POSITIVE_LENGTH_MEASURE(10.0)
+        dimension_pattern = r"(?:POSITIVE_)?LENGTH_MEASURE\s*\(\s*([\d.]+)\s*\)"
+        for match in re.finditer(dimension_pattern, step_text, re.IGNORECASE):
+            dim_value = float(match.group(1))
+            # Only capture significant dimensions (not very small values)
+            if dim_value > 0.1:
+                annotations.append({
+                    "type": "dimension",
+                    "text": f"{dim_value:.2f} mm",
+                    "value": dim_value,
+                    "unit": "mm",
+                    "confidence": 0.6,
+                    "view": "step_text",
+                    "subtype": "linear",
+                })
+
+        # Pattern for angular measures
+        # e.g., PLANE_ANGLE_MEASURE(1.5707963) (radians)
+        angle_pattern = r"PLANE_ANGLE_MEASURE\s*\(\s*([\d.]+)\s*\)"
+        for match in re.finditer(angle_pattern, step_text, re.IGNORECASE):
+            import math
+            angle_rad = float(match.group(1))
+            angle_deg = math.degrees(angle_rad)
+            # Filter out common angles that aren't user-specified
+            if 0.1 < angle_deg < 179.9:
+                annotations.append({
+                    "type": "dimension",
+                    "text": f"{angle_deg:.1f}°",
+                    "value": angle_deg,
+                    "unit": "deg",
+                    "confidence": 0.55,
+                    "view": "step_text",
+                    "subtype": "angular",
+                })
+
+        # Pattern for surface roughness
+        # e.g., SURFACE_ROUGHNESS('Ra', 1.6)
+        roughness_pattern = r"SURFACE_ROUGHNESS\s*\(\s*'([^']+)'\s*,\s*([\d.]+)\s*\)"
+        for match in re.finditer(roughness_pattern, step_text, re.IGNORECASE):
+            roughness_type = match.group(1)
+            roughness_value = float(match.group(2))
+            annotations.append({
+                "type": "surface_finish",
+                "text": f"{roughness_type} {roughness_value}",
+                "value": roughness_value,
+                "unit": "μm",
+                "confidence": 0.75,
+                "view": "step_text",
+                "subtype": roughness_type,
+            })
+
+        _log.debug(
+            f"Extracted {len(annotations)} PMI annotations from STEP text"
+        )
+
+        return annotations
 
     def _validate_cross_view(
         self, annotations: List[Dict[str, Any]]

@@ -132,31 +132,246 @@ class GeometryAnalysisModel(EnrichmentModel):
 
     def _analyze_item(
         self, doc: CADlingDocument, item: CADItem
-    ) -> Optional[dict]:
+    ) -> dict:
         """Analyze a single CAD item.
+
+        Uses multi-strategy approach:
+        1. OCC shape analysis (if pythonocc available)
+        2. Trimesh analysis (if trimesh available)
+        3. STEP text parsing (for STEP format)
+        4. Item properties aggregation (last resort)
 
         Args:
             doc: Document containing the item
             item: Item to analyze
 
         Returns:
-            Dictionary with analysis results, or None if analysis failed
+            Dictionary with analysis results (never returns None)
         """
-        # Try to get shape from backend
+        # Strategy 1: Try to get shape from backend
         shape = self._get_shape_for_item(doc, item)
 
-        if shape is None:
-            _log.debug(f"Could not get shape for item {item.label.text}")
-            return None
+        if shape is not None:
+            # Analyze based on shape type
+            if self.has_pythonocc and self._is_occ_shape(shape):
+                result = self._analyze_occ_shape(shape)
+                if result:
+                    result["analysis_method"] = "pythonocc"
+                    return result
 
-        # Analyze based on shape type
-        if self.has_pythonocc and self._is_occ_shape(shape):
-            return self._analyze_occ_shape(shape)
-        elif self.has_trimesh and self._is_trimesh(shape):
-            return self._analyze_trimesh(shape)
-        else:
-            _log.debug(f"Unsupported shape type for item {item.label.text}")
-            return None
+            if self.has_trimesh and self._is_trimesh(shape):
+                result = self._analyze_trimesh(shape)
+                if result:
+                    result["analysis_method"] = "trimesh"
+                    return result
+
+        # Strategy 2: Parse from STEP text if available
+        format_str = str(doc.format).lower() if hasattr(doc, 'format') else ""
+        if format_str in ["step", "iges"]:
+            step_text = self._get_step_text(doc, item)
+            if step_text:
+                result = self._analyze_from_step_text(step_text)
+                if result:
+                    result["analysis_method"] = "step_text_parsing"
+                    return result
+
+        # Strategy 3: Aggregate from item properties
+        result = self._analyze_from_item_properties(item)
+        result["analysis_method"] = "item_properties"
+        return result
+
+    def _get_step_text(self, doc: CADlingDocument, item: CADItem) -> Optional[str]:
+        """Get STEP text from document or item.
+
+        Args:
+            doc: Document containing the item
+            item: Item to get text for
+
+        Returns:
+            STEP text or None
+        """
+        # Try item text
+        if hasattr(item, 'text') and item.text:
+            return item.text
+
+        # Try document raw content
+        if hasattr(doc, 'raw_content') and doc.raw_content:
+            return doc.raw_content
+
+        # Try backend content
+        if hasattr(doc, '_backend') and doc._backend:
+            if hasattr(doc._backend, 'content'):
+                return doc._backend.content
+
+        return None
+
+    def _analyze_from_step_text(self, step_text: str) -> Optional[dict]:
+        """Analyze geometry from STEP text parsing.
+
+        Extracts geometric properties directly from STEP entity text
+        without requiring OCC or trimesh.
+
+        Args:
+            step_text: STEP file content
+
+        Returns:
+            Dictionary with analysis results or None
+        """
+        import re
+
+        results = {
+            "source": "step_text_parsing",
+        }
+
+        # Extract CARTESIAN_POINT coordinates for bounding box
+        point_pattern = re.compile(
+            r"CARTESIAN_POINT\s*\([^)]*,\s*\(\s*([-\d.eE+]+)\s*,\s*([-\d.eE+]+)\s*,\s*([-\d.eE+]+)\s*\)\s*\)",
+            re.IGNORECASE
+        )
+
+        points = []
+        for match in point_pattern.finditer(step_text):
+            try:
+                x, y, z = float(match.group(1)), float(match.group(2)), float(match.group(3))
+                points.append((x, y, z))
+            except ValueError:
+                continue
+
+        if points:
+            xs = [p[0] for p in points]
+            ys = [p[1] for p in points]
+            zs = [p[2] for p in points]
+
+            xmin, xmax = min(xs), max(xs)
+            ymin, ymax = min(ys), max(ys)
+            zmin, zmax = min(zs), max(zs)
+
+            results["bounding_box"] = {
+                "xmin": xmin, "xmax": xmax,
+                "ymin": ymin, "ymax": ymax,
+                "zmin": zmin, "zmax": zmax,
+                "dx": xmax - xmin,
+                "dy": ymax - ymin,
+                "dz": zmax - zmin,
+            }
+
+            # Bounding box volume
+            bbox_vol = (xmax - xmin) * (ymax - ymin) * (zmax - zmin)
+            results["bounding_box_volume"] = bbox_vol
+
+            # Center of mass estimate (centroid of points)
+            results["center_of_mass"] = {
+                "x": sum(xs) / len(xs),
+                "y": sum(ys) / len(ys),
+                "z": sum(zs) / len(zs),
+            }
+
+        # Extract radius from CYLINDRICAL_SURFACE or CIRCLE
+        radius_pattern = re.compile(
+            r"(?:CYLINDRICAL_SURFACE|SPHERICAL_SURFACE|CIRCLE)\s*\([^,]*,[^,]*,\s*([-\d.eE+]+)\s*\)",
+            re.IGNORECASE
+        )
+
+        radii = []
+        for match in radius_pattern.finditer(step_text):
+            try:
+                radii.append(float(match.group(1)))
+            except ValueError:
+                continue
+
+        if radii:
+            results["detected_radii"] = radii
+            results["max_radius"] = max(radii)
+            results["min_radius"] = min(radii)
+
+        # Count topology entities for volume estimation
+        shell_count = len(re.findall(r"(?:CLOSED_SHELL|OPEN_SHELL)", step_text, re.IGNORECASE))
+        face_count = len(re.findall(r"ADVANCED_FACE", step_text, re.IGNORECASE))
+        edge_count = len(re.findall(r"EDGE_CURVE", step_text, re.IGNORECASE))
+
+        results["topology_counts"] = {
+            "shells": shell_count,
+            "faces": face_count,
+            "edges": edge_count,
+            "points": len(points),
+        }
+
+        # Estimate volume from bounding box with fill factor
+        if "bounding_box_volume" in results and results["bounding_box_volume"] > 0:
+            # Use empirical fill factor based on entity counts
+            fill_factor = 0.6 if shell_count > 0 else 0.4
+            results["volume"] = results["bounding_box_volume"] * fill_factor
+            results["volume_estimation_method"] = "bounding_box_fill_factor"
+
+        # Surface area estimation (rough)
+        if "bounding_box" in results:
+            bbox = results["bounding_box"]
+            # Surface area of bounding box
+            bbox_sa = 2 * (bbox["dx"] * bbox["dy"] + bbox["dy"] * bbox["dz"] + bbox["dx"] * bbox["dz"])
+            # Apply factor for typical solid
+            results["surface_area"] = bbox_sa * 0.8
+            results["surface_area_estimation_method"] = "bounding_box_factor"
+
+        # Compactness
+        if "volume" in results and "bounding_box_volume" in results and results["bounding_box_volume"] > 0:
+            results["compactness"] = results["volume"] / results["bounding_box_volume"]
+
+        # Surface to volume ratio
+        if "volume" in results and "surface_area" in results and results["volume"] > 0:
+            results["surface_to_volume_ratio"] = results["surface_area"] / results["volume"]
+
+        return results if len(results) > 1 else None
+
+    def _analyze_from_item_properties(self, item: CADItem) -> dict:
+        """Aggregate geometry analysis from item properties.
+
+        Uses pre-computed properties stored on the item as a fallback
+        when shape analysis is not available.
+
+        Args:
+            item: CAD item with properties
+
+        Returns:
+            Dictionary with analysis results
+        """
+        results = {
+            "source": "item_properties",
+        }
+
+        props = getattr(item, 'properties', {})
+
+        # Copy relevant geometry properties
+        if "bounding_box" in props:
+            results["bounding_box"] = props["bounding_box"]
+
+        if "volume" in props:
+            results["volume"] = props["volume"]
+
+        if "surface_area" in props:
+            results["surface_area"] = props["surface_area"]
+
+        if "center_of_mass" in props:
+            results["center_of_mass"] = props["center_of_mass"]
+
+        # Compute derived properties if base data available
+        bbox = results.get("bounding_box", {})
+        if bbox:
+            dx = bbox.get("dx", bbox.get("xmax", 0) - bbox.get("xmin", 0))
+            dy = bbox.get("dy", bbox.get("ymax", 0) - bbox.get("ymin", 0))
+            dz = bbox.get("dz", bbox.get("zmax", 0) - bbox.get("zmin", 0))
+
+            if "bounding_box_volume" not in results:
+                results["bounding_box_volume"] = dx * dy * dz
+
+        if "volume" in results and "bounding_box_volume" in results:
+            if results["bounding_box_volume"] > 0:
+                results["compactness"] = results["volume"] / results["bounding_box_volume"]
+
+        if "volume" in results and "surface_area" in results:
+            if results["volume"] > 0:
+                results["surface_to_volume_ratio"] = results["surface_area"] / results["volume"]
+
+        return results
 
     def _get_shape_for_item(
         self, doc: CADlingDocument, item: CADItem

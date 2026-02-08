@@ -1,0 +1,66 @@
+## Task: Fix CAD Script Errors
+
+The following CAD script was generated to match the part description below, but
+it failed during execution or validation. Your task is to fix the script so that
+it executes successfully and produces a valid, watertight solid.
+
+## Part Description
+
+{DESCRIPTION}
+
+## Previous Script (with errors)
+
+```
+{PREVIOUS_CODE}
+```
+
+## Errors Encountered
+
+The following errors occurred during execution or validation:
+
+{ERRORS}
+
+## Instructions
+
+1. Analyze each error message carefully:
+   - **Syntax errors**: Fix Python/OpenSCAD syntax issues.
+   - **API errors**: Correct method names, argument types, or call order.
+     Common CadQuery mistakes:
+       - Using `.fillet()` on edges that are too short for the radius
+       - Calling `.hole()` without being on the correct face/workplane
+       - Selector strings like `">Z"` on shapes with no matching geometry
+       - Missing `.workplane()` call after `.faces()` selector
+   - **Geometry errors**: Fix operations that produce invalid or degenerate
+     geometry (self-intersections, zero-thickness walls, inside-out solids).
+   - **Validation errors**: Ensure the final solid is manifold (watertight)
+     with no dangling edges or missing faces.
+
+2. Apply minimal changes to fix the issue. Do not rewrite the entire script
+   unless the approach is fundamentally wrong.
+
+3. If a fillet or chamfer fails because the radius is too large:
+   - Reduce the radius to a safe value
+   - Or remove the fillet/chamfer and add a comment
+
+4. If a boolean operation fails (cut, union, intersect):
+   - Ensure the tool body actually overlaps the target
+   - Add small clearance (0.01 mm) to cutting tools
+   - Check that both operands are valid solids
+
+5. Common fixes:
+   - Add `centered=(True, True, False)` to `.box()` for proper centering
+   - Use `.center(x, y)` to move workplane before placing features
+   - Ensure `.cutThruAll()` is called on a face workplane, not raw solid
+   - Replace `.faces(">Z").fillet(r)` with `.edges(">Z").fillet(r)` if needed
+   - Add `.workplane()` between `.faces()` and 2D sketch operations
+
+## Output Format
+
+Return the COMPLETE fixed script inside a single fenced code block.
+Do not return a diff or partial fix -- return the full corrected script.
+
+```python
+import cadquery as cq
+# ... your complete fixed code here ...
+result = ...
+```

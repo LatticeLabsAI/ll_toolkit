@@ -186,15 +186,15 @@ class HybridPipeline(BaseCADPipeline):
             rendered_views = document.metadata.get("rendered_views", {})
 
             if not rendered_views:
-                _log.warning("No rendered views found, skipping vision analysis")
-                return conv_res
+                _log.warning("No rendered views found, using text-only analysis fallback")
+                return self._text_only_analysis(conv_res)
 
             # Get VLM model
             vlm_model = self.vlm_options.vlm_model if self.vlm_options else None
 
             if not vlm_model:
-                _log.warning("No VLM model configured, skipping vision analysis")
-                return conv_res
+                _log.warning("No VLM model configured, using text-only analysis fallback")
+                return self._text_only_analysis(conv_res)
 
             _log.info(
                 f"Processing {len(rendered_views)} views with VLM: "
@@ -333,3 +333,96 @@ Format your response as a JSON array of annotations.
                 annotations.append(annotation_item)
 
         return annotations
+
+    def _text_only_analysis(self, conv_res: ConversionResult) -> ConversionResult:
+        """Fallback text-only analysis when VLM/rendered views unavailable.
+
+        Extracts annotations from STEP entity text, geometry analysis results,
+        and other text-based sources.
+
+        Args:
+            conv_res: Conversion result with document
+
+        Returns:
+            Updated conversion result with text-based annotations
+        """
+        from cadling.datamodel.stl import AnnotationItem
+
+        if not conv_res.document:
+            return conv_res
+
+        document = conv_res.document
+        annotations_added = 0
+
+        for item in document.items:
+            # Extract from geometry analysis
+            geometry_analysis = item.properties.get("geometry_analysis", {})
+            if geometry_analysis:
+                # Bounding box annotation
+                bbox = geometry_analysis.get("bounding_box", {})
+                if bbox:
+                    size_text = (
+                        f"{bbox.get('size_x', 0):.2f} x "
+                        f"{bbox.get('size_y', 0):.2f} x "
+                        f"{bbox.get('size_z', 0):.2f}"
+                    )
+                    annotation = AnnotationItem(
+                        label={"text": f"Bounding Box"},
+                        text=f"Dimensions: {size_text}",
+                        annotation_type="dimension",
+                        value=size_text,
+                        source_view="text_analysis",
+                    )
+                    document.add_item(annotation)
+                    annotations_added += 1
+
+                # Volume annotation
+                volume = geometry_analysis.get("volume")
+                if volume and volume > 0:
+                    annotation = AnnotationItem(
+                        label={"text": "Volume"},
+                        text=f"Volume: {volume:.4f}",
+                        annotation_type="dimension",
+                        value=str(volume),
+                        source_view="text_analysis",
+                    )
+                    document.add_item(annotation)
+                    annotations_added += 1
+
+            # Extract from surface analysis
+            surface_analysis = item.properties.get("surface_analysis", {})
+            if surface_analysis:
+                surface_type = surface_analysis.get("surface_type")
+                if surface_type and surface_type != "UNKNOWN":
+                    annotation = AnnotationItem(
+                        label={"text": "Surface Type"},
+                        text=f"Surface: {surface_type}",
+                        annotation_type="note",
+                        value=surface_type,
+                        source_view="text_analysis",
+                    )
+                    document.add_item(annotation)
+                    annotations_added += 1
+
+            # Extract from manufacturing features
+            mfg_features = item.properties.get("manufacturing_features", [])
+            for feature in mfg_features:
+                feature_type = feature.get("type", "unknown")
+                params = feature.get("parameters", {})
+                params_text = ", ".join(f"{k}={v}" for k, v in params.items())
+                annotation = AnnotationItem(
+                    label={"text": f"Feature: {feature_type}"},
+                    text=f"{feature_type}: {params_text}",
+                    annotation_type="note",
+                    value=params_text,
+                    source_view="text_analysis",
+                )
+                document.add_item(annotation)
+                annotations_added += 1
+
+        _log.info(
+            f"Text-only analysis added {annotations_added} annotations "
+            f"from geometry/surface/feature data"
+        )
+
+        return conv_res

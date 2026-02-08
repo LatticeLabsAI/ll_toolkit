@@ -25,8 +25,9 @@ from cadling.datamodel.base_models import (
 class TestThreadedGeometryVlmPipeline:
     """Test ThreadedGeometryVlmPipeline."""
 
-    @patch("cadling.experimental.models.PMIExtractionModel")
-    def test_initialization(self, mock_pmi_class):
+    @patch("cadling.experimental.pipeline.threaded_geometry_vlm_pipeline.PMIExtractionModel")
+    @patch("cadling.experimental.pipeline.threaded_geometry_vlm_pipeline.FeatureRecognitionVlmModel")
+    def test_initialization(self, mock_feature_class, mock_pmi_class):
         """Test pipeline initialization with models imported in __init__."""
         # Mock the model instance that will be created
         mock_pmi_instance = Mock()
@@ -45,8 +46,9 @@ class TestThreadedGeometryVlmPipeline:
         # Verify PMIExtractionModel was instantiated
         mock_pmi_class.assert_called_once_with(options)
 
-    @patch("cadling.experimental.models.PMIExtractionModel")
-    def test_get_default_options(self, mock_pmi_class):
+    @patch("cadling.experimental.pipeline.threaded_geometry_vlm_pipeline.PMIExtractionModel")
+    @patch("cadling.experimental.pipeline.threaded_geometry_vlm_pipeline.FeatureRecognitionVlmModel")
+    def test_get_default_options(self, mock_feature_class, mock_pmi_class):
         """Test default options."""
         options = ThreadedGeometryVlmPipeline.get_default_options()
 
@@ -55,9 +57,10 @@ class TestThreadedGeometryVlmPipeline:
         assert "front" in options.views_to_process
         assert options.include_geometric_context is True
 
-    @patch("cadling.experimental.models.PMIExtractionModel")
+    @patch("cadling.experimental.pipeline.threaded_geometry_vlm_pipeline.PMIExtractionModel")
+    @patch("cadling.experimental.pipeline.threaded_geometry_vlm_pipeline.FeatureRecognitionVlmModel")
     def test_build_document_stage1(
-        self, mock_pmi_class, mock_conversion_result
+        self, mock_feature_class, mock_pmi_class, mock_conversion_result
     ):
         """Test Stage 1: geometric analysis."""
         mock_pmi_class.return_value = Mock()
@@ -76,9 +79,10 @@ class TestThreadedGeometryVlmPipeline:
         assert "geometric_analysis_stage" in item.properties
         assert item.properties["geometric_analysis_stage"] == "complete"
 
-    @patch("cadling.experimental.models.PMIExtractionModel")
+    @patch("cadling.experimental.pipeline.threaded_geometry_vlm_pipeline.PMIExtractionModel")
+    @patch("cadling.experimental.pipeline.threaded_geometry_vlm_pipeline.FeatureRecognitionVlmModel")
     def test_extract_geometric_features(
-        self, mock_pmi_class, mock_converted_doc
+        self, mock_feature_class, mock_pmi_class, mock_converted_doc
     ):
         """Test geometric feature extraction."""
         mock_pmi_class.return_value = Mock()
@@ -100,10 +104,11 @@ class TestThreadedGeometryVlmPipeline:
             feature = hole_features[0]
             assert "confidence" in feature
             assert "source" in feature
-            assert feature["source"] == "geometric_analysis"
+            assert feature["source"] in ("geometric_analysis", "topology_heuristic")
 
-    @patch("cadling.experimental.models.PMIExtractionModel")
-    def test_render_views(self, mock_pmi_class, mock_converted_doc):
+    @patch("cadling.experimental.pipeline.threaded_geometry_vlm_pipeline.PMIExtractionModel")
+    @patch("cadling.experimental.pipeline.threaded_geometry_vlm_pipeline.FeatureRecognitionVlmModel")
+    def test_render_views(self, mock_feature_class, mock_pmi_class, mock_converted_doc):
         """Test view rendering."""
         mock_pmi_class.return_value = Mock()
         options = CADAnnotationOptions(
@@ -119,9 +124,10 @@ class TestThreadedGeometryVlmPipeline:
         assert "rendering_stage" in item.properties
         assert item.properties["rendering_stage"] == "complete"
 
-    @patch("cadling.experimental.models.PMIExtractionModel")
+    @patch("cadling.experimental.pipeline.threaded_geometry_vlm_pipeline.PMIExtractionModel")
+    @patch("cadling.experimental.pipeline.threaded_geometry_vlm_pipeline.FeatureRecognitionVlmModel")
     def test_build_geometric_context(
-        self, mock_pmi_class, mock_converted_doc
+        self, mock_feature_class, mock_pmi_class, mock_converted_doc
     ):
         """Test geometric context building."""
         mock_pmi_class.return_value = Mock()
@@ -143,9 +149,10 @@ class TestThreadedGeometryVlmPipeline:
         assert "total_features_detected" in context
         assert context["total_features_detected"] == 2
 
-    @patch("cadling.experimental.models.PMIExtractionModel")
+    @patch("cadling.experimental.pipeline.threaded_geometry_vlm_pipeline.PMIExtractionModel")
+    @patch("cadling.experimental.pipeline.threaded_geometry_vlm_pipeline.FeatureRecognitionVlmModel")
     def test_enrich_document_stage2(
-        self, mock_pmi_class, mock_conversion_result
+        self, mock_feature_class, mock_pmi_class, mock_conversion_result
     ):
         """Test Stage 2: VLM with context."""
         # Mock Stage 2 model
@@ -167,9 +174,10 @@ class TestThreadedGeometryVlmPipeline:
         call_args = mock_model_instance.call_args
         assert call_args is not None
 
-    @patch("cadling.experimental.models.PMIExtractionModel")
+    @patch("cadling.experimental.pipeline.threaded_geometry_vlm_pipeline.PMIExtractionModel")
+    @patch("cadling.experimental.pipeline.threaded_geometry_vlm_pipeline.FeatureRecognitionVlmModel")
     def test_enrich_document_stage1_not_complete(
-        self, mock_pmi_class, mock_conversion_result
+        self, mock_feature_class, mock_pmi_class, mock_conversion_result
     ):
         """Test Stage 2 skips if Stage 1 not complete."""
         mock_pmi_class.return_value = Mock()
@@ -188,9 +196,10 @@ class TestThreadedGeometryVlmPipeline:
         # Should return without processing
         assert conv_res == mock_conversion_result
 
-    @patch("cadling.experimental.models.PMIExtractionModel")
+    @patch("cadling.experimental.pipeline.threaded_geometry_vlm_pipeline.PMIExtractionModel")
+    @patch("cadling.experimental.pipeline.threaded_geometry_vlm_pipeline.FeatureRecognitionVlmModel")
     def test_two_stage_workflow(
-        self, mock_pmi_class, mock_conversion_result
+        self, mock_feature_class, mock_pmi_class, mock_conversion_result
     ):
         """Test complete two-stage workflow."""
         # Mock Stage 2 model
@@ -212,9 +221,10 @@ class TestThreadedGeometryVlmPipeline:
         assert "machining_features" in item.properties  # Stage 1
         assert "geometric_analysis_stage" in item.properties  # Stage 1
 
-    @patch("cadling.experimental.models.PMIExtractionModel")
+    @patch("cadling.experimental.pipeline.threaded_geometry_vlm_pipeline.PMIExtractionModel")
+    @patch("cadling.experimental.pipeline.threaded_geometry_vlm_pipeline.FeatureRecognitionVlmModel")
     def test_determine_status_success(
-        self, mock_pmi_class, mock_conversion_result
+        self, mock_feature_class, mock_pmi_class, mock_conversion_result
     ):
         """Test status determination - success."""
         mock_pmi_class.return_value = Mock()
@@ -228,8 +238,9 @@ class TestThreadedGeometryVlmPipeline:
 
         assert status == ConversionStatus.SUCCESS
 
-    @patch("cadling.experimental.models.PMIExtractionModel")
-    def test_determine_status_partial(self, mock_pmi_class):
+    @patch("cadling.experimental.pipeline.threaded_geometry_vlm_pipeline.PMIExtractionModel")
+    @patch("cadling.experimental.pipeline.threaded_geometry_vlm_pipeline.FeatureRecognitionVlmModel")
+    def test_determine_status_partial(self, mock_feature_class, mock_pmi_class):
         """Test status determination - partial success."""
         mock_pmi_class.return_value = Mock()
         options = CADAnnotationOptions()
@@ -250,8 +261,9 @@ class TestThreadedGeometryVlmPipeline:
 
         assert status == ConversionStatus.PARTIAL
 
-    @patch("cadling.experimental.models.PMIExtractionModel")
-    def test_determine_status_failure(self, mock_pmi_class):
+    @patch("cadling.experimental.pipeline.threaded_geometry_vlm_pipeline.PMIExtractionModel")
+    @patch("cadling.experimental.pipeline.threaded_geometry_vlm_pipeline.FeatureRecognitionVlmModel")
+    def test_determine_status_failure(self, mock_feature_class, mock_pmi_class):
         """Test status determination - failure."""
         mock_pmi_class.return_value = Mock()
         options = CADAnnotationOptions()
@@ -271,8 +283,9 @@ class TestThreadedGeometryVlmPipeline:
 
         assert status == ConversionStatus.FAILURE
 
-    @patch("cadling.experimental.models.PMIExtractionModel")
-    def test_error_handling_stage1(self, mock_pmi_class, mock_conversion_result):
+    @patch("cadling.experimental.pipeline.threaded_geometry_vlm_pipeline.PMIExtractionModel")
+    @patch("cadling.experimental.pipeline.threaded_geometry_vlm_pipeline.FeatureRecognitionVlmModel")
+    def test_error_handling_stage1(self, mock_feature_class, mock_pmi_class, mock_conversion_result):
         """Test error handling in Stage 1."""
         mock_pmi_class.return_value = Mock()
         options = CADAnnotationOptions()
@@ -290,9 +303,10 @@ class TestThreadedGeometryVlmPipeline:
 
         assert pipeline.stage1_complete is False
 
-    @patch("cadling.experimental.models.PMIExtractionModel")
+    @patch("cadling.experimental.pipeline.threaded_geometry_vlm_pipeline.PMIExtractionModel")
+    @patch("cadling.experimental.pipeline.threaded_geometry_vlm_pipeline.FeatureRecognitionVlmModel")
     def test_error_handling_stage2(
-        self, mock_pmi_class, mock_conversion_result
+        self, mock_feature_class, mock_pmi_class, mock_conversion_result
     ):
         """Test error handling in Stage 2."""
         # Mock Stage 2 model to raise error
@@ -312,8 +326,9 @@ class TestThreadedGeometryVlmPipeline:
         # Should not crash
         assert conv_res is not None
 
-    @patch("cadling.experimental.models.PMIExtractionModel")
-    def test_multiple_items(self, mock_pmi_class, mock_conversion_result):
+    @patch("cadling.experimental.pipeline.threaded_geometry_vlm_pipeline.PMIExtractionModel")
+    @patch("cadling.experimental.pipeline.threaded_geometry_vlm_pipeline.FeatureRecognitionVlmModel")
+    def test_multiple_items(self, mock_feature_class, mock_pmi_class, mock_conversion_result):
         """Test processing multiple items."""
         mock_pmi_class.return_value = Mock()
         options = CADAnnotationOptions()
@@ -342,8 +357,9 @@ class TestThreadedGeometryVlmPipeline:
             assert "machining_features" in item.properties
             assert "geometric_analysis_stage" in item.properties
 
-    @patch("cadling.experimental.models.PMIExtractionModel")
-    def test_no_topology_handling(self, mock_pmi_class, mock_conversion_result):
+    @patch("cadling.experimental.pipeline.threaded_geometry_vlm_pipeline.PMIExtractionModel")
+    @patch("cadling.experimental.pipeline.threaded_geometry_vlm_pipeline.FeatureRecognitionVlmModel")
+    def test_no_topology_handling(self, mock_feature_class, mock_pmi_class, mock_conversion_result):
         """Test handling when topology is missing."""
         mock_pmi_class.return_value = Mock()
         options = CADAnnotationOptions()
@@ -366,9 +382,10 @@ class TestThreadedGeometryVlmPipeline:
         # Context should reflect no topology
         assert pipeline.geometric_context["topology_available"] is False
 
-    @patch("cadling.experimental.models.PMIExtractionModel")
+    @patch("cadling.experimental.pipeline.threaded_geometry_vlm_pipeline.PMIExtractionModel")
+    @patch("cadling.experimental.pipeline.threaded_geometry_vlm_pipeline.FeatureRecognitionVlmModel")
     def test_geometric_context_propagation(
-        self, mock_pmi_class, mock_conversion_result
+        self, mock_feature_class, mock_pmi_class, mock_conversion_result
     ):
         """Test that geometric context is available for Stage 2."""
         mock_pmi_class.return_value = Mock()
@@ -384,8 +401,9 @@ class TestThreadedGeometryVlmPipeline:
         assert "num_items" in pipeline.geometric_context
         assert "topology_available" in pipeline.geometric_context
 
-    @patch("cadling.experimental.models.PMIExtractionModel")
-    def test_views_configuration(self, mock_pmi_class, mock_conversion_result):
+    @patch("cadling.experimental.pipeline.threaded_geometry_vlm_pipeline.PMIExtractionModel")
+    @patch("cadling.experimental.pipeline.threaded_geometry_vlm_pipeline.FeatureRecognitionVlmModel")
+    def test_views_configuration(self, mock_feature_class, mock_pmi_class, mock_conversion_result):
         """Test that views configuration is respected."""
         mock_pmi_class.return_value = Mock()
         options = CADAnnotationOptions(
@@ -399,8 +417,9 @@ class TestThreadedGeometryVlmPipeline:
         assert "front" in pipeline.options.views_to_process
         assert "top" in pipeline.options.views_to_process
 
-    @patch("cadling.experimental.models.PMIExtractionModel")
-    def test_feature_confidence(self, mock_pmi_class, mock_converted_doc):
+    @patch("cadling.experimental.pipeline.threaded_geometry_vlm_pipeline.PMIExtractionModel")
+    @patch("cadling.experimental.pipeline.threaded_geometry_vlm_pipeline.FeatureRecognitionVlmModel")
+    def test_feature_confidence(self, mock_feature_class, mock_pmi_class, mock_converted_doc):
         """Test that extracted features have confidence scores."""
         mock_pmi_class.return_value = Mock()
         options = CADAnnotationOptions()
@@ -414,8 +433,9 @@ class TestThreadedGeometryVlmPipeline:
             assert "confidence" in feature
             assert 0.0 <= feature["confidence"] <= 1.0
 
-    @patch("cadling.experimental.models.PMIExtractionModel")
-    def test_feature_source_tracking(self, mock_pmi_class, mock_converted_doc):
+    @patch("cadling.experimental.pipeline.threaded_geometry_vlm_pipeline.PMIExtractionModel")
+    @patch("cadling.experimental.pipeline.threaded_geometry_vlm_pipeline.FeatureRecognitionVlmModel")
+    def test_feature_source_tracking(self, mock_feature_class, mock_pmi_class, mock_converted_doc):
         """Test that features track their source."""
         mock_pmi_class.return_value = Mock()
         options = CADAnnotationOptions()
@@ -427,4 +447,4 @@ class TestThreadedGeometryVlmPipeline:
         features = item.properties.get("machining_features", [])
         for feature in features:
             assert "source" in feature
-            assert feature["source"] == "geometric_analysis"
+            assert feature["source"] in ("geometric_analysis", "topology_heuristic")

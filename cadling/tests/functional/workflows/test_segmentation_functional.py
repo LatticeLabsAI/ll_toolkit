@@ -288,7 +288,8 @@ class TestSegmentationFunctional:
 
                 output_manager.save_json(
                     segmentation_results,
-                    "segmentation_results.json"
+                    "segmentation_results.json",
+                    "outputs"
                 )
                 logger.info("Segmentation results saved to segmentation_results.json")
 
@@ -304,7 +305,8 @@ class TestSegmentationFunctional:
                 }
                 output_manager.save_json(
                     detailed_predictions,
-                    "detailed_predictions.json"
+                    "detailed_predictions.json",
+                    "outputs"
                 )
                 logger.info("Detailed predictions saved to detailed_predictions.json")
 
@@ -326,6 +328,9 @@ class TestSegmentationFunctional:
                     "validation_results.json",
                     "validation"
                 )
+
+            # Create summary report
+            output_manager.create_summary_report()
 
             # Final summary
             logger.info("="*80)
@@ -507,8 +512,11 @@ class TestSegmentationFunctional:
                     "results": batch_results
                 }
 
-                output_manager.save_json(batch_summary, "batch_segmentation_results.json")
+                output_manager.save_json(batch_summary, "batch_segmentation_results.json", "reports")
                 logger.info("Batch results saved to batch_segmentation_results.json")
+
+            # Create summary report
+            output_manager.create_summary_report()
 
             # Final summary
             logger.info("="*80)

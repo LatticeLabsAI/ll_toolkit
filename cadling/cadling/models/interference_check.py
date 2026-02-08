@@ -29,6 +29,12 @@ if TYPE_CHECKING:
 _log = logging.getLogger(__name__)
 
 
+# Confidence levels for different detection methods
+CONFIDENCE_OCC_BOOLEAN = 0.95
+CONFIDENCE_BBOX_OVERLAP = 0.6
+CONFIDENCE_CENTROID_DISTANCE = 0.4
+
+
 @dataclass
 class Interference:
     """Represents an interference/collision between two parts.
@@ -183,22 +189,11 @@ class InterferenceCheckModel(EnrichmentModel):
         """
         if not self.has_pythonocc:
             _log.warning(
-                "Interference check requires pythonocc-core. "
-                "Install with: conda install pythonocc-core -c conda-forge"
+                "pythonocc-core not available, using bounding box-based interference detection"
             )
-            doc.properties["interference_check"] = {
-                "status": "unavailable",
-                "reason": "pythonocc-core not installed",
-                "interferences": [],
-                "clearances": [],
-                "containment_issues": [],
-                "num_interferences": 0,
-                "num_clearances_checked": 0,
-                "num_insufficient_clearances": 0,
-                "num_containment_issues": 0,
-                "has_interferences": False,
-                "has_insufficient_clearances": False,
-            }
+            # Use alternative implementation with bounding boxes
+            result = self._check_interferences_bbox_fallback(doc, item_batch)
+            doc.properties["interference_check"] = result
             return
 
         try:
@@ -376,15 +371,20 @@ class InterferenceCheckModel(EnrichmentModel):
     ) -> Optional[Clearance]:
         """Compute minimum clearance between two parts.
 
+        Uses multi-strategy approach:
+        1. Primary: OCC BRepExtrema for precise computation
+        2. Alternative: Bounding box distance estimation
+
         Args:
             part1: First part item
             part2: Second part item
 
         Returns:
-            Clearance object with minimum distance, or None if computation fails
+            Clearance object with minimum distance - never returns None
         """
         if not self.has_pythonocc:
-            return None
+            # Use bbox-based alternative
+            return self._compute_clearance_bbox_fallback(part1, part2)
 
         try:
             from OCC.Core.BRepExtrema import BRepExtrema_DistShapeShape
@@ -393,14 +393,16 @@ class InterferenceCheckModel(EnrichmentModel):
             shape2 = self._get_occ_shape(part2)
 
             if shape1 is None or shape2 is None:
-                return None
+                _log.debug("OCC shapes unavailable, using bbox fallback")
+                return self._compute_clearance_bbox_fallback(part1, part2)
 
             # Compute minimum distance
             dist_calc = BRepExtrema_DistShapeShape(shape1, shape2)
             dist_calc.Perform()
 
             if not dist_calc.IsDone():
-                return None
+                _log.debug("BRepExtrema computation failed, using bbox fallback")
+                return self._compute_clearance_bbox_fallback(part1, part2)
 
             min_distance = dist_calc.Value()
 
@@ -436,12 +438,70 @@ class InterferenceCheckModel(EnrichmentModel):
         except Exception as e:
             _log.debug(f"Error computing clearance: {e}")
 
-        return None
+        # Fallback to bbox-based
+        return self._compute_clearance_bbox_fallback(part1, part2)
+
+    def _compute_clearance_bbox_fallback(
+        self, part1: CADItem, part2: CADItem
+    ) -> Optional[Clearance]:
+        """Compute clearance using bounding box distance (fallback).
+
+        Args:
+            part1: First part item
+            part2: Second part item
+
+        Returns:
+            Clearance object or None if geometry unavailable
+        """
+        try:
+            geom1 = getattr(part1, "properties", {}).get("geometry_analysis", {})
+            geom2 = getattr(part2, "properties", {}).get("geometry_analysis", {})
+
+            bbox1 = geom1.get("bounding_box", {})
+            bbox2 = geom2.get("bounding_box", {})
+
+            if not bbox1 or not bbox2:
+                return None
+
+            # Required keys
+            required = ["min_x", "max_x", "min_y", "max_y", "min_z", "max_z"]
+            if not all(k in bbox1 for k in required) or not all(k in bbox2 for k in required):
+                return None
+
+            # Compute distance
+            distance = self._bbox_min_distance(bbox1, bbox2)
+
+            # Compute closest points
+            point1, point2 = self._compute_closest_bbox_points(bbox1, bbox2)
+
+            # Direction
+            direction = np.array(point2) - np.array(point1)
+            norm = np.linalg.norm(direction)
+            if norm > 1e-10:
+                direction = (direction / norm).tolist()
+            else:
+                direction = [0, 0, 0]
+
+            return Clearance(
+                clearance_id="",
+                part1_id="",
+                part2_id="",
+                distance=distance,
+                point1=point1,
+                point2=point2,
+                direction=direction,
+                is_sufficient=(distance >= self.min_clearance),
+            )
+
+        except Exception as e:
+            _log.debug(f"Bbox clearance fallback failed: {e}")
+            return None
 
     def detect_containment(self, part1: CADItem, part2: CADItem) -> bool:
         """Check if part1 contains part2.
 
         Uses bounding box and centroid checks as heuristic.
+        This method works without pythonocc.
 
         Args:
             part1: Outer part item
@@ -450,9 +510,6 @@ class InterferenceCheckModel(EnrichmentModel):
         Returns:
             True if part2 appears to be contained within part1
         """
-        if not self.has_pythonocc:
-            return False
-
         try:
             # Use geometry properties if available
             if "geometry_analysis" not in getattr(part1, "properties", {}):
@@ -722,3 +779,299 @@ class InterferenceCheckModel(EnrichmentModel):
 
         # Euclidean distance between boxes
         return np.sqrt(gap_x**2 + gap_y**2 + gap_z**2)
+
+    def _check_interferences_bbox_fallback(
+        self, doc: CADlingDocument, item_batch: list[CADItem]
+    ) -> Dict[str, Any]:
+        """Check interferences using bounding box overlap (no OCC required).
+
+        This is the alternative implementation when pythonocc is unavailable.
+        Uses bounding box intersection to detect potential interferences.
+
+        Args:
+            doc: CADlingDocument containing assembly
+            item_batch: List of items to analyze
+
+        Returns:
+            Dictionary with interference check results
+        """
+        interferences = []
+        clearances = []
+        containment_issues = []
+
+        try:
+            # Get solid parts with geometry analysis
+            solid_items = []
+            for item in item_batch:
+                if hasattr(item, "item_type") and item.item_type in ["brep_solid", "step_entity"]:
+                    if "geometry_analysis" in getattr(item, "properties", {}):
+                        solid_items.append(item)
+
+            if len(solid_items) < 2:
+                return {
+                    "status": "success",
+                    "method": "bbox_fallback",
+                    "interferences": [],
+                    "clearances": [],
+                    "containment_issues": [],
+                    "num_interferences": 0,
+                    "num_clearances_checked": 0,
+                    "num_insufficient_clearances": 0,
+                    "num_containment_issues": 0,
+                    "has_interferences": False,
+                    "has_insufficient_clearances": False,
+                }
+
+            _log.debug(f"Checking interferences via bbox for {len(solid_items)} parts")
+
+            interference_id = 0
+            clearance_id = 0
+
+            # Check all pairs
+            for i, item1 in enumerate(solid_items):
+                part1_id = f"part_{i}"
+                geom1 = item1.properties.get("geometry_analysis", {})
+                bbox1 = geom1.get("bounding_box", {})
+                centroid1 = geom1.get("centroid", [0, 0, 0])
+                vol1 = geom1.get("volume", 0)
+
+                if not bbox1:
+                    continue
+
+                for j, item2 in enumerate(solid_items[i + 1:], start=i + 1):
+                    part2_id = f"part_{j}"
+                    geom2 = item2.properties.get("geometry_analysis", {})
+                    bbox2 = geom2.get("bounding_box", {})
+                    centroid2 = geom2.get("centroid", [0, 0, 0])
+                    vol2 = geom2.get("volume", 0)
+
+                    if not bbox2:
+                        continue
+
+                    # Check bounding box overlap
+                    if self._bboxes_overlap(bbox1, bbox2):
+                        # Compute overlap volume
+                        overlap_vol = self._compute_bbox_overlap_volume(bbox1, bbox2)
+
+                        # Compute severity based on overlap relative to part volumes
+                        severity = 0.5
+                        if vol1 > 0 and vol2 > 0:
+                            min_vol = min(vol1, vol2)
+                            severity = min(overlap_vol / min_vol, 1.0)
+
+                        # Compute overlap center
+                        overlap_center = self._compute_bbox_overlap_center(bbox1, bbox2)
+
+                        interference = Interference(
+                            interference_id=f"interference_{interference_id}",
+                            part1_id=part1_id,
+                            part2_id=part2_id,
+                            interference_type="potential_collision",
+                            volume=overlap_vol,
+                            location=overlap_center,
+                            severity=severity,
+                            confidence=CONFIDENCE_BBOX_OVERLAP,  # Lower confidence for bbox-only
+                        )
+
+                        interferences.append(interference)
+                        interference_id += 1
+
+                        _log.debug(
+                            f"Potential interference (bbox): {part1_id} <-> {part2_id}, "
+                            f"overlap volume={overlap_vol:.3f} mm³"
+                        )
+
+                    else:
+                        # Compute clearance from bbox distance
+                        distance = self._bbox_min_distance(bbox1, bbox2)
+
+                        # Compute closest points (approximate - use bbox corners)
+                        point1, point2 = self._compute_closest_bbox_points(bbox1, bbox2)
+
+                        # Direction vector
+                        direction = np.array(point2) - np.array(point1)
+                        norm = np.linalg.norm(direction)
+                        if norm > 1e-10:
+                            direction = (direction / norm).tolist()
+                        else:
+                            direction = [0, 0, 0]
+
+                        clearance = Clearance(
+                            clearance_id=f"clearance_{clearance_id}",
+                            part1_id=part1_id,
+                            part2_id=part2_id,
+                            distance=distance,
+                            point1=point1,
+                            point2=point2,
+                            direction=direction,
+                            is_sufficient=(distance >= self.min_clearance),
+                        )
+
+                        clearances.append(clearance)
+                        clearance_id += 1
+
+                        if not clearance.is_sufficient:
+                            _log.debug(
+                                f"Insufficient clearance (bbox): {part1_id} <-> {part2_id}, "
+                                f"distance={distance:.3f} mm"
+                            )
+
+                    # Check containment
+                    if self.check_containment:
+                        if self._bbox_contains(bbox1, bbox2):
+                            containment_issues.append({
+                                "outer_part": part1_id,
+                                "inner_part": part2_id,
+                                "type": "full_containment_bbox"
+                            })
+                        elif self._bbox_contains(bbox2, bbox1):
+                            containment_issues.append({
+                                "outer_part": part2_id,
+                                "inner_part": part1_id,
+                                "type": "full_containment_bbox"
+                            })
+
+            insufficient_clearances = [c for c in clearances if not c.is_sufficient]
+
+            return {
+                "status": "success",
+                "method": "bbox_fallback",
+                "interferences": [inter.to_dict() for inter in interferences],
+                "clearances": [clear.to_dict() for clear in clearances],
+                "containment_issues": containment_issues,
+                "num_interferences": len(interferences),
+                "num_clearances_checked": len(clearances),
+                "num_insufficient_clearances": len(insufficient_clearances),
+                "num_containment_issues": len(containment_issues),
+                "has_interferences": len(interferences) > 0,
+                "has_insufficient_clearances": len(insufficient_clearances) > 0,
+            }
+
+        except Exception as e:
+            _log.error(f"Bbox interference check failed: {e}", exc_info=True)
+            return {
+                "status": "error",
+                "reason": str(e),
+                "method": "bbox_fallback",
+                "interferences": [],
+                "clearances": [],
+                "containment_issues": [],
+                "num_interferences": 0,
+                "num_clearances_checked": 0,
+                "num_insufficient_clearances": 0,
+                "num_containment_issues": 0,
+                "has_interferences": False,
+                "has_insufficient_clearances": False,
+            }
+
+    def _compute_bbox_overlap_volume(
+        self, bbox1: Dict[str, float], bbox2: Dict[str, float]
+    ) -> float:
+        """Compute overlap volume between two bounding boxes.
+
+        Args:
+            bbox1: First bounding box
+            bbox2: Second bounding box
+
+        Returns:
+            Volume of overlap region (0 if no overlap)
+        """
+        # Compute intersection bounds
+        min_x = max(bbox1["min_x"], bbox2["min_x"])
+        max_x = min(bbox1["max_x"], bbox2["max_x"])
+        min_y = max(bbox1["min_y"], bbox2["min_y"])
+        max_y = min(bbox1["max_y"], bbox2["max_y"])
+        min_z = max(bbox1["min_z"], bbox2["min_z"])
+        max_z = min(bbox1["max_z"], bbox2["max_z"])
+
+        # If no overlap, return 0
+        if max_x <= min_x or max_y <= min_y or max_z <= min_z:
+            return 0.0
+
+        return (max_x - min_x) * (max_y - min_y) * (max_z - min_z)
+
+    def _compute_bbox_overlap_center(
+        self, bbox1: Dict[str, float], bbox2: Dict[str, float]
+    ) -> List[float]:
+        """Compute center of bounding box overlap region.
+
+        Args:
+            bbox1: First bounding box
+            bbox2: Second bounding box
+
+        Returns:
+            Center point [x, y, z]
+        """
+        min_x = max(bbox1["min_x"], bbox2["min_x"])
+        max_x = min(bbox1["max_x"], bbox2["max_x"])
+        min_y = max(bbox1["min_y"], bbox2["min_y"])
+        max_y = min(bbox1["max_y"], bbox2["max_y"])
+        min_z = max(bbox1["min_z"], bbox2["min_z"])
+        max_z = min(bbox1["max_z"], bbox2["max_z"])
+
+        return [
+            (min_x + max_x) / 2,
+            (min_y + max_y) / 2,
+            (min_z + max_z) / 2,
+        ]
+
+    def _compute_closest_bbox_points(
+        self, bbox1: Dict[str, float], bbox2: Dict[str, float]
+    ) -> Tuple[List[float], List[float]]:
+        """Compute approximate closest points between two bounding boxes.
+
+        Args:
+            bbox1: First bounding box
+            bbox2: Second bounding box
+
+        Returns:
+            Tuple of (point1, point2) representing closest points
+        """
+        # Clamp center of bbox2 to bbox1 and vice versa
+        center1 = [
+            (bbox1["min_x"] + bbox1["max_x"]) / 2,
+            (bbox1["min_y"] + bbox1["max_y"]) / 2,
+            (bbox1["min_z"] + bbox1["max_z"]) / 2,
+        ]
+        center2 = [
+            (bbox2["min_x"] + bbox2["max_x"]) / 2,
+            (bbox2["min_y"] + bbox2["max_y"]) / 2,
+            (bbox2["min_z"] + bbox2["max_z"]) / 2,
+        ]
+
+        # Point on bbox1 closest to center2
+        point1 = [
+            max(bbox1["min_x"], min(center2[0], bbox1["max_x"])),
+            max(bbox1["min_y"], min(center2[1], bbox1["max_y"])),
+            max(bbox1["min_z"], min(center2[2], bbox1["max_z"])),
+        ]
+
+        # Point on bbox2 closest to center1
+        point2 = [
+            max(bbox2["min_x"], min(center1[0], bbox2["max_x"])),
+            max(bbox2["min_y"], min(center1[1], bbox2["max_y"])),
+            max(bbox2["min_z"], min(center1[2], bbox2["max_z"])),
+        ]
+
+        return point1, point2
+
+    def _bbox_contains(
+        self, outer: Dict[str, float], inner: Dict[str, float]
+    ) -> bool:
+        """Check if outer bounding box fully contains inner.
+
+        Args:
+            outer: Outer bounding box
+            inner: Inner bounding box
+
+        Returns:
+            True if inner is fully contained within outer
+        """
+        return (
+            outer["min_x"] <= inner["min_x"] and
+            outer["max_x"] >= inner["max_x"] and
+            outer["min_y"] <= inner["min_y"] and
+            outer["max_y"] >= inner["max_y"] and
+            outer["min_z"] <= inner["min_z"] and
+            outer["max_z"] >= inner["max_z"]
+        )

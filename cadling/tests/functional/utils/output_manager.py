@@ -13,12 +13,12 @@ import json
 class OutputManager:
     """Manages output directories and artifacts for functional tests."""
 
-    def __init__(self, base_dir: Optional[Path] = None, test_name: Optional[str] = None):
+    def __init__(self, test_name: Optional[str] = None, base_dir: Optional[Path] = None):
         """Initialize output manager.
 
         Args:
-            base_dir: Base directory for outputs (defaults to ./test_outputs)
             test_name: Name of the test (used for directory naming)
+            base_dir: Base directory for outputs (defaults to ./test_outputs)
         """
         if base_dir is None:
             base_dir = Path.cwd() / "test_outputs"
@@ -37,7 +37,9 @@ class OutputManager:
             'outputs': self.run_dir / 'outputs',
             'intermediates': self.run_dir / 'intermediates',
             'visualizations': self.run_dir / 'visualizations',
-            'reports': self.run_dir / 'reports'
+            'reports': self.run_dir / 'reports',
+            'validation': self.run_dir / 'validation',
+            'artifacts': self.run_dir / 'artifacts',
         }
 
         for subdir in self.subdirs.values():
@@ -49,7 +51,9 @@ class OutputManager:
             'outputs': [],
             'intermediates': [],
             'visualizations': [],
-            'reports': []
+            'reports': [],
+            'validation': [],
+            'artifacts': [],
         }
 
     def get_log_dir(self) -> Path:
@@ -102,7 +106,7 @@ class OutputManager:
         """Save an artifact to the appropriate directory.
 
         Args:
-            category: Category (logs, outputs, intermediates, visualizations, reports)
+            category: Category (logs, outputs, intermediates, visualizations, reports, validation, artifacts)
             filename: Name of the file
             content: Content to save
             format: Format ('text', 'json', 'binary')
@@ -226,3 +230,42 @@ class OutputManager:
             Path to run directory
         """
         return self.run_dir
+
+    @property
+    def artifacts_dir(self) -> Path:
+        """Get the artifacts directory path.
+
+        Returns:
+            Path to artifacts directory
+        """
+        return self.subdirs['artifacts']
+
+    def save_json(self, data: Any, filename: str, category: str = 'outputs') -> Path:
+        """Save data as JSON file.
+
+        Convenience method for saving JSON data to the outputs directory.
+
+        Args:
+            data: Data to serialize as JSON
+            filename: Name of the file (should end in .json)
+            category: Category directory (default: 'outputs')
+
+        Returns:
+            Path to saved file
+        """
+        return self.save_artifact(category, filename, data, format='json')
+
+    def save_text(self, content: str, filename: str, category: str = 'outputs') -> Path:
+        """Save text content to a file.
+
+        Convenience method for saving text data.
+
+        Args:
+            content: Text content to save
+            filename: Name of the file
+            category: Category directory (default: 'outputs')
+
+        Returns:
+            Path to saved file
+        """
+        return self.save_artifact(category, filename, content, format='text')

@@ -11,17 +11,27 @@ Tests cover:
 """
 
 import pytest
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 from cadling.experimental.pipeline import MultiViewFusionPipeline
 from cadling.experimental.datamodel import MultiViewOptions, ViewConfig
-from cadling.datamodel.base_models import ConversionResult, ConversionStatus
+from cadling.datamodel.base_models import (
+    ConversionResult,
+    ConversionStatus,
+    CADInputDocument,
+    InputFormat,
+)
 
 
 @pytest.fixture
 def mock_input_doc():
     """Create a mock input document."""
-    input_doc = Mock()
+    input_doc = CADInputDocument(
+        file=Path("/tmp/test.step"),
+        format=InputFormat.STEP,
+        document_hash="test123",
+    )
     backend = Mock()
     backend.convert = Mock()
     input_doc._backend = backend
@@ -45,8 +55,7 @@ def mock_converted_doc():
 @pytest.fixture
 def mock_conversion_result(mock_input_doc, mock_converted_doc):
     """Create a mock conversion result."""
-    conv_res = ConversionResult()
-    conv_res.input = mock_input_doc
+    conv_res = ConversionResult(input=mock_input_doc)
     mock_input_doc._backend.convert.return_value = mock_converted_doc
     return conv_res
 
@@ -346,7 +355,12 @@ class TestMultiViewFusionPipeline:
         options = MultiViewOptions()
         pipeline = MultiViewFusionPipeline(options)
 
-        conv_res = ConversionResult()
+        mock_input = CADInputDocument(
+            file=Path("/tmp/test.step"),
+            format=InputFormat.STEP,
+            document_hash="test123",
+        )
+        conv_res = ConversionResult(input=mock_input)
         conv_res.document = None
 
         status = pipeline._determine_status(conv_res)

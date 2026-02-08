@@ -4,6 +4,8 @@ This module provides graph neural network components:
 - EdgeConvNet: EdgeConv-based mesh segmentation GNN
 - GraphAttentionEncoder: GAT layers for B-Rep face graphs
 - InstanceSegmentationHead: Instance clustering head
+- UVNetEncoder: UV-Net face encoder with surface CNN + graph attention
+- BRepNetEncoder: BRepNet coedge convolution encoder
 """
 
 from __future__ import annotations
@@ -16,6 +18,8 @@ from .instance_segmentation import (
     cluster_embeddings,
     compute_instance_iou,
 )
+from .uv_net import UVGridSampler, SurfaceCNN, UVNetEncoder
+from .brep_net import CoedgeData, CoedgeConvLayer, BRepNetEncoder
 
 __all__ = [
     "EdgeConvNet",
@@ -28,4 +32,10 @@ __all__ = [
     "discriminative_loss",
     "cluster_embeddings",
     "compute_instance_iou",
+    "UVGridSampler",
+    "SurfaceCNN",
+    "UVNetEncoder",
+    "CoedgeData",
+    "CoedgeConvLayer",
+    "BRepNetEncoder",
 ]

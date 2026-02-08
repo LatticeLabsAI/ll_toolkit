@@ -189,7 +189,15 @@ class GPTTokenizer(CADTokenizer):
             for tid in token_ids:
                 try:
                     tokens.append(self.encoding.decode([tid]))
-                except Exception:
+                except (KeyError, ValueError) as e:
+                    # Expected: token ID not in vocabulary or invalid value
+                    _log.debug("Token ID %d decode failed (expected): %s", tid, e)
+                    tokens.append(f"<{tid}>")
+                except Exception as e:
+                    # Unexpected error — log at warning and still continue
+                    _log.warning(
+                        "Unexpected error decoding token ID %d: %s", tid, e,
+                    )
                     tokens.append(f"<{tid}>")
             return tokens
         else:

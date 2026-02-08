@@ -1,0 +1,60 @@
+## Task
+
+Generate a complete, executable CAD script that creates the 3D solid model
+described below. The script must be syntactically valid and produce a single
+closed (manifold, watertight) solid body.
+
+## Part Description
+
+{DESCRIPTION}
+{IMAGE_SECTION}
+
+## Instructions
+
+1. Read the part description carefully and identify:
+   - Overall shape and dimensions
+   - Key features (holes, fillets, chamfers, bosses, ribs, slots, etc.)
+   - Relationships between features (concentric, coplanar, symmetric, etc.)
+   - Any specified tolerances or constraints
+
+2. Plan the modeling sequence:
+   - Start with the main body / base shape
+   - Add secondary features in order of importance
+   - Apply finishing operations (fillets, chamfers) last
+
+3. Write the complete script:
+   - Define parametric variables at the top for all key dimensions
+   - Add clear comments explaining each modeling step
+   - Use descriptive variable names
+   - Follow the API conventions from the system prompt
+
+4. If dimensions are not explicitly stated in the description, choose
+   reasonable engineering values:
+   - Small parts: 10-100 mm range
+   - Medium parts: 50-300 mm range
+   - Large parts: 200-1000 mm range
+   - Wall thicknesses: 2-10 mm typical
+   - Fillet radii: 1-5 mm typical
+   - Bolt holes: M3 (3.2mm), M4 (4.2mm), M5 (5.2mm), M6 (6.5mm),
+     M8 (8.5mm), M10 (10.5mm) clearance diameters
+
+5. Output ONLY the code inside a fenced code block. Do not include any
+   explanatory text outside the code block.
+
+## Output Format
+
+Return your script inside a single fenced code block:
+
+```python
+# (for CadQuery scripts)
+import cadquery as cq
+# ... your code here ...
+result = ...
+```
+
+or
+
+```openscad
+// (for OpenSCAD scripts)
+// ... your code here ...
+```

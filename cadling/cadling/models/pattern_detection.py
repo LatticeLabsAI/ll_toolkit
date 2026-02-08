@@ -111,7 +111,13 @@ class PatternDetectionModel(EnrichmentModel):
         
         if len(features) < self.min_pattern_count:
             _log.debug(f"Not enough features ({len(features)}) for pattern detection")
-            return None
+            return {
+                "linear_patterns": [],
+                "circular_patterns": [],
+                "mirror_patterns": [],
+                "num_features_analyzed": len(features),
+                "total_patterns_found": 0,
+            }
         
         results = {}
         
@@ -138,7 +144,14 @@ class PatternDetectionModel(EnrichmentModel):
             len(results.get("mirror_patterns", []))
         )
         
-        return results if results.get("total_patterns_found", 0) > 0 else None
+        # Always return results even if no patterns found
+        if "linear_patterns" not in results:
+            results["linear_patterns"] = []
+        if "circular_patterns" not in results:
+            results["circular_patterns"] = []
+        if "mirror_patterns" not in results:
+            results["mirror_patterns"] = []
+        return results
 
     def _extract_features_from_items(
         self,
@@ -158,19 +171,35 @@ class PatternDetectionModel(EnrichmentModel):
             # Check for geometry analysis properties
             if "geometry_analysis" in item.properties:
                 geom = item.properties["geometry_analysis"]
-                
+
+                # Handle both 'centroid' and 'center_of_mass' keys for compatibility
+                position = geom.get("centroid") or geom.get("center_of_mass", [0, 0, 0])
+                # Normalize center_of_mass dict to list if needed
+                if isinstance(position, dict):
+                    position = [position.get("x", 0), position.get("y", 0), position.get("z", 0)]
+
+                # Extract feature type from label or feature_recognition
+                feature_type = "unknown"
+                if hasattr(item, 'label') and hasattr(item.label, 'text'):
+                    feature_type = item.label.text
+                elif "feature_recognition" in item.properties:
+                    feat_rec = item.properties["feature_recognition"]
+                    if isinstance(feat_rec, dict) and "feature_type" in feat_rec:
+                        feature_type = feat_rec["feature_type"]
+
                 feature = {
                     "item": item,
-                    "position": geom.get("centroid", [0, 0, 0]),
-                    "type": item.label.text if hasattr(item, 'label') else "unknown",
+                    "position": position,
+                    "type": feature_type,
                     "volume": geom.get("volume", 0),
                     "bbox": geom.get("bounding_box", {}),
                 }
-                
+
                 # Add surface analysis if available
                 if "surface_analysis" in item.properties:
                     surf = item.properties["surface_analysis"]
-                    feature["surface_type"] = surf.get("surface_type_distribution", {})
+                    # Handle both 'surface_type_distribution' and 'surface_type' keys
+                    feature["surface_type"] = surf.get("surface_type_distribution") or surf.get("surface_type", {})
                 
                 features.append(feature)
             
@@ -587,8 +616,8 @@ class PatternDetectionModel(EnrichmentModel):
             if len(inliers) >= self.min_pattern_count:
                 return center, radius, inliers
             
-        except np.linalg.LinAlgError:
-            pass
+        except np.linalg.LinAlgError as e:
+            _log.debug(f"Circle fitting failed (singular matrix): {e}")
         
         return None
 

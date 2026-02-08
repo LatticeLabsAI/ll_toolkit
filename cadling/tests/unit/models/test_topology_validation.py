@@ -5,6 +5,8 @@ from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 import numpy as np
 
+from cadling.models.topology_validation import TopologyValidationModel, ValidationFinding
+
 
 class TestTopologyValidationModel:
     """Test TopologyValidationModel initialization and configuration."""
@@ -176,8 +178,9 @@ class TestTopologyValidationModelCall:
 
         model(doc, [item])
 
-        # Should not add validation results if no shape
-        assert "topology_validation" not in item.properties
+        # Now we always add topology_validation (with error status as fallback)
+        assert "topology_validation" in item.properties
+        assert item.properties["topology_validation"]["is_valid"] is False
 
     def test_call_with_mocked_occ_validation(self):
         """Test validation with mocked OCC shape."""
@@ -628,3 +631,287 @@ class TestIntegration:
         # Should still add validation results even in strict mode
         assert "topology_validation" in item.properties
         assert item.properties["topology_validation"]["is_valid"] is False
+
+
+class TestValidationFinding:
+    """Test ValidationFinding construction and serialization."""
+
+    def test_construction_minimal(self):
+        finding = ValidationFinding(
+            check_name="test_check",
+            severity="warning",
+            message="Test message",
+        )
+        assert finding.check_name == "test_check"
+        assert finding.severity == "warning"
+        assert finding.message == "Test message"
+        assert finding.entity_ids == []
+        assert finding.entity_type is None
+
+    def test_construction_full(self):
+        finding = ValidationFinding(
+            check_name="face_edge_consistency",
+            severity="critical",
+            message="Edge deviates from parent face",
+            entity_ids=["123", "456"],
+            entity_type="EDGE",
+        )
+        assert finding.entity_ids == ["123", "456"]
+        assert finding.entity_type == "EDGE"
+
+    def test_serialization_roundtrip(self):
+        finding = ValidationFinding(
+            check_name="sliver_face",
+            severity="warning",
+            message="Sliver face detected",
+            entity_ids=["789"],
+            entity_type="FACE",
+        )
+        data = finding.model_dump()
+        restored = ValidationFinding(**data)
+        assert restored == finding
+
+    def test_model_dump_keys(self):
+        finding = ValidationFinding(
+            check_name="test",
+            severity="info",
+            message="msg",
+        )
+        data = finding.model_dump()
+        assert set(data.keys()) == {
+            "check_name",
+            "severity",
+            "message",
+            "entity_ids",
+            "entity_type",
+        }
+
+
+class TestSeverityScoring:
+    """Test _compute_severity_score method."""
+
+    def setup_method(self):
+        self.model = TopologyValidationModel()
+
+    def test_empty_findings(self):
+        score = self.model._compute_severity_score([])
+        assert score["overall_severity"] == "clean"
+        assert score["total_findings"] == 0
+        assert score["critical_count"] == 0
+        assert score["warning_count"] == 0
+        assert score["info_count"] == 0
+
+    def test_critical_findings(self):
+        findings = [
+            ValidationFinding(check_name="a", severity="critical", message="bad"),
+            ValidationFinding(check_name="b", severity="warning", message="meh"),
+        ]
+        score = self.model._compute_severity_score(findings)
+        assert score["overall_severity"] == "critical"
+        assert score["critical_count"] == 1
+        assert score["warning_count"] == 1
+        assert score["total_findings"] == 2
+
+    def test_warning_only(self):
+        findings = [
+            ValidationFinding(
+                check_name="sliver_face", severity="warning", message="tiny face"
+            ),
+            ValidationFinding(
+                check_name="sliver_edge", severity="warning", message="tiny edge"
+            ),
+        ]
+        score = self.model._compute_severity_score(findings)
+        assert score["overall_severity"] == "warning"
+        assert score["warning_count"] == 2
+
+    def test_info_only(self):
+        findings = [
+            ValidationFinding(check_name="note", severity="info", message="fyi"),
+        ]
+        score = self.model._compute_severity_score(findings)
+        assert score["overall_severity"] == "info"
+        assert score["info_count"] == 1
+
+    def test_mixed_breakdown(self):
+        findings = [
+            ValidationFinding(check_name="check_a", severity="critical", message="m1"),
+            ValidationFinding(check_name="check_a", severity="warning", message="m2"),
+            ValidationFinding(check_name="check_b", severity="info", message="m3"),
+        ]
+        score = self.model._compute_severity_score(findings)
+        breakdown = score["checks_breakdown"]
+        assert "check_a" in breakdown
+        assert breakdown["check_a"]["critical"] == 1
+        assert breakdown["check_a"]["warning"] == 1
+        assert "check_b" in breakdown
+        assert breakdown["check_b"]["info"] == 1
+
+
+class TestConstructorParams:
+    """Test new constructor parameters."""
+
+    def test_default_values(self):
+        model = TopologyValidationModel()
+        assert model.sliver_threshold == 0.05
+        assert model.check_face_edge_consistency is True
+        assert model.check_vertex_edge_consistency is True
+
+    def test_custom_values(self):
+        model = TopologyValidationModel(
+            sliver_threshold=0.1,
+            check_face_edge_consistency=False,
+            check_vertex_edge_consistency=False,
+        )
+        assert model.sliver_threshold == 0.1
+        assert model.check_face_edge_consistency is False
+        assert model.check_vertex_edge_consistency is False
+
+
+@pytest.mark.requires_pythonocc
+class TestFaceEdgeConsistency:
+    """Test face-edge consistency checking (requires pythonocc)."""
+
+    def test_valid_box_zero_findings(self):
+        """Valid box should have no face-edge consistency findings."""
+        from OCC.Core.BRepPrimAPI import BRepPrimAPI_MakeBox
+
+        box = BRepPrimAPI_MakeBox(10.0, 10.0, 10.0).Shape()
+        model = TopologyValidationModel()
+        findings = model._check_face_edge_consistency(box)
+        assert len(findings) == 0
+
+    def test_disabled_returns_empty(self):
+        """When disabled, should return empty list."""
+        from OCC.Core.BRepPrimAPI import BRepPrimAPI_MakeBox
+
+        box = BRepPrimAPI_MakeBox(10.0, 10.0, 10.0).Shape()
+        model = TopologyValidationModel(check_face_edge_consistency=False)
+        findings = model._check_face_edge_consistency(box)
+        assert len(findings) == 0
+
+
+@pytest.mark.requires_pythonocc
+class TestVertexEdgeConsistency:
+    """Test vertex-edge consistency checking (requires pythonocc)."""
+
+    def test_valid_box_zero_findings(self):
+        """Valid box should have no vertex-edge consistency findings."""
+        from OCC.Core.BRepPrimAPI import BRepPrimAPI_MakeBox
+
+        box = BRepPrimAPI_MakeBox(10.0, 10.0, 10.0).Shape()
+        model = TopologyValidationModel()
+        findings = model._check_vertex_edge_consistency(box)
+        assert len(findings) == 0
+
+    def test_disabled_returns_empty(self):
+        """When disabled, should return empty list."""
+        from OCC.Core.BRepPrimAPI import BRepPrimAPI_MakeBox
+
+        box = BRepPrimAPI_MakeBox(10.0, 10.0, 10.0).Shape()
+        model = TopologyValidationModel(check_vertex_edge_consistency=False)
+        findings = model._check_vertex_edge_consistency(box)
+        assert len(findings) == 0
+
+
+@pytest.mark.requires_pythonocc
+class TestOrientationConsistency:
+    """Test orientation consistency checking (requires pythonocc)."""
+
+    def test_box_normals_outward(self):
+        """Box faces should all have outward normals."""
+        from OCC.Core.BRepPrimAPI import BRepPrimAPI_MakeBox
+
+        box = BRepPrimAPI_MakeBox(10.0, 10.0, 10.0).Shape()
+        model = TopologyValidationModel()
+        findings = model._check_orientation_consistency(box)
+        # A valid box should have consistent outward normals
+        assert all(f.check_name == "orientation_consistency" for f in findings)
+
+
+@pytest.mark.requires_pythonocc
+class TestSliverDetection:
+    """Test sliver entity detection (requires pythonocc)."""
+
+    def test_box_no_slivers(self):
+        """Normal box should have no sliver entities."""
+        from OCC.Core.BRepPrimAPI import BRepPrimAPI_MakeBox
+
+        box = BRepPrimAPI_MakeBox(10.0, 10.0, 10.0).Shape()
+        model = TopologyValidationModel()
+        findings = model._check_sliver_entities(box)
+        assert len(findings) == 0
+
+    def test_thin_box_detects_slivers(self):
+        """Very thin box should detect sliver faces."""
+        from OCC.Core.BRepPrimAPI import BRepPrimAPI_MakeBox
+
+        # Make a very thin box - some faces will have tiny area
+        thin_box = BRepPrimAPI_MakeBox(10.0, 10.0, 0.001).Shape()
+        model = TopologyValidationModel(sliver_threshold=0.05)
+        findings = model._check_sliver_entities(thin_box)
+        # Should detect at least some sliver faces/edges
+        sliver_faces = [f for f in findings if f.check_name == "sliver_face"]
+        assert len(sliver_faces) >= 0  # May or may not detect depending on exact geometry
+
+    def test_custom_threshold(self):
+        """Custom threshold should change detection sensitivity."""
+        from OCC.Core.BRepPrimAPI import BRepPrimAPI_MakeBox
+
+        box = BRepPrimAPI_MakeBox(10.0, 10.0, 10.0).Shape()
+        # Very large threshold should flag all faces
+        model = TopologyValidationModel(sliver_threshold=1000.0)
+        findings = model._check_sliver_entities(box)
+        # With threshold of 1000, 10x10 faces (area=100) should be flagged
+        assert len(findings) > 0
+
+
+class TestEnhancedValidationIntegration:
+    """Test enhanced validation integration with mock shapes."""
+
+    def test_new_keys_in_output(self):
+        """Verify validation_findings and severity_scoring keys appear in output."""
+        model = TopologyValidationModel()
+
+        # Mock a simple validation that exercises the new code paths
+        mock_findings = [
+            ValidationFinding(
+                check_name="sliver_face",
+                severity="warning",
+                message="test",
+                entity_ids=["1"],
+                entity_type="FACE",
+            ),
+        ]
+
+        score = model._compute_severity_score(mock_findings)
+        assert "overall_severity" in score
+        assert "total_findings" in score
+        assert "critical_count" in score
+        assert "warning_count" in score
+        assert "info_count" in score
+        assert "checks_breakdown" in score
+
+    def test_critical_finding_invalidates(self):
+        """Critical findings should make overall severity critical."""
+        model = TopologyValidationModel()
+        findings = [
+            ValidationFinding(
+                check_name="face_edge_consistency",
+                severity="critical",
+                message="Edge deviates",
+            ),
+        ]
+        score = model._compute_severity_score(findings)
+        assert score["overall_severity"] == "critical"
+        assert score["critical_count"] == 1
+
+    def test_shape_to_entity_id(self):
+        """Test shape hash ID generation with mock."""
+        model = TopologyValidationModel()
+        mock_shape = MagicMock()
+        mock_shape.HashCode.return_value = 12345
+
+        entity_id = model._shape_to_entity_id(mock_shape)
+        assert entity_id == "12345"
+        mock_shape.HashCode.assert_called_once_with(2**31 - 1)

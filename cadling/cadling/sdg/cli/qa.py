@@ -18,6 +18,7 @@ import typer
 from pydantic import SecretStr
 
 from cadling.sdg.qa.base import (
+    AnnotationLevel,
     CADCritiqueOptions,
     CADGenerateOptions,
     CADSampleOptions,
@@ -32,7 +33,7 @@ _log = logging.getLogger(__name__)
 qa_app = typer.Typer(help="Q&A generation commands")
 
 
-def _get_api_key_from_env(provider: str) -> Optional[str]:
+def _get_api_key_from_env(provider: str) -> str | None:
     """Get API key from environment variable.
 
     Args:
@@ -137,12 +138,12 @@ def generate(
         "--model", "-m",
         help="Model ID (e.g., gpt-4o, claude-3-opus, llama3:70b)",
     ),
-    api_key: Optional[str] = typer.Option(
+    api_key: str | None = typer.Option(
         None,
         "--api-key",
         help="API key (or set via environment variable)",
     ),
-    url: Optional[str] = typer.Option(
+    url: str | None = typer.Option(
         None,
         "--url",
         help="Base URL for vLLM/Ollama/OpenAI-compatible",
@@ -157,10 +158,15 @@ def generate(
         "--temperature", "-t",
         help="Sampling temperature",
     ),
-    question_types: Optional[list[str]] = typer.Option(
+    question_types: list[str] | None = typer.Option(
         None,
         "--question-type", "-q",
         help="Question types to generate (geometry, topology, manufacturing, etc.)",
+    ),
+    annotation_levels: list[str] | None = typer.Option(
+        None,
+        "--annotation-level", "-a",
+        help="Annotation levels to generate (abstract, intermediate, detailed, expert). Can specify multiple.",
     ),
 ):
     """Generate Q&A pairs from sampled passages."""
@@ -193,6 +199,16 @@ def generate(
     else:
         q_types = [QuestionType.FACT_SINGLE, QuestionType.GEOMETRY, QuestionType.TOPOLOGY]
 
+    # Resolve annotation levels
+    a_levels: list[AnnotationLevel] = []
+    if annotation_levels:
+        for al in annotation_levels:
+            try:
+                a_levels.append(AnnotationLevel(al))
+            except ValueError:
+                typer.echo(f"Invalid annotation level: {al}. Valid: abstract, intermediate, detailed, expert", err=True)
+                raise typer.Exit(1)
+
     options = CADGenerateOptions(
         provider=llm_provider,
         model_id=model,
@@ -202,6 +218,7 @@ def generate(
         max_qac=max_qac,
         temperature=temperature,
         question_types=q_types,
+        annotation_levels=a_levels,
     )
 
     generator = CADGenerator(options)
@@ -232,12 +249,12 @@ def critique(
         "--model", "-m",
         help="Model ID (e.g., gpt-4o, claude-3-opus)",
     ),
-    api_key: Optional[str] = typer.Option(
+    api_key: str | None = typer.Option(
         None,
         "--api-key",
         help="API key (or set via environment variable)",
     ),
-    url: Optional[str] = typer.Option(
+    url: str | None = typer.Option(
         None,
         "--url",
         help="Base URL for vLLM/Ollama/OpenAI-compatible",
@@ -247,7 +264,7 @@ def critique(
         "--max-qac", "-n",
         help="Maximum Q&A pairs to critique",
     ),
-    dimensions: Optional[list[str]] = typer.Option(
+    dimensions: list[str] | None = typer.Option(
         None,
         "--dimension", "-d",
         help="Critique dimensions (technical_accuracy, cad_groundedness, etc.)",
@@ -331,12 +348,12 @@ def conceptual(
         "--model", "-m",
         help="Model ID",
     ),
-    api_key: Optional[str] = typer.Option(
+    api_key: str | None = typer.Option(
         None,
         "--api-key",
         help="API key",
     ),
-    url: Optional[str] = typer.Option(
+    url: str | None = typer.Option(
         None,
         "--url",
         help="Base URL",

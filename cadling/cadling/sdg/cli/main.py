@@ -40,9 +40,10 @@ app.add_typer(qa_app, name="qa", help="Q&A generation commands")
 def version():
     """Show version information."""
     try:
-        from cadling import __version__
-        typer.echo(f"cadling-sdg version: {__version__}")
-    except ImportError:
+        from importlib.metadata import version as get_version
+        pkg_version = get_version("cadling")
+        typer.echo(f"cadling-sdg version: {pkg_version}")
+    except Exception:
         typer.echo("cadling-sdg version: unknown")
 
 

@@ -1,0 +1,195 @@
+## Task
+
+Generate a complete, executable CAD script that recreates the 3D solid model
+shown in the reference image below. The script must be syntactically valid and
+produce a single closed (manifold, watertight) solid body that closely matches
+the geometry visible in the image.
+
+## Reference Image
+
+{IMAGE_DATA}
+
+## Supplementary Text Description
+
+{DESCRIPTION}
+
+## Image Analysis Instructions
+
+Before writing any code, carefully analyze the reference image to extract
+geometric information. Work through these steps in order:
+
+### Step 1 — Identify the Overall Form
+
+- What is the dominant shape class? (prismatic, cylindrical, conical,
+  revolved, swept, compound)
+- Estimate the bounding box aspect ratio (width : depth : height)
+- Identify the principal axes and likely modeling orientation
+- Determine whether the part has any planes of symmetry
+
+### Step 2 — Decompose into Modeling Features
+
+Enumerate every distinct geometric feature visible in the image:
+
+- **Base/body features**: plates, blocks, shells, tubes, flanges
+- **Additive features**: bosses, ribs, pads, protrusions, ears, tabs
+- **Subtractive features**: through-holes, blind holes, counterbores,
+  countersinks, slots, pockets, grooves, keyways
+- **Transition features**: fillets, chamfers, rounds, blends
+- **Pattern features**: linear patterns, circular bolt patterns, arrays
+- **Surface features**: draft angles, parting lines, textured regions
+
+For each feature note its approximate:
+- Location relative to the base body (center, corner, edge, face)
+- Size relative to the overall part dimensions
+- Relationship to other features (concentric, coplanar, symmetric, tangent)
+
+### Step 3 — Estimate Dimensions
+
+Using visible proportions, cues from standard hardware (bolt holes, threads,
+keyways), and engineering conventions, estimate absolute dimensions in
+millimeters:
+
+- Overall bounding dimensions (L × W × H)
+- Wall thicknesses, rib heights, flange widths
+- Hole diameters (map to standard sizes: M3=3.2, M4=4.2, M5=5.2, M6=6.5,
+  M8=8.5, M10=10.5 mm clearance)
+- Fillet and chamfer radii
+- Pattern spacings (bolt circle diameters, linear pitch)
+
+If a supplementary text description is provided above, use its dimensions
+wherever they are specified and use the image only to fill in unspecified
+geometry.
+
+### Step 4 — Plan the Modeling Sequence
+
+Order the operations to build the part correctly:
+
+1. Start with the largest / most central body feature
+2. Add secondary positive features (bosses, ribs, pads)
+3. Cut negative features (holes, pockets, slots)
+4. Apply finishing features (fillets, chamfers) last — smallest radii last
+5. Use boolean operations (union, cut, intersect) where method chaining
+   is insufficient
+
+## Multi-View Interpretation Guide
+
+If the image contains multiple views (front, side, top, isometric):
+
+- **Isometric / perspective view**: Use for overall shape understanding and
+  feature identification. Depth cues reveal 3D relationships.
+- **Orthographic front view**: Extract width and height dimensions, front-face
+  feature locations.
+- **Orthographic side view**: Extract depth and height dimensions, side-profile
+  features, draft angles.
+- **Orthographic top view**: Extract width and depth dimensions, hole patterns,
+  pocket locations, plan-view symmetry.
+- **Section views**: Extract internal geometry — wall thicknesses, blind hole
+  depths, internal cavities, rib cross-sections.
+- **Detail views**: Extract precise fillet radii, chamfer dimensions, thread
+  specifications, surface finish callouts.
+
+Cross-reference dimensions across views to resolve ambiguity. If views
+conflict, prefer the orthographic projections over perspective views.
+
+## Image Type Handling
+
+Adapt your interpretation strategy to the image source:
+
+- **Engineering drawing / blueprint**: Dimensions are likely annotated.
+  Extract exact values from dimension lines. Respect all GD&T callouts.
+- **CAD screenshot / rendering**: Proportions are accurate. Use shading,
+  edges, and reflections to identify fillets, chamfers, and surface
+  transitions. Rendered colors may indicate different materials or bodies.
+- **Photograph of a physical part**: Account for perspective distortion.
+  Use known reference objects for scale (coins, rulers, hands, standard
+  hardware). Rounded edges may be manufacturing artifacts vs. designed
+  fillets.
+- **Hand sketch / whiteboard**: Proportions are approximate. Focus on
+  topology (what connects to what) rather than exact dimensions. Annotated
+  numbers take precedence over drawn proportions.
+- **Exploded view**: Identify individual components and their assembly
+  relationships. Generate only the single requested component.
+
+## Code Requirements
+
+1. **Define all dimensions as named variables** at the top of the script
+   so the model is fully parametric:
+
+   ```python
+   # --- Parametric dimensions (mm) ---
+   body_length = 120.0
+   body_width = 80.0
+   body_height = 25.0
+   wall_thickness = 4.0
+   mounting_hole_dia = 6.5  # M6 clearance
+   fillet_radius = 3.0
+   ```
+
+2. **Comment every modeling step** explaining which feature from the image
+   it corresponds to:
+
+   ```python
+   # Base plate — the rectangular body visible in the front view
+   result = cq.Workplane("XY").box(body_length, body_width, body_height)
+
+   # Four corner mounting holes — visible in the top view
+   result = (result
+       .faces(">Z").workplane()
+       .rect(hole_spacing_x, hole_spacing_y, forConstruction=True)
+       .vertices()
+       .hole(mounting_hole_dia)
+   )
+   ```
+
+3. **Map image features to code explicitly** — if you see a circular pattern
+   of 6 holes, your code must produce exactly 6 holes in a circular pattern.
+   Do not approximate or simplify features visible in the image.
+
+4. **Handle occluded geometry conservatively** — if a feature is partially
+   hidden:
+   - Infer symmetric counterparts if the part shows symmetry elsewhere
+   - Use engineering conventions for hidden features (e.g., through-holes
+     are more common than blind holes for mounting)
+   - Add a comment noting the assumption
+
+5. **Ensure the solid is watertight** — every cut must be bounded, every
+   shell must be closed, every boolean must produce valid geometry.
+
+## Confidence Annotations
+
+After the code block, do NOT include additional text. All uncertainty should
+be expressed as code comments:
+
+```python
+# INFERRED: Fillet radius estimated at 3mm from image proportions
+# ASSUMED: Hole is through-all (occluded in image, typical for mounting)
+# UNCERTAIN: Rib height may be 15mm or 20mm — used 18mm as midpoint
+```
+
+## Output Format
+
+Return your script inside a single fenced code block:
+
+```python
+# (for CadQuery scripts)
+import cadquery as cq
+
+# --- Parametric dimensions (mm) ---
+# ... dimension variables ...
+
+# --- Modeling sequence ---
+# ... your code here ...
+
+result = ...
+```
+
+or
+
+```openscad
+// (for OpenSCAD scripts)
+// --- Parametric dimensions (mm) ---
+// ... dimension variables ...
+
+// --- Modeling sequence ---
+// ... your code here ...
+```

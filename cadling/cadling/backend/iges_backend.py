@@ -119,13 +119,43 @@ class IGESBackend(DeclarativeCADBackend, RenderableCADBackend):
         return {InputFormat.IGES}
 
     def is_valid(self) -> bool:
-        """Validate IGES file format.
+        """Validate IGES file format by checking section structure.
+
+        IGES files are organized into sections identified by a letter
+        in column 73 (1-indexed) of each 80-character record:
+        S (Start), G (Global), D (Directory Entry), P (Parameter Data),
+        T (Terminate). A valid file must have at least S, G, D, and T.
 
         Returns:
-            True if file appears to be valid IGES format
+            True if file has proper IGES section structure
         """
-        # Check for section markers (S, G, D, P, T)
-        return any(c in "SGDPT" for c in self.iges_text[-100:])
+        if not self.iges_text or len(self.iges_text.strip()) < 80:
+            _log.warning("IGES file too short for valid structure")
+            return False
+
+        lines = self.iges_text.split('\n')
+        found_sections: set[str] = set()
+        required_sections = {'S', 'G', 'D', 'T'}
+
+        for line in lines:
+            # IGES records are 80 chars; section marker is column 73 (index 72)
+            if len(line) >= 73:
+                marker = line[72].strip()
+                if marker in ('S', 'G', 'D', 'P', 'T'):
+                    found_sections.add(marker)
+
+        missing = required_sections - found_sections
+        if missing:
+            _log.warning(
+                "IGES validation failed: missing required sections %s "
+                "(found: %s)", missing, found_sections,
+            )
+            return False
+
+        _log.debug(
+            "IGES validation passed: found sections %s", found_sections,
+        )
+        return True
 
     def convert(self) -> CADlingDocument:
         """Parse IGES file and convert to CADlingDocument.

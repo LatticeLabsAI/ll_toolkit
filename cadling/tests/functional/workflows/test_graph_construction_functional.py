@@ -213,7 +213,7 @@ class TestGraphConstructionFunctional:
                     "has_metadata": hasattr(graph_data, 'metadata') and graph_data.metadata is not None
                 }
 
-                output_manager.save_json(graph_stats, "graph_statistics.json")
+                output_manager.save_json(graph_stats, "graph_statistics.json", "intermediates")
                 logger.info(f"Graph statistics saved to graph_statistics.json")
 
                 # Save validation results
@@ -223,6 +223,9 @@ class TestGraphConstructionFunctional:
                 output_manager.save_json(validation_results, "validation_results.json", "validation")
 
             # Final summary
+            # Create summary report
+            output_manager.create_summary_report()
+
             logger.info("="*80)
             logger.info("✓ BRep graph construction test completed successfully")
             logger.info(f"✓ Outputs saved to: {output_manager.run_dir}")
@@ -376,7 +379,7 @@ class TestGraphConstructionFunctional:
             with logger.stage("Export Mesh Graph Statistics"):
                 logger.info("Exporting mesh graph statistics...")
 
-                output_manager.save_json(all_results, "mesh_graph_statistics.json")
+                output_manager.save_json(all_results, "mesh_graph_statistics.json", "intermediates")
                 logger.info(f"Mesh graph statistics saved")
 
                 # Log summary
@@ -384,6 +387,9 @@ class TestGraphConstructionFunctional:
                 for geom_type, props in all_results.items():
                     logger.info(f"  {geom_type}: {props['num_nodes']} nodes, "
                               f"{props['num_edges']} edges")
+
+            # Create summary report
+            output_manager.create_summary_report()
 
             # Final summary
             logger.info("="*80)

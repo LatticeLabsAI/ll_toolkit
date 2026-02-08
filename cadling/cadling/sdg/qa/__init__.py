@@ -7,6 +7,8 @@ Classes:
     - CADGenerator: Generate Q&A pairs from sampled passages
     - CADJudge: Critique and improve Q&A pairs
     - CADConceptualGenerator: Generate topic-based Q&A from descriptions
+    - TextCADAnnotator: Multi-level text annotations from CAD files
+    - SequenceAnnotator: Paired (text, command_sequence) training data
 
 Data Models:
     - Status: Operation status enum
@@ -30,6 +32,8 @@ Example:
         CADPassageSampler,
         CADGenerator,
         CADJudge,
+        TextCADAnnotator,
+        SequenceAnnotator,
         CADSampleOptions,
         CADGenerateOptions,
         CADCritiqueOptions,
@@ -58,9 +62,19 @@ Example:
     )
     judge = CADJudge(crit_opts)
     judge.critique(Path("generated.jsonl"))
+
+    # Text-CAD paired annotation
+    annotator = TextCADAnnotator(api_provider="openai")
+    result = annotator.annotate("part.step", num_views=4)
+
+    # Sequence annotation for Text2CAD training
+    seq_annotator = SequenceAnnotator(text_annotator=annotator)
+    paired = seq_annotator.annotate("part.step")
+    seq_annotator.export_training_pairs([paired], "training.jsonl")
 """
 
 from cadling.sdg.qa.base import (
+    AnnotationLevel,
     CADConceptualOptions,
     CADCritiqueOptions,
     CADGenerateOptions,
@@ -81,6 +95,8 @@ from cadling.sdg.qa.conceptual_generate import CADConceptualGenerator
 from cadling.sdg.qa.critique import CADJudge
 from cadling.sdg.qa.generate import CADGenerator
 from cadling.sdg.qa.sample import CADPassageSampler
+from cadling.sdg.qa.sequence_annotator import SequenceAnnotator
+from cadling.sdg.qa.text_cad_annotator import TextCADAnnotator
 
 __all__ = [
     # Core classes
@@ -88,11 +104,14 @@ __all__ = [
     "CADGenerator",
     "CADJudge",
     "CADConceptualGenerator",
+    "TextCADAnnotator",
+    "SequenceAnnotator",
     # Enums
     "Status",
     "LlmProvider",
     "QuestionType",
     "ChunkerType",
+    "AnnotationLevel",
     # Options
     "LlmOptions",
     "CADSampleOptions",

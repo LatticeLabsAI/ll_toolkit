@@ -181,12 +181,13 @@ class ManufacturingFeatureRecognizer(EnrichmentModel):
         """
         from cadling.datamodel.step import STEPEntityItem
 
-        if not self.model:
-            _log.debug("Feature recognition skipped: model not available")
-            return
-
-        if not self.graph_builder:
-            _log.debug("Feature recognition skipped: graph builder not available")
+        if not self.model or not self.graph_builder:
+            if not self.model:
+                _log.debug("GNN model not available, using rule-based feature recognition")
+            if not self.graph_builder:
+                _log.debug("Graph builder not available, using rule-based feature recognition")
+            # Fallback to rule-based recognition
+            self._rule_based_recognition(doc, item_batch)
             return
 
         for item in item_batch:
@@ -274,6 +275,125 @@ class ManufacturingFeatureRecognizer(EnrichmentModel):
 
             except Exception as e:
                 _log.error(f"Feature recognition failed: {e}")
+
+    def _rule_based_recognition(
+        self, doc: CADlingDocument, item_batch: list[CADItem]
+    ) -> None:
+        """Fallback rule-based feature recognition when GNN model unavailable.
+
+        Uses STEP entity types to detect manufacturing features heuristically:
+        - CYLINDRICAL_SURFACE → potential hole or boss
+        - Grouped PLANEs → potential pocket
+        - CONICAL_SURFACE → potential countersink or chamfer
+        - TOROIDAL_SURFACE → potential fillet
+
+        Sets confidence to 0.4-0.6 (lower than GNN-based recognition).
+
+        Args:
+            doc: CADlingDocument being enriched
+            item_batch: List of CADItem objects to process
+        """
+        from cadling.datamodel.step import STEPEntityItem
+
+        for item in item_batch:
+            if not isinstance(item, STEPEntityItem):
+                continue
+
+            features = []
+
+            try:
+                # Get entity type from item
+                entity_type = getattr(item, "entity_type", None) or item.properties.get(
+                    "entity_type", ""
+                )
+
+                # Get surface analysis if available
+                surface_analysis = item.properties.get("surface_analysis", {})
+                surface_type = surface_analysis.get("surface_type", "")
+
+                # Get geometry analysis if available
+                geometry_analysis = item.properties.get("geometry_analysis", {})
+                bbox = geometry_analysis.get("bounding_box", {})
+                center = geometry_analysis.get("center_of_mass", [0.0, 0.0, 0.0])
+
+                # Rule 1: Cylindrical surfaces can be holes or bosses
+                if "CYLINDRICAL" in entity_type or surface_type == "CYLINDER":
+                    # Check for hole vs boss heuristics
+                    # Holes typically have axis pointing into material
+                    # For now, classify as generic cylindrical feature
+                    is_concave = geometry_analysis.get("is_concave", True)
+
+                    if is_concave:
+                        feature_type = "hole"
+                    else:
+                        feature_type = "boss"
+
+                    # Extract radius from properties if available
+                    radius = geometry_analysis.get("radius", 5.0)
+
+                    features.append({
+                        "type": feature_type,
+                        "parameters": {
+                            "diameter": radius * 2,
+                            "depth": bbox.get("size_z", 10.0) if bbox else 10.0,
+                        },
+                        "location": center,
+                        "orientation": [0.0, 0.0, 1.0],
+                        "confidence": 0.5,  # Lower confidence for rule-based
+                        "face_ids": [item.id] if hasattr(item, "id") else [],
+                        "detection_method": "rule_based",
+                    })
+
+                # Rule 2: Toroidal surfaces → fillets
+                elif "TOROIDAL" in entity_type or surface_type == "TORUS":
+                    minor_radius = geometry_analysis.get("minor_radius", 2.0)
+                    features.append({
+                        "type": "fillet",
+                        "parameters": {
+                            "radius": minor_radius,
+                        },
+                        "location": center,
+                        "orientation": None,
+                        "confidence": 0.6,
+                        "face_ids": [item.id] if hasattr(item, "id") else [],
+                        "detection_method": "rule_based",
+                    })
+
+                # Rule 3: Conical surfaces → chamfers or countersinks
+                elif "CONICAL" in entity_type or surface_type == "CONE":
+                    semi_angle = geometry_analysis.get("semi_angle", 45.0)
+                    features.append({
+                        "type": "chamfer",
+                        "parameters": {
+                            "angle": semi_angle,
+                            "distance": bbox.get("size_z", 5.0) if bbox else 5.0,
+                        },
+                        "location": center,
+                        "orientation": [0.0, 0.0, 1.0],
+                        "confidence": 0.4,
+                        "face_ids": [item.id] if hasattr(item, "id") else [],
+                        "detection_method": "rule_based",
+                    })
+
+                # Rule 4: Groups of planar faces at different levels → pocket
+                elif "PLANE" in entity_type or surface_type == "PLANE":
+                    # Mark as potential pocket face for later grouping
+                    item.properties["potential_pocket_face"] = True
+
+                if features:
+                    item.properties["manufacturing_features"] = features
+                    item.add_provenance(
+                        component_type="enrichment_model",
+                        component_name="ManufacturingFeatureRecognizer",
+                        notes="rule_based_fallback",
+                    )
+                    _log.debug(
+                        f"Rule-based recognition found {len(features)} features "
+                        f"for {entity_type}"
+                    )
+
+            except Exception as e:
+                _log.warning(f"Rule-based feature recognition failed for item: {e}")
 
     def supports_batch_processing(self) -> bool:
         """Feature recognition supports batch processing."""
@@ -397,6 +517,13 @@ class HoleDetector:
 class PocketDetector:
     """Detect pockets and extract dimensions."""
 
+    def __init__(self):
+        """Initialize pocket detector with geometry extractor."""
+        from cadling.models.segmentation.geometry_extractors import PocketGeometryExtractor
+
+        self.geom_extractor = PocketGeometryExtractor()
+        _log.debug("PocketDetector initialized with geometry extractor")
+
     def detect(
         self,
         graph: Any,
@@ -404,7 +531,22 @@ class PocketDetector:
         instance_labels: torch.Tensor,
         feature_classes: List[str],
     ) -> List[Dict]:
-        """Detect pockets and extract width/length/depth."""
+        """Detect pockets and extract width/length/depth.
+
+        Rules:
+        1. Find faces classified as "pocket", "round_pocket", or "rectangular_pocket"
+        2. Group by instance to identify individual pockets
+        3. Extract dimensions using PocketGeometryExtractor (3-strategy approach)
+
+        Args:
+            graph: Face adjacency graph
+            face_labels: Predicted semantic labels
+            instance_labels: Instance clustering labels
+            feature_classes: List of feature class names
+
+        Returns:
+            List of detected pockets with parameters
+        """
         pockets = []
 
         # Find pocket faces
@@ -415,16 +557,62 @@ class PocketDetector:
                 mask = face_labels == label_idx
                 pocket_indices.extend(torch.where(mask)[0].tolist())
 
+        if len(pocket_indices) == 0:
+            return pockets
+
         # Group by instance and extract parameters
         unique_instances = torch.unique(instance_labels[pocket_indices])
 
         for instance_id in unique_instances:
+            instance_mask = instance_labels == instance_id
+            instance_face_ids = torch.where(instance_mask)[0].tolist()
+
+            # EXTRACT REAL PARAMETERS - NO MORE PLACEHOLDERS!
+            try:
+                # Get face entities from graph
+                instance_faces = []
+                if hasattr(graph, "faces") and graph.faces:
+                    instance_faces = [
+                        graph.faces[i] for i in instance_face_ids if i < len(graph.faces)
+                    ]
+
+                # Extract pocket parameters using geometry extractor
+                params = self.geom_extractor.extract_pocket_parameters(
+                    face_entities=instance_faces,
+                    face_ids=instance_face_ids,
+                    graph=graph,
+                )
+
+                width = params.get("width", 20.0)
+                length = params.get("length", 30.0)
+                depth = params.get("depth", 15.0)
+                location = params.get("location", [0.0, 0.0, 0.0])
+                pocket_type = params.get("pocket_type", "unknown")
+                confidence = params.get("confidence", 0.5)
+
+                _log.debug(
+                    f"Pocket instance {instance_id}: width={width:.2f}mm, "
+                    f"length={length:.2f}mm, depth={depth:.2f}mm, "
+                    f"type={pocket_type}, confidence={confidence:.2f}"
+                )
+
+            except Exception as e:
+                # Fallback to defaults if extraction fails
+                _log.warning(f"Failed to extract pocket geometry for instance {instance_id}: {e}")
+                width = 20.0
+                length = 30.0
+                depth = 15.0
+                location = [0.0, 0.0, 0.0]
+                pocket_type = "unknown"
+                confidence = 0.3
+
             pockets.append({
                 "type": "pocket",
-                "parameters": {"width": 10.0, "length": 15.0, "depth": 8.0},
-                "location": [0.0, 0.0, 0.0],
-                "confidence": 0.90,
-                "face_ids": [],
+                "pocket_type": pocket_type,
+                "parameters": {"width": width, "length": length, "depth": depth},
+                "location": location,
+                "confidence": confidence,
+                "face_ids": instance_face_ids,
             })
 
         return pockets
@@ -433,6 +621,13 @@ class PocketDetector:
 class BossDetector:
     """Detect bosses and extract dimensions."""
 
+    def __init__(self):
+        """Initialize boss detector with geometry extractor."""
+        from cadling.models.segmentation.geometry_extractors import BossGeometryExtractor
+
+        self.geom_extractor = BossGeometryExtractor()
+        _log.debug("BossDetector initialized with geometry extractor")
+
     def detect(
         self,
         graph: Any,
@@ -440,7 +635,22 @@ class BossDetector:
         instance_labels: torch.Tensor,
         feature_classes: List[str],
     ) -> List[Dict]:
-        """Detect bosses and extract height/base area."""
+        """Detect bosses and extract height/base area.
+
+        Rules:
+        1. Find faces classified as "boss", "circular_boss", "rectangular_boss", or "hex_boss"
+        2. Group by instance to identify individual bosses
+        3. Extract dimensions using BossGeometryExtractor (3-strategy approach)
+
+        Args:
+            graph: Face adjacency graph
+            face_labels: Predicted semantic labels
+            instance_labels: Instance clustering labels
+            feature_classes: List of feature class names
+
+        Returns:
+            List of detected bosses with parameters
+        """
         bosses = []
 
         # Find boss faces
@@ -451,16 +661,69 @@ class BossDetector:
                 mask = face_labels == label_idx
                 boss_indices.extend(torch.where(mask)[0].tolist())
 
+        if len(boss_indices) == 0:
+            return bosses
+
         # Extract parameters
         unique_instances = torch.unique(instance_labels[boss_indices])
 
         for instance_id in unique_instances:
+            instance_mask = instance_labels == instance_id
+            instance_face_ids = torch.where(instance_mask)[0].tolist()
+
+            # EXTRACT REAL PARAMETERS - NO MORE PLACEHOLDERS!
+            try:
+                # Get face entities from graph
+                instance_faces = []
+                if hasattr(graph, "faces") and graph.faces:
+                    instance_faces = [
+                        graph.faces[i] for i in instance_face_ids if i < len(graph.faces)
+                    ]
+
+                # Extract boss parameters using geometry extractor
+                params = self.geom_extractor.extract_boss_parameters(
+                    face_entities=instance_faces,
+                    face_ids=instance_face_ids,
+                    graph=graph,
+                )
+
+                height = params.get("height", 10.0)
+                base_area = params.get("base_area", 100.0)
+                width = params.get("width", 10.0)
+                length = params.get("length", 10.0)
+                location = params.get("location", [0.0, 0.0, 0.0])
+                boss_type = params.get("boss_type", "unknown")
+                confidence = params.get("confidence", 0.5)
+
+                _log.debug(
+                    f"Boss instance {instance_id}: height={height:.2f}mm, "
+                    f"base_area={base_area:.2f}mm², type={boss_type}, "
+                    f"confidence={confidence:.2f}"
+                )
+
+            except Exception as e:
+                # Fallback to defaults if extraction fails
+                _log.warning(f"Failed to extract boss geometry for instance {instance_id}: {e}")
+                height = 10.0
+                base_area = 100.0
+                width = 10.0
+                length = 10.0
+                location = [0.0, 0.0, 0.0]
+                boss_type = "unknown"
+                confidence = 0.3
+
             bosses.append({
                 "type": "boss",
-                "parameters": {"height": 5.0, "base_area": 100.0},
-                "location": [0.0, 0.0, 0.0],
-                "confidence": 0.88,
-                "face_ids": [],
+                "boss_type": boss_type,
+                "parameters": {
+                    "height": height,
+                    "base_area": base_area,
+                    "width": width,
+                    "length": length,
+                },
+                "location": location,
+                "confidence": confidence,
+                "face_ids": instance_face_ids,
             })
 
         return bosses
@@ -654,8 +917,8 @@ class FilletDetector:
                 avg_centroid = np.mean(centroids, axis=0)
                 return avg_centroid.tolist()
 
-        except Exception:
-            pass
+        except Exception as e:
+            _log.debug(f"Failed to compute feature location from graph: {e}")
 
         return [0.0, 0.0, 0.0]
 

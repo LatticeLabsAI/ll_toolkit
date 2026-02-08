@@ -26,12 +26,24 @@ class STEPTokenizer:
         self.UNK_ID = 1
         self.SEP_ID = 2
         self.CLS_ID = 3
+        self.SUMMARY_ID = 4
+        self.SUMMARY_END_ID = 5
+        self.BRANCH_ID = 6
+        self.BRANCH_END_ID = 7
+        self.DEPTH_ID = 8
+        self.TYPE_ID = 9
 
         self.special_tokens = {
             '<PAD>': self.PAD_ID,
             '<UNK>': self.UNK_ID,
             '<SEP>': self.SEP_ID,
             '<CLS>': self.CLS_ID,
+            '[SUMMARY]': self.SUMMARY_ID,
+            '[/SUMMARY]': self.SUMMARY_END_ID,
+            '[BRANCH]': self.BRANCH_ID,
+            '[/BRANCH]': self.BRANCH_END_ID,
+            '[DEPTH]': self.DEPTH_ID,
+            '[TYPE]': self.TYPE_ID,
         }
 
         # Build vocabulary
@@ -81,8 +93,8 @@ class STEPTokenizer:
         Returns:
             List of token strings
         """
-        # Regex: entity refs, identifiers, numbers, keywords, strings, operators
-        pattern = r"#\d+|[A-Z_][A-Z0-9_]*|-?\d+\.?\d*(?:[Ee][+-]?\d+)?|\.[A-Z_]+\.|'[^']*'|[=(),;]|\$|\*"
+        # Regex: bracket special tokens, entity refs, identifiers, numbers, keywords, strings, operators
+        pattern = r"\[/?[A-Z]+\]|#\d+|[A-Z_][A-Z0-9_]*|-?\d+\.?\d*(?:[Ee][+-]?\d+)?|\.[A-Z_]+\.|'[^']*'|[=(),;]|\$|\*"
         tokens = re.findall(pattern, text)
         return tokens
 

@@ -226,69 +226,187 @@ class CADHybridChunker(BaseCADChunker):
     def _compute_chunk_embedding(self, items: list[CADItem]) -> Optional[list[float]]:
         """Compute averaged embedding for chunk.
 
+        Uses multi-strategy approach:
+        1. Primary: Use pre-computed embeddings from items
+        2. Fallback: Compute geometric embedding from properties
+        3. Fallback: Compute text-hash embedding from item text
+
         Args:
             items: List of CAD items
 
         Returns:
-            Averaged embedding vector, or None
+            Averaged embedding vector, or None only if use_embeddings is False
         """
         if not self.use_embeddings:
             return None
 
+        # Strategy 1: Use pre-computed embeddings
         embeddings = []
-
         for item in items:
             if "embedding" in item.properties:
                 emb = item.properties["embedding"]
                 if isinstance(emb, list):
                     embeddings.append(np.array(emb))
 
-        if not embeddings:
+        if embeddings:
+            avg_embedding = np.mean(embeddings, axis=0)
+            norm = np.linalg.norm(avg_embedding)
+            if norm > 0:
+                avg_embedding = avg_embedding / norm
+            return avg_embedding.tolist()
+
+        # Strategy 2: Compute geometric embedding from properties
+        geom_embedding = self._compute_geometric_embedding(items)
+        if geom_embedding is not None:
+            return geom_embedding
+
+        # Strategy 3: Compute text-hash embedding from item text
+        text = " ".join(self._item_to_text(item) for item in items)
+        return self._compute_text_hash_embedding(text)
+
+    def _compute_geometric_embedding(self, items: list[CADItem]) -> Optional[list[float]]:
+        """Compute embedding from geometric properties.
+
+        Args:
+            items: List of CAD items
+
+        Returns:
+            Geometric embedding or None if insufficient data
+        """
+        features = []
+
+        for item in items:
+            # Extract numeric properties from geometry_analysis
+            if "geometry_analysis" in item.properties:
+                geom = item.properties["geometry_analysis"]
+                if "surface_area" in geom:
+                    features.append(np.log1p(geom["surface_area"]))
+                if "volume" in geom:
+                    features.append(np.log1p(abs(geom["volume"])))
+
+            # Extract from item bbox
+            if item.bbox is not None:
+                bbox = item.bbox
+                bbox_size = [
+                    bbox.x_max - bbox.x_min,
+                    bbox.y_max - bbox.y_min,
+                    bbox.z_max - bbox.z_min,
+                ]
+                features.extend([np.log1p(s) for s in bbox_size])
+
+        if len(features) < 3:
             return None
 
-        # Average embeddings
-        avg_embedding = np.mean(embeddings, axis=0)
+        # Pad/truncate to fixed dimension (64)
+        embedding = np.zeros(64)
+        embedding[:min(len(features), 64)] = features[:64]
 
         # Normalize
-        norm = np.linalg.norm(avg_embedding)
+        norm = np.linalg.norm(embedding)
         if norm > 0:
-            avg_embedding = avg_embedding / norm
+            embedding = embedding / norm
 
-        return avg_embedding.tolist()
+        return embedding.tolist()
+
+    def _compute_text_hash_embedding(self, text: str) -> list[float]:
+        """Compute simple hash-based embedding from text.
+
+        Args:
+            text: Text to embed
+
+        Returns:
+            64-dimensional hash-based embedding
+        """
+        import hashlib
+
+        embedding = np.zeros(64)
+
+        # Use multiple hash functions for different aspects
+        words = text.split()[:64]
+        for i, word in enumerate(words):
+            h = int(hashlib.md5(word.encode()).hexdigest()[:8], 16)
+            embedding[i % 64] += (h / (2**32)) - 0.5
+
+        # Normalize
+        norm = np.linalg.norm(embedding)
+        if norm > 0:
+            embedding = embedding / norm
+
+        return embedding.tolist()
 
     def _compute_chunk_geometry(
         self, items: list[CADItem]
     ) -> tuple[Optional[list[float]], Optional[float]]:
         """Compute geometric properties for chunk.
 
+        Uses multi-strategy approach:
+        1. Primary: Use item bounding boxes
+        2. Fallback: Extract from geometry_analysis properties
+
         Args:
             items: List of CAD items
 
         Returns:
-            Tuple of (bbox_center, bbox_volume)
+            Tuple of (bbox_center, bbox_volume) - tries to always return values
         """
+        # Strategy 1: Use item bounding boxes
         bboxes = [item.bbox for item in items if item.bbox is not None]
 
-        if not bboxes:
-            return None, None
+        if bboxes:
+            # Compute combined bounding box
+            x_min = min(bbox.x_min for bbox in bboxes)
+            y_min = min(bbox.y_min for bbox in bboxes)
+            z_min = min(bbox.z_min for bbox in bboxes)
+            x_max = max(bbox.x_max for bbox in bboxes)
+            y_max = max(bbox.y_max for bbox in bboxes)
+            z_max = max(bbox.z_max for bbox in bboxes)
 
-        # Compute combined bounding box
-        x_min = min(bbox.x_min for bbox in bboxes)
-        y_min = min(bbox.y_min for bbox in bboxes)
-        z_min = min(bbox.z_min for bbox in bboxes)
-        x_max = max(bbox.x_max for bbox in bboxes)
-        y_max = max(bbox.y_max for bbox in bboxes)
-        z_max = max(bbox.z_max for bbox in bboxes)
+            center = [
+                (x_min + x_max) / 2,
+                (y_min + y_max) / 2,
+                (z_min + z_max) / 2,
+            ]
 
-        center = [
-            (x_min + x_max) / 2,
-            (y_min + y_max) / 2,
-            (z_min + z_max) / 2,
-        ]
+            volume = (x_max - x_min) * (y_max - y_min) * (z_max - z_min)
+            return center, volume
 
-        volume = (x_max - x_min) * (y_max - y_min) * (z_max - z_min)
+        # Strategy 2: Extract from geometry_analysis properties
+        centers = []
+        volumes = []
 
-        return center, volume
+        for item in items:
+            if "geometry_analysis" in item.properties:
+                geom = item.properties["geometry_analysis"]
+
+                # Try to get center from geometry analysis
+                center = geom.get("centroid") or geom.get("center_of_mass")
+                if center:
+                    if isinstance(center, dict):
+                        center = [center.get("x", 0), center.get("y", 0), center.get("z", 0)]
+                    centers.append(center)
+
+                # Try to get volume
+                if "volume" in geom:
+                    volumes.append(abs(geom["volume"]))
+
+                # Try to get bbox from geometry_analysis
+                bbox = geom.get("bounding_box", {})
+                if bbox and all(k in bbox for k in ["xmin", "ymin", "zmin", "xmax", "ymax", "zmax"]):
+                    center = [
+                        (bbox["xmin"] + bbox["xmax"]) / 2,
+                        (bbox["ymin"] + bbox["ymax"]) / 2,
+                        (bbox["zmin"] + bbox["zmax"]) / 2,
+                    ]
+                    centers.append(center)
+                    vol = (bbox["xmax"] - bbox["xmin"]) * (bbox["ymax"] - bbox["ymin"]) * (bbox["zmax"] - bbox["zmin"])
+                    volumes.append(vol)
+
+        if centers:
+            avg_center = np.mean(centers, axis=0).tolist()
+            total_volume = sum(volumes) if volumes else None
+            return avg_center, total_volume
+
+        return None, None
 
     def _get_overlap_items(self, items: list[CADItem]) -> list[CADItem]:
         """Get items for overlap with next chunk.

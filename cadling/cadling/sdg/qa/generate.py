@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from cadling.datamodel.base_models import CADlingDocument
 
 from cadling.sdg.qa.base import (
+    AnnotationLevel,
     CADGenQAC,
     CADGenerateOptions,
     CADQaChunk,
@@ -31,6 +32,7 @@ from cadling.sdg.qa.prompts import (
     get_generation_prompts,
     get_prompts_for_question_type,
 )
+from cadling.sdg.qa.prompts.generation_prompts import get_prompts_for_level
 from cadling.sdg.qa.utils import (
     ChatAgent,
     load_qa_chunks,
@@ -77,35 +79,62 @@ class CADGenerator:
         """
         self.options = options
         self.agent = ChatAgent.from_options(options)
+        self.base_prompts = self._get_base_prompts()
         self.prompts = self._init_prompts()
         self.rng = random.Random(seed)  # Dedicated RNG for reproducibility
 
         _log.info(
             f"Initialized CADGenerator (model={options.model_id}, "
-            f"max_qac={options.max_qac})"
+            f"max_qac={options.max_qac}, "
+            f"annotation_levels={[l.value for l in options.annotation_levels] if options.annotation_levels else 'none'})"
         )
 
-    def _init_prompts(self) -> list[CADQaPromptTemplate]:
-        """Initialize prompt templates based on options.
+    def _get_base_prompts(self) -> list[CADQaPromptTemplate]:
+        """Get base prompt templates before annotation level expansion.
 
         Returns:
-            List of active prompt templates
+            List of base prompt templates filtered by question types
         """
         if not self.options.cad_specific_prompts:
-            # Return all prompts
             return list(get_generation_prompts().values())
 
-        # Filter by selected question types
         prompts = []
         for q_type in self.options.question_types:
             prompts.extend(get_prompts_for_question_type(q_type))
 
         if not prompts:
-            # Fallback to all prompts
             _log.warning("No prompts found for selected types, using all")
             return list(get_generation_prompts().values())
 
         return prompts
+
+    def _init_prompts(self) -> list[CADQaPromptTemplate]:
+        """Initialize prompt templates based on options.
+
+        If annotation levels are specified, creates level-specific prompt
+        variants for each base prompt. Otherwise returns base prompts as-is.
+
+        Returns:
+            List of active prompt templates
+        """
+        if not self.options.annotation_levels:
+            return self.base_prompts
+
+        # Create level-specific prompt variants for each annotation level
+        level_prompts: list[CADQaPromptTemplate] = []
+        for level in self.options.annotation_levels:
+            level_variants = get_prompts_for_level(self.base_prompts, level.value)
+            level_prompts.extend(level_variants)
+            _log.info(
+                f"Created {len(level_variants)} prompt variants for "
+                f"annotation level '{level.value}'"
+            )
+
+        if not level_prompts:
+            _log.warning("No level-specific prompts generated, falling back to base prompts")
+            return self.base_prompts
+
+        return level_prompts
 
     def generate(self, source: Path) -> GenerateResult:
         """Generate Q&A pairs from sampled passages file.
@@ -266,6 +295,17 @@ class CADGenerator:
             _log.debug("Empty answer generated")
             return None
 
+        # Resolve annotation level from prompt template
+        annotation_level = None
+        if prompt_template.annotation_level:
+            try:
+                annotation_level = AnnotationLevel(prompt_template.annotation_level)
+            except ValueError:
+                _log.warning(
+                    f"Invalid annotation level '{prompt_template.annotation_level}' "
+                    f"on prompt template '{prompt_template.name}'"
+                )
+
         # Create Q&A pair
         qac = CADGenQAC(
             doc_id=passage.doc_id,
@@ -275,6 +315,7 @@ class CADGenerator:
             answer=answer,
             context=passage.text if self.options.include_context else "",
             question_type=prompt_template.question_type,
+            annotation_level=annotation_level,
             labels={
                 "prompt_name": prompt_template.name,
             },

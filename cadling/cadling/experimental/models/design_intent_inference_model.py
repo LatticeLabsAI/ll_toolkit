@@ -325,9 +325,44 @@ class DesignIntentInferenceModel(EnrichmentModel):
             True if pattern detected
         """
         if pattern_name == "bolt_circle":
-            # Check for circular pattern of holes
+            # Check for circular pattern of holes using least-squares circle fit
             holes = [f for f in features if f.get("feature_type") == "hole"]
-            return len(holes) >= 3  # Simplified check
+
+            if len(holes) < 3:
+                return False
+
+            # Extract hole positions
+            positions = []
+            for hole in holes:
+                loc = hole.get("location")
+                if loc and len(loc) >= 2:
+                    positions.append([loc[0], loc[1]])  # Use XY plane
+
+            if len(positions) < 3:
+                return False
+
+            try:
+                import numpy as np
+
+                positions = np.array(positions)
+
+                # Compute centroid
+                centroid = positions.mean(axis=0)
+
+                # Compute radii from centroid
+                radii = np.linalg.norm(positions - centroid, axis=1)
+
+                # Check if all holes lie on approximately same circle
+                # std(radii)/mean(radii) < 0.1 indicates good circular fit
+                mean_radius = radii.mean()
+                if mean_radius > 1e-6:
+                    radius_variation = radii.std() / mean_radius
+                    return radius_variation < 0.15  # 15% tolerance
+
+            except Exception as e:
+                _log.debug(f"Bolt circle detection failed: {e}")
+
+            return False
 
         elif pattern_name == "mounting_holes":
             # Check for holes with bosses
@@ -460,7 +495,7 @@ Provide your analysis as JSON:
                 if intent != primary_intent:
                     secondary_intents.append(intent)
             except ValueError:
-                pass
+                _log.debug(f"Unknown intent category: {intent_str}")
 
         # Parse expected loads
         expected_loads = []
@@ -469,7 +504,7 @@ Provide your analysis as JSON:
                 load = LoadType(load_str.lower())
                 expected_loads.append(load)
             except ValueError:
-                pass
+                _log.debug(f"Unknown load type: {load_str}")
 
         return DesignIntent(
             primary_intent=primary_intent,

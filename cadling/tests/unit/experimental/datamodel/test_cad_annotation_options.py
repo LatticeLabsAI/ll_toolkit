@@ -22,17 +22,15 @@ class TestCADAnnotationOptions:
         """Test initialization with default values."""
         options = CADAnnotationOptions()
 
+        # Default annotation types are the core PMI types
         assert options.annotation_types == [
             "dimension",
             "tolerance",
             "gdt",
             "surface_finish",
-            "material",
-            "welding",
-            "note",
         ]
         assert options.min_confidence == 0.7
-        assert options.vlm_model == "gpt-4-vision-preview"
+        assert options.vlm_model == "gpt-4-vision"
         assert options.views_to_process == ["front", "top", "right"]
         assert options.enable_cross_view_validation is True
         assert options.extraction_resolution == 2048
@@ -129,7 +127,7 @@ class TestCADAnnotationOptions:
         """Test creation from dictionary."""
         data = {
             "annotation_types": ["tolerance", "gdt"],
-            "vlm_model": "gpt-4-vision-preview",
+            "vlm_model": "gpt-4-vision",
             "min_confidence": 0.9,
         }
 

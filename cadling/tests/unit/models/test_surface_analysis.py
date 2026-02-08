@@ -345,8 +345,12 @@ class TestSurfaceAnalysisModel:
         # Run analysis (should not crash)
         surface_model(mock_document, [face_item])
 
-        # Verify item was skipped (no surface_analysis property)
-        assert "surface_analysis" not in face_item.properties
+        # Verify error status was returned (provides diagnostic info)
+        assert "surface_analysis" in face_item.properties
+        analysis = face_item.properties["surface_analysis"]
+        assert analysis["status"] == "error"
+        assert "Could not retrieve OCC face" in analysis["reason"]
+        assert analysis["surface_type"] == "UNKNOWN"
 
     def test_model_info(self, surface_model):
         """Test get_model_info() method."""

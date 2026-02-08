@@ -12,8 +12,10 @@ from __future__ import annotations
 import logging
 import random
 import time
+import uuid
+from collections.abc import Iterator
 from pathlib import Path
-from typing import TYPE_CHECKING, Iterator
+from typing import TYPE_CHECKING
 
 from cadling.sdg.qa.base import (
     CADQaChunk,
@@ -86,8 +88,8 @@ class CADPassageSampler:
             return STEPChunker(max_tokens=self.options.max_tokens)
 
         elif chunker_type == ChunkerType.STL:
-            from cadling.chunker.stl_chunker import STLChunker
-            return STLChunker(max_tokens=self.options.max_tokens)
+            from cadling.chunker.stl_chunker import STLMeshChunker
+            return STLMeshChunker(max_tokens=self.options.max_tokens)
 
         elif chunker_type == ChunkerType.BREP:
             from cadling.chunker.brep_chunker import BRepChunker
@@ -245,11 +247,11 @@ class CADPassageSampler:
         """
         return CADQaChunk(
             text=chunk.text,
-            chunk_id=chunk.chunk_id,
-            doc_id=doc.id if hasattr(doc, "id") else "",
+            chunk_id=chunk.chunk_id or str(uuid.uuid4()),
+            doc_id=getattr(doc, "id", "") or doc.hash or "",
             doc_name=chunk.doc_name or doc.name,
             entity_types=chunk.meta.entity_types if chunk.meta else [],
-            entity_ids=chunk.meta.entity_ids if chunk.meta else [],
+            entity_ids=[str(eid) for eid in chunk.meta.entity_ids] if chunk.meta else [],
             properties=chunk.meta.properties if chunk.meta else {},
             topology_subgraph=(
                 chunk.meta.topology_subgraph

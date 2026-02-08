@@ -63,11 +63,12 @@ class TestInterferenceCheckModel:
 
         doc = SimpleDoc()
 
-        # Should not crash, but won't add results
+        # Should not crash, will add empty results
         model(doc, [])
 
-        # Should not have interference_check if no assembly_analysis
-        assert "interference_check" not in doc.properties
+        # Should have interference_check even without assembly_analysis (empty results)
+        assert "interference_check" in doc.properties
+        assert doc.properties["interference_check"]["has_interferences"] is False
 
 
 class TestInterference:

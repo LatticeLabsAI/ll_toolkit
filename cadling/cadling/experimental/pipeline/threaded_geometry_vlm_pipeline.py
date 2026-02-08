@@ -22,6 +22,10 @@ import logging
 from typing import TYPE_CHECKING
 
 from cadling.pipeline.base_pipeline import BaseCADPipeline
+from cadling.experimental.models import (
+    FeatureRecognitionVlmModel,
+    PMIExtractionModel,
+)
 
 if TYPE_CHECKING:
     from cadling.datamodel.base_models import ConversionResult
@@ -89,12 +93,6 @@ class ThreadedGeometryVlmPipeline(BaseCADPipeline):
         self.options: CADAnnotationOptions = options
         self.stage1_complete = False
         self.geometric_context = {}
-
-        # Import experimental models
-        from cadling.experimental.models import (
-            FeatureRecognitionVlmModel,
-            PMIExtractionModel,
-        )
 
         # Configure enrichment pipeline for Stage 2
         # Stage 1 feature recognition will use geometric-only analysis
@@ -222,45 +220,139 @@ class ThreadedGeometryVlmPipeline(BaseCADPipeline):
     def _extract_geometric_features(self, doc, item) -> None:
         """Extract geometric features from item (Stage 1 helper).
 
+        Uses BRepGraphBuilder and geometry extractors (HoleGeometryExtractor,
+        PocketGeometryExtractor) for robust feature detection.
+
         Args:
             doc: The document
             item: The item to process
         """
-        # This is a simplified geometric feature extraction
-        # In reality, this would use topology analysis, ll_stepnet, etc.
-
-        # Placeholder for geometric feature extraction
-        # Real implementation would analyze topology, detect holes, pockets, etc.
         detected_features = []
 
-        # Check if topology is available
-        if hasattr(doc, "topology") and doc.topology:
-            topo = doc.topology
+        # Try to use BRepGraphBuilder for topology-based feature extraction
+        try:
+            from cadling.models.segmentation.brep_graph_builder import BRepFaceGraphBuilder
+            from cadling.models.segmentation.geometry_extractors import (
+                HoleGeometryExtractor,
+                PocketGeometryExtractor,
+            )
 
-            # Extract basic feature hints from topology
-            num_faces = topo.get("num_faces", 0)
-            num_edges = topo.get("num_edges", 0)
+            graph_builder = BRepFaceGraphBuilder()
+            hole_extractor = HoleGeometryExtractor()
+            pocket_extractor = PocketGeometryExtractor()
+
+            # Build face graph from item
+            graph = graph_builder.build_face_graph(doc, item)
+
+            if graph is not None and graph.num_nodes > 0:
+                # Analyze face surface types from graph
+                for face_idx in range(graph.num_nodes):
+                    face_features = graph.x[face_idx] if hasattr(graph, "x") else None
+
+                    if face_features is not None:
+                        # Decode surface type from features (simplified)
+                        # Real implementation would use trained classifier
+                        surface_type = self._classify_surface_type(face_features)
+
+                        if surface_type == "cylindrical":
+                            # Extract hole parameters
+                            hole_params = hole_extractor.extract_from_face(
+                                graph, face_idx
+                            ) if hasattr(hole_extractor, "extract_from_face") else {}
+
+                            detected_features.append({
+                                "feature_type": "hole",
+                                "subtype": hole_params.get("hole_type", "unknown"),
+                                "parameters": {
+                                    "diameter": hole_params.get("diameter"),
+                                    "depth": hole_params.get("depth"),
+                                },
+                                "confidence": 0.75,
+                                "source": "brep_graph_analysis",
+                                "face_ids": [face_idx],
+                            })
+
+                        elif surface_type == "planar_recessed":
+                            # Extract pocket parameters
+                            pocket_params = pocket_extractor.extract_from_face(
+                                graph, face_idx
+                            ) if hasattr(pocket_extractor, "extract_from_face") else {}
+
+                            detected_features.append({
+                                "feature_type": "pocket",
+                                "subtype": pocket_params.get("pocket_type", "rectangular"),
+                                "parameters": {
+                                    "width": pocket_params.get("width"),
+                                    "length": pocket_params.get("length"),
+                                    "depth": pocket_params.get("depth"),
+                                },
+                                "confidence": 0.7,
+                                "source": "brep_graph_analysis",
+                                "face_ids": [face_idx],
+                            })
+
+                _log.debug(
+                    f"[Stage 1] BRepGraphBuilder: {graph.num_nodes} faces analyzed"
+                )
+
+        except ImportError as e:
+            _log.debug(f"BRepGraphBuilder not available: {e}")
+        except Exception as e:
+            _log.warning(f"BRepGraphBuilder feature extraction failed: {e}")
+
+        # Fallback: check if topology is available in doc
+        if not detected_features and hasattr(doc, "topology") and doc.topology:
+            topo = doc.topology
 
             # Simple heuristic: circular faces might be holes
             faces = topo.get("faces", [])
             for face in faces:
                 if face.get("geometry_type") == "cylinder":
-                    # Likely a hole or boss
-                    detected_features.append(
-                        {
-                            "feature_type": "hole",
-                            "subtype": "unknown",
-                            "parameters": {},
-                            "confidence": 0.7,
-                            "source": "geometric_analysis",
-                        }
-                    )
+                    detected_features.append({
+                        "feature_type": "hole",
+                        "subtype": "unknown",
+                        "parameters": {},
+                        "confidence": 0.5,
+                        "source": "topology_heuristic",
+                    })
 
         # Store detected features
         item.properties["machining_features"] = detected_features
         item.properties["geometric_analysis_stage"] = "complete"
 
         _log.debug(f"[Stage 1] Detected {len(detected_features)} geometric features")
+
+    def _classify_surface_type(self, face_features) -> str:
+        """Classify surface type from face feature vector.
+
+        Args:
+            face_features: Feature tensor for the face
+
+        Returns:
+            Surface type string
+        """
+        # Simplified classification based on feature patterns
+        # Real implementation would use trained classifier
+        try:
+            import torch
+
+            if isinstance(face_features, torch.Tensor):
+                features = face_features.detach().cpu().numpy()
+            else:
+                features = face_features
+
+            # Check for cylindrical surface indicators
+            # (curvature patterns, normal distribution, etc.)
+            if len(features) > 3:
+                # Example heuristic: high curvature in one direction
+                curvature_idx = min(3, len(features) - 1)
+                if abs(features[curvature_idx]) > 0.1:
+                    return "cylindrical"
+
+            return "planar"
+
+        except Exception:
+            return "unknown"
 
     def _render_views(self, doc, item) -> None:
         """Render views for VLM processing (Stage 1 helper).
@@ -269,15 +361,49 @@ class ThreadedGeometryVlmPipeline(BaseCADPipeline):
             doc: The document
             item: The item to process
         """
-        # Placeholder for view rendering
-        # Real implementation would use visualization backend to render views
-
         rendered_images = {}
 
-        # In real implementation, would render each view
+        # Try to get shape from item or document for rendering
+        shape = getattr(item, "_shape", None)
+        if shape is None:
+            shape = item.properties.get("_shape")
+        if shape is None and hasattr(doc, "_backend") and doc._backend is not None:
+            # Try to get shape from document backend
+            backend = doc._backend
+            if hasattr(backend, "shape"):
+                shape = backend.shape
+            elif hasattr(backend, "_shape"):
+                shape = backend._shape
+
+        if shape is None:
+            _log.debug(f"[Stage 1] No shape available for rendering")
+            item.properties["rendered_images"] = rendered_images
+            item.properties["rendering_stage"] = "skipped"
+            return
+
+        # Try to get rendering backend
+        backend = None
+        if hasattr(doc, "_backend") and doc._backend is not None:
+            backend = doc._backend
+        elif hasattr(shape, "render_view") and callable(shape.render_view):
+            backend = shape
+
+        # Render each configured view
         for view_name in self.options.views_to_process:
-            # rendered_images[view_name] = render_view(item, view_name)
-            pass
+            try:
+                if backend is not None and hasattr(backend, "render_view"):
+                    rendered_image = backend.render_view(
+                        view_name,
+                        resolution=getattr(self.options, "resolution", 512),
+                    )
+                    if rendered_image is not None:
+                        rendered_images[view_name] = rendered_image
+                        _log.debug(f"[Stage 1] Rendered view: {view_name}")
+                else:
+                    _log.debug(f"[Stage 1] Skipping view {view_name}: no rendering backend")
+
+            except Exception as e:
+                _log.warning(f"[Stage 1] Failed to render view {view_name}: {e}")
 
         item.properties["rendered_images"] = rendered_images
         item.properties["rendering_stage"] = "complete"

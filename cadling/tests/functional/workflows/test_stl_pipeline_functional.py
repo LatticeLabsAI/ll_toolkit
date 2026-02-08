@@ -155,7 +155,7 @@ class TestSTLPipelineFunctional:
                         "num_facets": num_facets,
                         "num_normals": num_normals
                     }
-                    output_manager.save_json(mesh_analysis, f"mesh_analysis_{test_file.stem}.json", "artifacts")
+                    output_manager.save_json(mesh_analysis, f"mesh_analysis_{test_file.stem}.json", "intermediates")
 
                 # Stage 4: Topology Properties
                 with logger.stage(f"Topology Properties - {test_file.name}"):
@@ -200,7 +200,7 @@ class TestSTLPipelineFunctional:
                         logger.info("No topology graph available")
                         topology_props = {"has_topology": False}
 
-                    output_manager.save_json(topology_props, f"topology_properties_{test_file.stem}.json", "artifacts")
+                    output_manager.save_json(topology_props, f"topology_properties_{test_file.stem}.json", "intermediates")
 
                 # Stage 5: Geometry Validation
                 with logger.stage(f"Geometry Validation - {test_file.name}"):
@@ -301,9 +301,10 @@ class TestSTLPipelineFunctional:
                     "ascii_count": sum(1 for r in results if r["format"] == "ASCII"),
                     "binary_count": sum(1 for r in results if r["format"] == "Binary")
                 }
-                output_manager.save_json(summary, "stl_pipeline_summary.json", "artifacts")
+                output_manager.save_json(summary, "stl_pipeline_summary.json", "reports")
 
-            # Save telemetry
+            # Create summary report and save telemetry
+            output_manager.create_summary_report()
             logger.save_telemetry()
 
             logger.info("="*80)
@@ -445,9 +446,10 @@ class TestSTLPipelineFunctional:
                     "success_rate_percent": round(successful / len(test_files) * 100, 1) if test_files else 0,
                     "results": batch_results
                 }
-                output_manager.save_json(batch_summary, "batch_results.json", "artifacts")
+                output_manager.save_json(batch_summary, "batch_results.json", "reports")
 
-            # Save telemetry
+            # Create summary report and save telemetry
+            output_manager.create_summary_report()
             logger.save_telemetry()
 
             logger.info("="*80)

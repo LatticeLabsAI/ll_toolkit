@@ -683,7 +683,8 @@ class ConstraintDetectionModel(EnrichmentModel):
                             "center": [location.X(), location.Y(), location.Z()],
                         })
 
-                except Exception:
+                except (AttributeError, RuntimeError, TypeError) as e:
+                    _log.debug("Skipping non-cylindrical or invalid face: %s", e)
                     continue
 
         except Exception as e:
@@ -739,7 +740,8 @@ class ConstraintDetectionModel(EnrichmentModel):
                             "area": area,
                         })
 
-                except Exception:
+                except (AttributeError, RuntimeError, TypeError) as e:
+                    _log.debug("Skipping non-planar or invalid face: %s", e)
                     continue
 
         except Exception as e:

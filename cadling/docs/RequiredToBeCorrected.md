@@ -26,14 +26,14 @@ This document outlines all methods, functions, and code blocks that contain plac
 
 **Issue**: Abstract base class defines interface but subclasses may have incomplete implementations
 
-### `cadling/backend/step/stepnet_integration.py`
+### `cadling/backend/step/stepnet_integration.py` — ✅ CORRECTED (2026-02-08)
 
-**Lines 79-87, 102-112, 126-137**: Multiple methods return `None` when ll_stepnet is not available
-- `tokenize()` - Returns None instead of implementing fallback
-- `extract_features()` - Returns None instead of implementing fallback
-- `build_topology()` - Returns None instead of implementing fallback
+**Lines 79-87, 102-112, 126-137**: ~~Multiple methods return `None` when ll_stepnet is not available~~
+- `tokenize()` — Now has full alternative tokenizer + `return_metadata` for degradation tracking
+- `extract_features()` — Now has cadling-based feature extraction fallback + `return_metadata`
+- `build_topology()` — Now has TopologyBuilder fallback + `return_metadata`
 
-**Issue**: Missing fallback implementations when optional dependency is unavailable
+**Resolution**: All three methods now have complete fallback implementations using cadling's own infrastructure, producing output in the same schema as ll_stepnet. The `return_metadata=True` option exposes `degraded`, `method`, and `warning` fields so callers know when they're getting fallback results.
 
 ### `cadling/backend/step/feature_extractor.py`
 
@@ -385,10 +385,12 @@ _log.debug("Feature recognition skipped: graph builder not available")
 ```
 **Issue**: Should implement proper watershed segmentation algorithm
 
-### `cadling/chunker/tokenizer/tokenizer.py`
+### `cadling/chunker/tokenizer/tokenizer.py` — PARTIALLY CORRECTED (2026-02-08)
 
 **Lines 39, 51, 63, 75**: Multiple pass statements
 - Tokenizer methods need implementation
+
+**Partial fix (2026-02-08):** Bare `except:` clause at line ~192 replaced with specific `(KeyError, ValueError)` at debug level + general `Exception` at warning level. Pass statements at lines 39/51/63/75 remain open.
 
 ### `cadling/chunker/serializer/serializer.py`
 

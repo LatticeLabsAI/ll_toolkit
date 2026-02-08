@@ -25,6 +25,7 @@ from cadling.sdg.qa.prompts import (
     get_critique_for_dimension,
     get_critique_prompts,
 )
+from cadling.sdg.qa.prompts.annotation_prompts import AnnotationLevelCritiqueTemplate
 from cadling.sdg.qa.utils import (
     ChatAgent,
     load_generated_qac,
@@ -188,6 +189,9 @@ class CADJudge:
     def _critique_qac(self, qac: CADGenQAC) -> CADGenQAC:
         """Critique a single Q&A pair.
 
+        Evaluates the Q&A pair across all configured critique dimensions.
+        If the QAC has an annotation_level, also evaluates level consistency.
+
         Args:
             qac: Q&A pair to critique
 
@@ -199,7 +203,51 @@ class CADJudge:
             critique.dimension = dimension
             qac.critiques[dimension] = critique
 
+        # Add level consistency critique when annotation_level is set
+        if qac.annotation_level is not None:
+            level_critique = self._run_level_consistency_critique(qac)
+            if level_critique is not None:
+                qac.critiques["level_consistency"] = level_critique
+
         return qac
+
+    def _run_level_consistency_critique(self, qac: CADGenQAC) -> Critique | None:
+        """Run level consistency critique on a Q&A pair.
+
+        Evaluates whether the Q&A pair's detail level matches its declared
+        annotation level using AnnotationLevelCritiqueTemplate.
+
+        Args:
+            qac: Q&A pair with annotation_level set
+
+        Returns:
+            Critique result for level consistency, or None if level is invalid
+        """
+        level_value = qac.annotation_level
+        if level_value is None:
+            return None
+
+        # Get string value from enum or string
+        level_str = level_value.value if hasattr(level_value, "value") else str(level_value)
+
+        prompt = AnnotationLevelCritiqueTemplate.format(
+            level=level_str,
+            question=qac.question,
+            answer=qac.answer,
+        )
+
+        if not prompt:
+            _log.warning(f"Could not format level consistency critique for level: {level_str}")
+            return None
+
+        try:
+            response = self.agent.ask(prompt, max_tokens=512)
+            critique = parse_critique_response(response)
+            critique.dimension = "level_consistency"
+            return critique
+        except Exception as e:
+            _log.warning(f"Failed level consistency critique: {e}")
+            return None
 
     def _run_critique(
         self,

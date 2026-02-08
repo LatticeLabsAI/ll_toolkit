@@ -365,6 +365,10 @@ class STLMeshChunker(BaseCADChunker):
     ) -> List[MeshSegment]:
         """Segment mesh using watershed algorithm on geometric field.
 
+        Uses a combined field of height (z-coordinate) and curvature to find
+        natural segmentation boundaries. Curvature helps detect edges and
+        feature boundaries while height provides spatial locality.
+
         Args:
             facets: List of facets
             mesh_data: Mesh data structures
@@ -372,9 +376,6 @@ class STLMeshChunker(BaseCADChunker):
         Returns:
             List of mesh segments
         """
-        # Simplified watershed: use height field (z-coordinate)
-        # Find local minima and grow regions
-
         # Compute centroid heights
         heights = []
         for facet in facets:
@@ -382,9 +383,37 @@ class STLMeshChunker(BaseCADChunker):
             heights.append(centroid_z)
 
         heights = np.array(heights)
+
+        # Compute discrete curvatures (dihedral angles between adjacent faces)
+        curvatures = self._compute_discrete_curvatures(facets, mesh_data)
+
+        # Normalize both fields to [0, 1] for combining
+        height_range = heights.max() - heights.min()
+        if height_range > 1e-10:
+            heights_normalized = (heights - heights.min()) / height_range
+        else:
+            heights_normalized = np.zeros_like(heights)
+
+        curvature_range = curvatures.max() - curvatures.min()
+        if curvature_range > 1e-10:
+            curvatures_normalized = (curvatures - curvatures.min()) / curvature_range
+        else:
+            curvatures_normalized = np.zeros_like(curvatures)
+
+        # Combine fields: alpha*heights + beta*curvatures
+        # Higher curvature weight helps segment at feature boundaries
+        alpha = 0.4  # Weight for height field
+        beta = 0.6   # Weight for curvature field
+        combined_field = alpha * heights_normalized + beta * curvatures_normalized
+
+        _log.debug(
+            f"Watershed combined field: height_range={height_range:.4f}, "
+            f"curvature_range={curvature_range:.4f}"
+        )
+
         adjacency = mesh_data["adjacency"]
 
-        # Find local minima
+        # Find local minima using combined field
         local_minima = []
         for idx in range(len(facets)):
             neighbors = adjacency.get(idx, [])
@@ -392,7 +421,7 @@ class STLMeshChunker(BaseCADChunker):
                 local_minima.append(idx)
                 continue
 
-            is_minimum = all(heights[idx] <= heights[n] for n in neighbors)
+            is_minimum = all(combined_field[idx] <= combined_field[n] for n in neighbors)
             if is_minimum:
                 local_minima.append(idx)
 
@@ -402,8 +431,8 @@ class STLMeshChunker(BaseCADChunker):
         visited = set()
         segments = []
 
-        # Sort minima by height
-        local_minima.sort(key=lambda idx: heights[idx])
+        # Sort minima by combined field value
+        local_minima.sort(key=lambda idx: combined_field[idx])
 
         for seed_idx in local_minima:
             if seed_idx in visited:
@@ -411,7 +440,7 @@ class STLMeshChunker(BaseCADChunker):
 
             # Grow basin using priority queue (heapq for O(log n) operations)
             basin = [seed_idx]
-            queue = [(heights[seed_idx], seed_idx)]
+            queue = [(combined_field[seed_idx], seed_idx)]
             heapq.heapify(queue)  # Initialize heap
             visited.add(seed_idx)
 
@@ -422,11 +451,11 @@ class STLMeshChunker(BaseCADChunker):
                     if neighbor_idx in visited:
                         continue
 
-                    # Add if height is ascending
-                    if heights[neighbor_idx] >= heights[current_idx]:
+                    # Add if combined field value is ascending (natural flow direction)
+                    if combined_field[neighbor_idx] >= combined_field[current_idx]:
                         basin.append(neighbor_idx)
                         visited.add(neighbor_idx)
-                        heapq.heappush(queue, (heights[neighbor_idx], neighbor_idx))  # O(log n)
+                        heapq.heappush(queue, (combined_field[neighbor_idx], neighbor_idx))  # O(log n)
 
             if basin:
                 segment = MeshSegment(basin)

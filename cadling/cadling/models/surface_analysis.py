@@ -292,7 +292,17 @@ class SurfaceAnalysisModel(EnrichmentModel):
 
         except Exception as e:
             _log.warning(f"Failed to analyze face: {e}")
-            return None
+            return {
+                "status": "error",
+                "reason": str(e),
+                "surface_type": "UNKNOWN",
+                "surface_type_confidence": 0.0,
+                "gaussian_curvature": 0.0,
+                "mean_curvature": 0.0,
+                "principal_curvatures": [0.0, 0.0],
+                "is_planar": False,
+                "is_smooth": False,
+            }
 
     def supports_batch_processing(self) -> bool:
         """Surface analysis can process items independently."""

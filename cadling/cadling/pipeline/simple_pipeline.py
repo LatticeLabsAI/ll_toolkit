@@ -62,7 +62,10 @@ class SimpleCADPipeline(BaseCADPipeline):
         """Build document using declarative backend.
 
         This method delegates directly to the backend's convert() method,
-        which returns a fully populated CADlingDocument.
+        which returns a fully populated CADlingDocument. If the resulting
+        document contains 2D sketch items (from DXF or PDF backends), the
+        SketchGeometryExtractor is automatically applied to convert
+        primitives into tokenizer-ready command sequences.
 
         Args:
             conv_res: Conversion result to populate.
@@ -96,4 +99,47 @@ class SimpleCADPipeline(BaseCADPipeline):
             f"Backend produced document with {len(conv_res.document.items)} items"
         )
 
+        # Auto-apply SketchGeometryExtractor for 2D sketch items
+        if conv_res.document:
+            self._auto_extract_sketch_geometry(conv_res.document)
+
         return conv_res
+
+    def _auto_extract_sketch_geometry(self, doc) -> None:
+        """Auto-apply SketchGeometryExtractor if document contains 2D sketches.
+
+        Checks whether the document contains any Sketch2DItem instances
+        (produced by DXF or PDF backends) and automatically runs the
+        SketchGeometryExtractor enrichment model to convert Primitive2D
+        geometry into tokenizer-compatible command sequences.
+
+        Args:
+            doc: The CADlingDocument to check and enrich.
+        """
+        from cadling.datamodel.geometry_2d import Sketch2DItem
+
+        sketch_items = [
+            item for item in doc.items if isinstance(item, Sketch2DItem)
+        ]
+
+        if not sketch_items:
+            return
+
+        _log.info(
+            "Document contains %d 2D sketch items — "
+            "auto-applying SketchGeometryExtractor",
+            len(sketch_items),
+        )
+
+        try:
+            from cadling.models.segmentation.sketch_geometry_extractor import (
+                SketchGeometryExtractor,
+            )
+
+            extractor = SketchGeometryExtractor()
+            extractor(doc, sketch_items)
+
+        except Exception as exc:
+            _log.warning(
+                "Auto sketch geometry extraction failed: %s", exc
+            )

@@ -20,6 +20,7 @@ from cadling.models.assembly_analysis import (
     BillOfMaterials,
     Subassembly
 )
+from cadling.datamodel.base_models import CADItemLabel
 
 
 class TestAssemblyAnalysisModel:
@@ -537,7 +538,10 @@ class TestIntegration:
         part3.item_id = "plate_1"
         part3.name = "Mounting Plate"
 
-        asm = AssemblyItem(item_id="asm1")
+        asm = AssemblyItem(
+            item_id="asm1",
+            label=CADItemLabel(text="Assembly 1")
+        )
         asm.add_component("bolt_1", "Bolt M8")
         asm.add_component("bolt_2", "Bolt M8")
         asm.add_component("plate_1", "Mounting Plate")

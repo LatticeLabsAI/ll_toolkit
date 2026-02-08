@@ -159,7 +159,7 @@ class TestSTEPPipelineFunctional:
                     "unique_types": len(entity_types),
                     "entity_type_distribution": entity_types
                 }
-                output_manager.save_json(entity_analysis, "entity_analysis.json", "artifacts")
+                output_manager.save_json(entity_analysis, "entity_analysis.json", "intermediates")
 
             # Stage 4: Topology Analysis
             with logger.stage("Topology Analysis"):
@@ -206,14 +206,14 @@ class TestSTEPPipelineFunctional:
                         "statistics": doc.metadata.get("topology_statistics", {}) if hasattr(doc, 'metadata') else {},
                         "topology_type": doc.metadata.get("topology_type", {}) if hasattr(doc, 'metadata') else {}
                     }
-                    output_manager.save_json(topology_data, "topology_statistics.json", "artifacts")
+                    output_manager.save_json(topology_data, "topology_statistics.json", "intermediates")
 
                     # Generate CAD-specific entity relationship visualization
                     logger.info("Generating CAD entity relationship visualization...")
                     try:
                         visualizer = TopologyGraphVisualizer(
                             topology,
-                            output_manager.artifacts_dir
+                            output_manager.get_visualization_dir()
                         )
 
                         # Generate CAD-specific visualization
@@ -269,7 +269,7 @@ class TestSTEPPipelineFunctional:
 
                         # Save UV-grids as compressed numpy arrays
                         if face_uv_grids:
-                            face_grids_path = output_manager.artifacts_dir / "face_uv_grids.npz"
+                            face_grids_path = output_manager.get_output_dir() / "face_uv_grids.npz"
                             np.savez_compressed(
                                 face_grids_path,
                                 **{str(k): v for k, v in face_uv_grids.items()}
@@ -277,7 +277,7 @@ class TestSTEPPipelineFunctional:
                             logger.info(f"  ✓ Saved face UV-grids: {face_grids_path.name}")
 
                         if edge_uv_grids:
-                            edge_grids_path = output_manager.artifacts_dir / "edge_uv_grids.npz"
+                            edge_grids_path = output_manager.get_output_dir() / "edge_uv_grids.npz"
                             np.savez_compressed(
                                 edge_grids_path,
                                 **{str(k): v for k, v in edge_uv_grids.items()}
@@ -338,7 +338,7 @@ class TestSTEPPipelineFunctional:
                             "surface_types": surface_type_data,
                             "hierarchy": hierarchy_data
                         }
-                        output_manager.save_json(distributions, "geometric_distributions.json", "artifacts")
+                        output_manager.save_json(distributions, "geometric_distributions.json", "intermediates")
                         logger.info(f"  ✓ Saved geometric distributions")
 
                     except Exception as e:
@@ -415,7 +415,7 @@ class TestSTEPPipelineFunctional:
                                 "max": float(np.max(edge_features)) if edge_features is not None else None
                             }
                         }
-                        output_manager.save_json(feature_summary, "enhanced_features_summary.json", "artifacts")
+                        output_manager.save_json(feature_summary, "enhanced_features_summary.json", "intermediates")
                         logger.info(f"  ✓ Saved enhanced features summary")
 
                     except Exception as e:
@@ -488,7 +488,7 @@ class TestSTEPPipelineFunctional:
                             logger.log_metric("pyg_validation_errors", len(validation_errors))
 
                             # Save PyG data
-                            pyg_path = output_manager.artifacts_dir / "graph_data.pt"
+                            pyg_path = output_manager.get_output_dir() / "graph_data.pt"
                             save_pyg_data(pyg_data, pyg_path, include_metadata=True)
 
                             logger.log_metric("pyg_num_nodes", int(pyg_data.x.shape[0]))
@@ -510,7 +510,7 @@ class TestSTEPPipelineFunctional:
                     try:
                         viz = TopologyGraphVisualizer(
                             doc.topology if doc.topology else None,
-                            output_manager.artifacts_dir
+                            output_manager.get_visualization_dir()
                         )
 
                         viz_files = []
@@ -645,7 +645,7 @@ class TestSTEPPipelineFunctional:
                     "topology_nodes": doc.topology.num_nodes if doc.topology else 0,
                     "topology_edges": doc.topology.num_edges if doc.topology else 0
                 }
-                output_manager.save_json(doc_summary, "document_summary.json", "artifacts")
+                output_manager.save_json(doc_summary, "document_summary.json", "reports")
 
                 # Export markdown summary
                 markdown = f"""# STEP Pipeline Functional Test Results
@@ -682,10 +682,14 @@ class TestSTEPPipelineFunctional:
                 for validation in validation_results:
                     markdown += f"- {validation['name']}: {'PASS' if validation['passed'] else 'FAIL'} - {validation['message']}\n"
 
-                output_manager.save_text(markdown, "summary.md", "artifacts")
+                output_manager.save_text(markdown, "summary.md", "reports")
 
                 logger.info(f"✓ Document summary exported")
                 logger.info(f"✓ Markdown summary exported")
+
+            # Create master summary report
+            output_manager.create_summary_report()
+            logger.info(f"✓ Master summary report created")
 
             # Save telemetry
             logger.save_telemetry()
@@ -819,7 +823,10 @@ class TestSTEPPipelineFunctional:
                     "success_rate_percent": round(successful / len(test_files) * 100, 1) if test_files else 0,
                     "results": batch_results
                 }
-                output_manager.save_json(batch_summary, "batch_results.json", "artifacts")
+                output_manager.save_json(batch_summary, "batch_results.json", "reports")
+
+            # Create master summary report
+            output_manager.create_summary_report()
 
             # Save telemetry
             logger.save_telemetry()

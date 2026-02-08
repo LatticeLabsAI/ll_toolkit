@@ -71,6 +71,129 @@ class STEPForCaptioning(nn.Module):
         
         return logits
 
+    @torch.no_grad()
+    def generate(
+        self,
+        token_ids: torch.Tensor,
+        topology_data: Optional[Dict] = None,
+        max_length: int = 64,
+        num_beams: int = 4,
+        temperature: float = 1.0,
+        eos_token_id: int = 2,
+        pad_token_id: int = 0,
+        bos_token_id: int = 1,
+    ) -> torch.Tensor:
+        """
+        Generate captions using beam search decoding.
+
+        Args:
+            token_ids: [batch, seq_len] STEP tokens
+            topology_data: Optional topology dict
+            max_length: Maximum caption length to generate
+            num_beams: Number of beams for beam search (1 = greedy)
+            temperature: Sampling temperature (lower = more deterministic)
+            eos_token_id: End of sequence token ID
+            pad_token_id: Padding token ID
+            bos_token_id: Beginning of sequence token ID
+
+        Returns:
+            generated_ids: [batch, generated_len] generated caption token IDs
+        """
+        batch_size = token_ids.size(0)
+        device = token_ids.device
+
+        # Encode STEP
+        encoded = self.encoder(token_ids, topology_data)  # [batch, output_dim]
+        memory = encoded.unsqueeze(1)  # [batch, 1, output_dim]
+
+        # Initialize with BOS token
+        generated = torch.full(
+            (batch_size, 1), bos_token_id, dtype=torch.long, device=device
+        )
+
+        # Expand for beam search
+        if num_beams > 1:
+            memory = memory.repeat_interleave(num_beams, dim=0)
+            generated = generated.repeat_interleave(num_beams, dim=0)
+            beam_scores = torch.zeros(batch_size * num_beams, device=device)
+            beam_scores[1::num_beams] = float('-inf')  # Only first beam active initially
+        else:
+            beam_scores = torch.zeros(batch_size, device=device)
+
+        # Autoregressive generation
+        finished = torch.zeros(
+            batch_size * num_beams if num_beams > 1 else batch_size,
+            dtype=torch.bool,
+            device=device
+        )
+
+        for _ in range(max_length - 1):
+            # Get current sequence embeddings
+            # Use a simple linear embedding for positions
+            seq_len = generated.size(1)
+            pos_embed = torch.zeros(
+                generated.size(0), seq_len, memory.size(-1), device=device
+            )
+            for i in range(seq_len):
+                pos_embed[:, i, :] = i / max_length
+
+            # Create input embedding (simplified - using position as proxy)
+            tgt = pos_embed + generated.unsqueeze(-1).float()
+
+            # Decode
+            decoded = self.caption_decoder(tgt, memory)
+            logits = self.output_projection(decoded[:, -1, :])  # [batch*beams, vocab]
+
+            # Apply temperature
+            if temperature != 1.0:
+                logits = logits / temperature
+
+            # Get log probabilities
+            log_probs = torch.nn.functional.log_softmax(logits, dim=-1)
+
+            if num_beams > 1:
+                # Beam search step
+                vocab_size = log_probs.size(-1)
+                next_scores = beam_scores.unsqueeze(-1) + log_probs  # [batch*beams, vocab]
+
+                # Reshape for beam selection
+                next_scores = next_scores.view(batch_size, num_beams * vocab_size)
+                next_scores, next_tokens = next_scores.topk(num_beams, dim=-1)
+
+                # Compute beam and token indices
+                beam_indices = next_tokens // vocab_size
+                token_indices = next_tokens % vocab_size
+
+                # Update sequences
+                batch_indices = torch.arange(batch_size, device=device).unsqueeze(-1)
+                flat_beam_indices = (batch_indices * num_beams + beam_indices).view(-1)
+
+                generated = torch.cat([
+                    generated[flat_beam_indices],
+                    token_indices.view(-1, 1)
+                ], dim=-1)
+
+                beam_scores = next_scores.view(-1)
+
+                # Check for EOS
+                finished = finished[flat_beam_indices] | (token_indices.view(-1) == eos_token_id)
+            else:
+                # Greedy decoding
+                next_token = logits.argmax(dim=-1, keepdim=True)
+                generated = torch.cat([generated, next_token], dim=-1)
+                finished = finished | (next_token.squeeze(-1) == eos_token_id)
+
+            # Stop if all sequences have finished
+            if finished.all():
+                break
+
+        # Return best beam for each batch
+        if num_beams > 1:
+            # Reshape and select best
+            generated = generated.view(batch_size, num_beams, -1)[:, 0, :]
+
+        return generated
+
 
 class STEPForClassification(nn.Module):
     """
@@ -277,5 +400,130 @@ class STEPForQA(nn.Module):
             logits = self.output_projection(a_decoded)
         else:
             raise NotImplementedError("Use generate() for inference")
-        
+
         return logits
+
+    @torch.no_grad()
+    def generate(
+        self,
+        step_token_ids: torch.Tensor,
+        question_token_ids: torch.Tensor,
+        topology_data: Optional[Dict] = None,
+        max_length: int = 64,
+        num_beams: int = 4,
+        temperature: float = 1.0,
+        eos_token_id: int = 2,
+        pad_token_id: int = 0,
+        bos_token_id: int = 1,
+    ) -> torch.Tensor:
+        """
+        Generate answers using beam search decoding.
+
+        Args:
+            step_token_ids: [batch, step_seq_len] STEP tokens
+            question_token_ids: [batch, q_seq_len] question tokens
+            topology_data: Optional topology dict
+            max_length: Maximum answer length to generate
+            num_beams: Number of beams for beam search (1 = greedy)
+            temperature: Sampling temperature (lower = more deterministic)
+            eos_token_id: End of sequence token ID
+            pad_token_id: Padding token ID
+            bos_token_id: Beginning of sequence token ID
+
+        Returns:
+            generated_ids: [batch, generated_len] generated answer token IDs
+        """
+        batch_size = step_token_ids.size(0)
+        device = step_token_ids.device
+
+        # Encode STEP
+        step_encoded = self.step_encoder(step_token_ids, topology_data)  # [batch, dim]
+
+        # Encode question
+        q_embed = self.question_embedding(question_token_ids)
+        q_encoded = self.question_encoder(q_embed)  # [batch, q_len, dim]
+
+        # Combine STEP and question as memory for decoder
+        memory = torch.cat([
+            step_encoded.unsqueeze(1),  # [batch, 1, dim]
+            q_encoded                    # [batch, q_len, dim]
+        ], dim=1)  # [batch, 1+q_len, dim]
+
+        # Initialize with BOS token
+        generated = torch.full(
+            (batch_size, 1), bos_token_id, dtype=torch.long, device=device
+        )
+
+        # Expand for beam search
+        if num_beams > 1:
+            memory = memory.repeat_interleave(num_beams, dim=0)
+            generated = generated.repeat_interleave(num_beams, dim=0)
+            beam_scores = torch.zeros(batch_size * num_beams, device=device)
+            beam_scores[1::num_beams] = float('-inf')  # Only first beam active initially
+        else:
+            beam_scores = torch.zeros(batch_size, device=device)
+
+        # Autoregressive generation
+        finished = torch.zeros(
+            batch_size * num_beams if num_beams > 1 else batch_size,
+            dtype=torch.bool,
+            device=device
+        )
+
+        for _ in range(max_length - 1):
+            # Get current answer embeddings
+            a_embed = self.question_embedding(generated)
+
+            # Decode
+            a_decoded = self.answer_decoder(a_embed, memory)
+            logits = self.output_projection(a_decoded[:, -1, :])  # [batch*beams, vocab]
+
+            # Apply temperature
+            if temperature != 1.0:
+                logits = logits / temperature
+
+            # Get log probabilities
+            log_probs = torch.nn.functional.log_softmax(logits, dim=-1)
+
+            if num_beams > 1:
+                # Beam search step
+                vocab_size = log_probs.size(-1)
+                next_scores = beam_scores.unsqueeze(-1) + log_probs  # [batch*beams, vocab]
+
+                # Reshape for beam selection
+                next_scores = next_scores.view(batch_size, num_beams * vocab_size)
+                next_scores, next_tokens = next_scores.topk(num_beams, dim=-1)
+
+                # Compute beam and token indices
+                beam_indices = next_tokens // vocab_size
+                token_indices = next_tokens % vocab_size
+
+                # Update sequences
+                batch_indices = torch.arange(batch_size, device=device).unsqueeze(-1)
+                flat_beam_indices = (batch_indices * num_beams + beam_indices).view(-1)
+
+                generated = torch.cat([
+                    generated[flat_beam_indices],
+                    token_indices.view(-1, 1)
+                ], dim=-1)
+
+                beam_scores = next_scores.view(-1)
+
+                # Check for EOS
+                finished = finished[flat_beam_indices] | (token_indices.view(-1) == eos_token_id)
+            else:
+                # Greedy decoding
+                next_token = logits.argmax(dim=-1, keepdim=True)
+                generated = torch.cat([generated, next_token], dim=-1)
+                finished = finished | (next_token.squeeze(-1) == eos_token_id)
+
+            # Stop if all sequences have finished
+            if finished.all():
+                break
+
+        # Return best beam for each batch
+        if num_beams > 1:
+            # Reshape and select best
+            generated = generated.view(batch_size, num_beams, -1)[:, 0, :]
+
+        return generated

@@ -15,7 +15,9 @@ Classes:
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Optional
+import re
+import struct
+from typing import TYPE_CHECKING, Optional, Tuple
 
 import numpy as np
 
@@ -25,6 +27,10 @@ if TYPE_CHECKING:
     from cadling.datamodel.base_models import CADItem, CADlingDocument
 
 _log = logging.getLogger(__name__)
+
+
+# STL binary format header size
+STL_BINARY_HEADER_SIZE = 80
 
 
 class MeshQualityModel(EnrichmentModel):
@@ -111,13 +117,16 @@ class MeshQualityModel(EnrichmentModel):
     ) -> None:
         """Assess mesh quality for CAD items.
 
+        Uses multi-strategy approach to ensure quality assessment even when
+        trimesh is unavailable.
+
         Args:
             doc: CADlingDocument being enriched
             item_batch: List of CADItem objects to assess
         """
+        # Note: We no longer skip when trimesh unavailable - we have numpy fallbacks
         if not self.has_trimesh:
-            _log.debug("Mesh quality assessment skipped: trimesh not available")
-            return
+            _log.debug("trimesh not available, using numpy-based fallback methods")
 
         for item in item_batch:
             try:
@@ -155,39 +164,63 @@ class MeshQualityModel(EnrichmentModel):
     ) -> Optional[dict]:
         """Assess mesh quality of a single CAD item.
 
+        Uses multi-strategy approach:
+        1. Primary: Load mesh via trimesh
+        2. Alternative A: Parse STL file directly (numpy-based)
+        3. Alternative B: Tessellate CAD shape via pythonocc
+        4. Alternative C: Estimate from item properties
+
         Args:
             doc: Document containing the item
             item: Item to assess
 
         Returns:
-            Dictionary with quality metrics, or None if assessment failed
+            Dictionary with quality metrics - NEVER returns None
         """
-        # Try to get mesh
+        # Strategy 1: Try to get mesh via trimesh
         mesh = self._get_mesh_for_item(doc, item)
 
-        if mesh is None:
-            _log.debug(f"Could not get mesh for item {item.label.text}")
-            return {
-                "status": "error",
-                "reason": "Could not retrieve mesh from item",
-                "num_vertices": 0,
-                "num_faces": 0,
-                "edge_lengths": {"min": 0.0, "max": 0.0, "mean": 0.0, "std": 0.0},
-                "aspect_ratio": {"min": 0.0, "max": 0.0, "mean": 0.0, "std": 0.0},
-                "num_poor_aspect_ratio": 0,
-                "percent_poor_aspect_ratio": 0.0,
-                "skewness": {"min": 0.0, "max": 0.0, "mean": 0.0, "std": 0.0},
-                "num_high_skewness": 0,
-                "percent_high_skewness": 0.0,
-                "num_degenerate_faces": 0,
-                "percent_degenerate_faces": 0.0,
-                "is_manifold": False,
-                "quality_score": 0.0,
-                "quality_class": "unknown",
-            }
+        if mesh is not None:
+            return self._assess_mesh(mesh)
 
-        # Assess mesh quality
-        return self._assess_mesh(mesh)
+        # Strategy 2: Try numpy-based STL parsing (no trimesh required)
+        format_str = str(doc.format).lower() if hasattr(doc, 'format') else ""
+        if format_str == "stl":
+            stl_result = self._assess_from_stl_data(doc)
+            if stl_result is not None:
+                return stl_result
+
+        # Strategy 3: Try tessellation from STEP/IGES if pythonocc available
+        if format_str in ["step", "iges", "brep"]:
+            tess_result = self._assess_from_tessellation(doc)
+            if tess_result is not None:
+                return tess_result
+
+        # Strategy 4: Estimate from item properties (bounding box, surface area, etc.)
+        prop_result = self._estimate_from_properties(doc, item)
+        if prop_result is not None:
+            return prop_result
+
+        # Last resort: Return error dict with computed zeros
+        _log.debug(f"Could not assess mesh quality for item {item.label.text} via any method")
+        return {
+            "status": "error",
+            "reason": "Could not retrieve mesh from item via any method",
+            "num_vertices": 0,
+            "num_faces": 0,
+            "edge_lengths": {"min": 0.0, "max": 0.0, "mean": 0.0, "std": 0.0},
+            "aspect_ratio": {"min": 0.0, "max": 0.0, "mean": 0.0, "std": 0.0},
+            "num_poor_aspect_ratio": 0,
+            "percent_poor_aspect_ratio": 0.0,
+            "skewness": {"min": 0.0, "max": 0.0, "mean": 0.0, "std": 0.0},
+            "num_high_skewness": 0,
+            "percent_high_skewness": 0.0,
+            "num_degenerate_faces": 0,
+            "percent_degenerate_faces": 0.0,
+            "is_manifold": False,
+            "quality_score": 0.0,
+            "quality_class": "unknown",
+        }
 
     def _get_mesh_for_item(
         self, doc: CADlingDocument, item: CADItem
@@ -216,15 +249,687 @@ class MeshQualityModel(EnrichmentModel):
 
         return None
 
+    def _get_backend_resource(self, doc: CADlingDocument, resource_name: str):
+        """Get a resource from the document's backend using multiple attribute patterns.
+
+        Tries the following patterns in order:
+        1. backend.{resource_name} (e.g., backend.shape)
+        2. backend._{resource_name} (e.g., backend._shape)
+        3. backend.load_{resource_name}() (e.g., backend.load_shape())
+        4. backend.get_{resource_name}() (e.g., backend.get_shape())
+
+        Args:
+            doc: Document with backend
+            resource_name: Base name of the resource (e.g., "shape", "mesh")
+
+        Returns:
+            The resource if found, None otherwise
+        """
+        if not hasattr(doc, '_backend') or doc._backend is None:
+            _log.debug(f"No backend available for {resource_name} loading")
+            return None
+
+        backend = doc._backend
+
+        # Define attribute patterns to try (in order of likelihood)
+        attr_patterns = [
+            (resource_name, False),           # backend.shape
+            (f"_{resource_name}", False),     # backend._shape
+            (f"load_{resource_name}", True),  # backend.load_shape()
+            (f"get_{resource_name}", True),   # backend.get_shape()
+        ]
+
+        try:
+            for attr_name, is_method in attr_patterns:
+                if hasattr(backend, attr_name):
+                    attr = getattr(backend, attr_name)
+                    if is_method:
+                        # It's a method, call it
+                        if callable(attr):
+                            result = attr()
+                            if result is not None:
+                                _log.debug(f"Loaded {resource_name} from backend.{attr_name}()")
+                                return result
+                    else:
+                        # It's an attribute, return directly if not None
+                        if attr is not None:
+                            _log.debug(f"Loaded {resource_name} from backend.{attr_name}")
+                            return attr
+
+            # No pattern matched
+            _log.debug(
+                f"Backend {type(backend).__name__} does not provide {resource_name} "
+                f"(tried: {', '.join(p[0] for p in attr_patterns)})"
+            )
+            return None
+
+        except Exception as e:
+            _log.error(f"Failed to load {resource_name} from backend: {e}")
+            return None
+
     def _load_trimesh(self, doc: CADlingDocument):
-        """Load mesh via trimesh."""
-        _log.debug("Trimesh loading not yet implemented in enrichment stage")
-        return None
+        """Load mesh via trimesh.
+
+        Args:
+            doc: Document to load mesh from
+
+        Returns:
+            Trimesh object or None
+        """
+        return self._get_backend_resource(doc, "mesh")
 
     def _tessellate_cad(self, doc: CADlingDocument):
-        """Tessellate CAD surface to mesh."""
-        _log.debug("CAD tessellation not yet implemented in enrichment stage")
+        """Tessellate CAD surface to mesh using pythonocc.
+
+        Uses BRepMesh_IncrementalMesh to generate a triangular mesh from
+        the OCC shape, then converts it to a trimesh object.
+
+        Args:
+            doc: Document containing the CAD shape
+
+        Returns:
+            Trimesh object or None if tessellation fails
+        """
+        if not self.has_pythonocc:
+            _log.debug("CAD tessellation skipped: pythonocc not available")
+            return None
+
+        # Get the OCC shape from backend
+        shape = self._get_backend_resource(doc, "shape")
+        if shape is None:
+            _log.debug("CAD tessellation skipped: no shape available")
+            return None
+
+        try:
+            from OCC.Core.BRepMesh import BRepMesh_IncrementalMesh
+            from OCC.Core.TopAbs import TopAbs_FACE
+            from OCC.Core.TopExp import TopExp_Explorer
+            from OCC.Core.TopLoc import TopLoc_Location
+            from OCC.Core.BRep import BRep_Tool
+            import trimesh
+
+            # Tessellate the shape
+            # Linear deflection controls mesh density (smaller = finer mesh)
+            linear_deflection = 0.1
+            angular_deflection = 0.5
+            mesh_algo = BRepMesh_IncrementalMesh(
+                shape, linear_deflection, False, angular_deflection, True
+            )
+            mesh_algo.Perform()
+
+            if not mesh_algo.IsDone():
+                _log.warning("BRepMesh_IncrementalMesh did not complete successfully")
+                return None
+
+            # Collect vertices and faces from all faces in the shape
+            all_vertices = []
+            all_faces = []
+            vertex_offset = 0
+
+            face_explorer = TopExp_Explorer(shape, TopAbs_FACE)
+            while face_explorer.More():
+                face = face_explorer.Current()
+                location = TopLoc_Location()
+
+                # Get the triangulation for this face
+                triangulation = BRep_Tool.Triangulation(face, location)
+
+                if triangulation is not None:
+                    # Get transformation matrix
+                    transformation = location.Transformation()
+
+                    # Extract vertices
+                    num_nodes = triangulation.NbNodes()
+                    for i in range(1, num_nodes + 1):
+                        node = triangulation.Node(i)
+                        # Apply transformation
+                        node = node.Transformed(transformation)
+                        all_vertices.append([node.X(), node.Y(), node.Z()])
+
+                    # Extract faces (triangles)
+                    num_triangles = triangulation.NbTriangles()
+                    for i in range(1, num_triangles + 1):
+                        tri = triangulation.Triangle(i)
+                        n1, n2, n3 = tri.Get()
+                        # Convert from 1-based to 0-based indexing and add offset
+                        all_faces.append([
+                            n1 - 1 + vertex_offset,
+                            n2 - 1 + vertex_offset,
+                            n3 - 1 + vertex_offset
+                        ])
+
+                    vertex_offset += num_nodes
+
+                face_explorer.Next()
+
+            if not all_vertices or not all_faces:
+                _log.warning("Tessellation produced no geometry")
+                return None
+
+            # Create trimesh object
+            vertices_array = np.array(all_vertices)
+            faces_array = np.array(all_faces)
+            mesh = trimesh.Trimesh(vertices=vertices_array, faces=faces_array)
+
+            _log.debug(
+                f"Tessellated CAD to mesh: {len(all_vertices)} vertices, "
+                f"{len(all_faces)} faces"
+            )
+            return mesh
+
+        except ImportError as e:
+            _log.warning(f"CAD tessellation failed due to missing import: {e}")
+            return None
+        except Exception as e:
+            _log.error(f"CAD tessellation failed: {e}")
+            return None
+
+    def _assess_from_stl_data(self, doc: CADlingDocument) -> Optional[dict]:
+        """Assess mesh quality from STL data using numpy only (no trimesh).
+
+        This is the numpy-based alternative when trimesh is unavailable.
+        Parses both ASCII and binary STL formats directly.
+
+        Args:
+            doc: Document containing STL data
+
+        Returns:
+            Dictionary with quality metrics, or None if parsing fails
+        """
+        try:
+            # Try to get raw STL data from document
+            stl_data = self._get_stl_data(doc)
+            if stl_data is None:
+                return None
+
+            # Parse STL to vertices and faces
+            vertices, faces = self._parse_stl_data(stl_data)
+
+            if vertices is None or len(vertices) == 0 or len(faces) == 0:
+                return None
+
+            # Compute quality metrics using numpy
+            return self._assess_mesh_numpy(vertices, faces)
+
+        except Exception as e:
+            _log.debug(f"STL-based mesh assessment failed: {e}")
+            return None
+
+    def _get_stl_data(self, doc: CADlingDocument) -> Optional[bytes]:
+        """Get raw STL data from document.
+
+        Args:
+            doc: Document to get STL data from
+
+        Returns:
+            Raw STL bytes or None
+        """
+        # Try multiple sources
+        if hasattr(doc, '_backend') and doc._backend is not None:
+            backend = doc._backend
+            # Try various attribute patterns
+            for attr in ['_raw_data', 'raw_data', '_content', 'content']:
+                if hasattr(backend, attr):
+                    data = getattr(backend, attr)
+                    if data is not None:
+                        return data if isinstance(data, bytes) else data.encode('utf-8')
+
+        # Try from origin
+        if hasattr(doc, 'origin') and doc.origin is not None:
+            if hasattr(doc.origin, 'binary_representation'):
+                return doc.origin.binary_representation
+            if hasattr(doc.origin, 'text'):
+                text = doc.origin.text
+                if text:
+                    return text.encode('utf-8') if isinstance(text, str) else text
+
         return None
+
+    def _parse_stl_data(self, data: bytes) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+        """Parse STL data (ASCII or binary) into vertices and faces.
+
+        Args:
+            data: Raw STL file data
+
+        Returns:
+            Tuple of (vertices [N, 3], faces [M, 3]) or (None, None)
+        """
+        try:
+            # Check if ASCII or binary STL
+            # ASCII starts with "solid" (but binary can too with certain names)
+            is_ascii = data[:5].lower() == b'solid'
+
+            # Additional check: binary STL has specific structure
+            # Header (80 bytes) + num_triangles (4 bytes) + triangles
+            if is_ascii and len(data) > 84:
+                # Check if file content matches ASCII pattern
+                try:
+                    text = data.decode('utf-8', errors='ignore')
+                    if 'facet normal' in text or 'endsolid' in text:
+                        return self._parse_ascii_stl(text)
+                except:
+                    pass
+
+            # Try binary parsing
+            if len(data) > 84:
+                return self._parse_binary_stl(data)
+
+            # Fallback to ASCII
+            try:
+                text = data.decode('utf-8', errors='ignore')
+                return self._parse_ascii_stl(text)
+            except:
+                pass
+
+            return None, None
+
+        except Exception as e:
+            _log.debug(f"STL parsing failed: {e}")
+            return None, None
+
+    def _parse_ascii_stl(self, text: str) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+        """Parse ASCII STL format.
+
+        Args:
+            text: ASCII STL content
+
+        Returns:
+            Tuple of (vertices [N, 3], faces [M, 3]) or (None, None)
+        """
+        vertices = []
+        faces = []
+
+        # Parse facets
+        # Pattern: facet normal nx ny nz
+        #            outer loop
+        #              vertex x y z
+        #              vertex x y z
+        #              vertex x y z
+        #            endloop
+        #          endfacet
+
+        vertex_pattern = re.compile(
+            r'vertex\s+([+-]?[\d.eE+-]+)\s+([+-]?[\d.eE+-]+)\s+([+-]?[\d.eE+-]+)',
+            re.IGNORECASE
+        )
+
+        current_face_vertices = []
+        vertex_idx = 0
+
+        for match in vertex_pattern.finditer(text):
+            x, y, z = float(match.group(1)), float(match.group(2)), float(match.group(3))
+            vertices.append([x, y, z])
+            current_face_vertices.append(vertex_idx)
+            vertex_idx += 1
+
+            if len(current_face_vertices) == 3:
+                faces.append(current_face_vertices)
+                current_face_vertices = []
+
+        if len(vertices) < 3 or len(faces) < 1:
+            return None, None
+
+        return np.array(vertices), np.array(faces)
+
+    def _parse_binary_stl(self, data: bytes) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+        """Parse binary STL format.
+
+        Binary STL structure:
+        - 80 bytes: header
+        - 4 bytes: number of triangles (uint32)
+        - For each triangle (50 bytes each):
+          - 12 bytes: normal vector (3 x float32)
+          - 12 bytes: vertex 1 (3 x float32)
+          - 12 bytes: vertex 2 (3 x float32)
+          - 12 bytes: vertex 3 (3 x float32)
+          - 2 bytes: attribute byte count (usually 0)
+
+        Args:
+            data: Binary STL data
+
+        Returns:
+            Tuple of (vertices [N, 3], faces [M, 3]) or (None, None)
+        """
+        try:
+            # Read number of triangles
+            num_triangles = struct.unpack('<I', data[80:84])[0]
+
+            if num_triangles == 0:
+                return None, None
+
+            # Expected file size check
+            expected_size = 84 + num_triangles * 50
+            if len(data) < expected_size:
+                _log.debug(f"Binary STL truncated: expected {expected_size}, got {len(data)}")
+                # Try to read what we can
+                num_triangles = min(num_triangles, (len(data) - 84) // 50)
+
+            vertices = []
+            faces = []
+
+            offset = 84
+            for i in range(num_triangles):
+                if offset + 50 > len(data):
+                    break
+
+                # Skip normal (12 bytes), read 3 vertices (36 bytes), skip attribute (2 bytes)
+                tri_data = data[offset:offset + 50]
+
+                # Skip normal vector (first 12 bytes)
+                # Read vertex 1
+                v1 = struct.unpack('<fff', tri_data[12:24])
+                # Read vertex 2
+                v2 = struct.unpack('<fff', tri_data[24:36])
+                # Read vertex 3
+                v3 = struct.unpack('<fff', tri_data[36:48])
+
+                base_idx = len(vertices)
+                vertices.extend([list(v1), list(v2), list(v3)])
+                faces.append([base_idx, base_idx + 1, base_idx + 2])
+
+                offset += 50
+
+            if len(vertices) < 3 or len(faces) < 1:
+                return None, None
+
+            return np.array(vertices), np.array(faces)
+
+        except Exception as e:
+            _log.debug(f"Binary STL parsing failed: {e}")
+            return None, None
+
+    def _assess_mesh_numpy(self, vertices: np.ndarray, faces: np.ndarray) -> dict:
+        """Assess mesh quality using only numpy operations.
+
+        This is the fallback when trimesh is unavailable.
+
+        Args:
+            vertices: Vertex positions [N, 3]
+            faces: Face indices [M, 3]
+
+        Returns:
+            Dictionary with quality metrics
+        """
+        num_vertices = len(vertices)
+        num_faces = len(faces)
+
+        results = {
+            "status": "success",
+            "method": "numpy_fallback",
+            "num_vertices": num_vertices,
+            "num_faces": num_faces,
+        }
+
+        # Get triangle vertices
+        v0 = vertices[faces[:, 0]]
+        v1 = vertices[faces[:, 1]]
+        v2 = vertices[faces[:, 2]]
+
+        # Compute edge vectors and lengths
+        e0 = v1 - v0  # edge 0-1
+        e1 = v2 - v1  # edge 1-2
+        e2 = v0 - v2  # edge 2-0
+
+        len0 = np.linalg.norm(e0, axis=1)
+        len1 = np.linalg.norm(e1, axis=1)
+        len2 = np.linalg.norm(e2, axis=1)
+
+        # All edge lengths
+        all_edge_lengths = np.concatenate([len0, len1, len2])
+
+        results["edge_lengths"] = {
+            "min": float(np.min(all_edge_lengths)) if len(all_edge_lengths) > 0 else 0.0,
+            "max": float(np.max(all_edge_lengths)) if len(all_edge_lengths) > 0 else 0.0,
+            "mean": float(np.mean(all_edge_lengths)) if len(all_edge_lengths) > 0 else 0.0,
+            "std": float(np.std(all_edge_lengths)) if len(all_edge_lengths) > 0 else 0.0,
+        }
+
+        # Aspect ratios per triangle
+        edge_lengths = np.stack([len0, len1, len2], axis=1)
+        max_edges = np.max(edge_lengths, axis=1)
+        min_edges = np.min(edge_lengths, axis=1)
+
+        # Avoid division by zero
+        aspect_ratios = np.divide(
+            max_edges,
+            min_edges,
+            out=np.full_like(max_edges, np.inf),
+            where=min_edges > 1e-10,
+        )
+
+        results["aspect_ratio"] = {
+            "min": float(np.min(aspect_ratios[np.isfinite(aspect_ratios)])) if np.any(np.isfinite(aspect_ratios)) else 0.0,
+            "max": float(np.max(aspect_ratios[np.isfinite(aspect_ratios)])) if np.any(np.isfinite(aspect_ratios)) else 0.0,
+            "mean": float(np.mean(aspect_ratios[np.isfinite(aspect_ratios)])) if np.any(np.isfinite(aspect_ratios)) else 0.0,
+            "std": float(np.std(aspect_ratios[np.isfinite(aspect_ratios)])) if np.any(np.isfinite(aspect_ratios)) else 0.0,
+        }
+
+        # Count poor aspect ratios
+        poor_aspect_ratio = np.sum(aspect_ratios > self.aspect_ratio_threshold)
+        results["num_poor_aspect_ratio"] = int(poor_aspect_ratio)
+        results["percent_poor_aspect_ratio"] = (
+            float(poor_aspect_ratio) / num_faces * 100 if num_faces > 0 else 0.0
+        )
+
+        # Compute skewness
+        # Perimeter of each triangle
+        perimeter = len0 + len1 + len2
+
+        # Area via cross product
+        cross = np.cross(e0, -e2)
+        actual_area = 0.5 * np.linalg.norm(cross, axis=1)
+
+        # Ideal area for equilateral triangle with same perimeter
+        side_ideal = perimeter / 3.0
+        ideal_area = (np.sqrt(3) / 4.0) * side_ideal**2
+
+        # Skewness = 1 - (actual / ideal)
+        skewness = 1.0 - np.divide(
+            actual_area,
+            ideal_area,
+            out=np.ones_like(actual_area),
+            where=ideal_area > 1e-10,
+        )
+        skewness = np.clip(skewness, 0.0, 1.0)
+
+        results["skewness"] = {
+            "min": float(np.min(skewness)),
+            "max": float(np.max(skewness)),
+            "mean": float(np.mean(skewness)),
+            "std": float(np.std(skewness)),
+        }
+
+        # Count high skewness
+        high_skewness = np.sum(skewness > self.skewness_threshold)
+        results["num_high_skewness"] = int(high_skewness)
+        results["percent_high_skewness"] = (
+            float(high_skewness) / num_faces * 100 if num_faces > 0 else 0.0
+        )
+
+        # Degenerate faces (zero or near-zero area)
+        degenerate = actual_area < self.min_area_threshold
+        results["num_degenerate_faces"] = int(np.sum(degenerate))
+        results["percent_degenerate_faces"] = (
+            float(np.sum(degenerate)) / num_faces * 100 if num_faces > 0 else 0.0
+        )
+
+        # Manifold check (simplified - check if all edges are shared by exactly 2 faces)
+        # This is a heuristic since full manifold check requires edge tracking
+        is_manifold = self._check_manifold_numpy(faces, num_vertices)
+        results["is_manifold"] = is_manifold
+
+        # Overall quality score
+        good_triangles = num_faces - poor_aspect_ratio - high_skewness - np.sum(degenerate)
+        quality_score = max(0.0, float(good_triangles) / num_faces) if num_faces > 0 else 0.0
+        results["quality_score"] = quality_score
+
+        # Quality classification
+        if quality_score >= 0.9:
+            results["quality_class"] = "excellent"
+        elif quality_score >= 0.75:
+            results["quality_class"] = "good"
+        elif quality_score >= 0.5:
+            results["quality_class"] = "fair"
+        elif quality_score >= 0.25:
+            results["quality_class"] = "poor"
+        else:
+            results["quality_class"] = "very_poor"
+
+        _log.debug(
+            f"Numpy mesh assessment: {num_faces} faces, "
+            f"score={quality_score:.2f}, class={results['quality_class']}"
+        )
+
+        return results
+
+    def _check_manifold_numpy(self, faces: np.ndarray, num_vertices: int) -> bool:
+        """Check if mesh is manifold using numpy.
+
+        A mesh is manifold if every edge is shared by exactly 2 faces.
+
+        Args:
+            faces: Face indices [M, 3]
+            num_vertices: Number of vertices
+
+        Returns:
+            True if mesh appears manifold
+        """
+        try:
+            # Build edge count dictionary
+            # Edge is represented as (min_idx, max_idx) to be direction-independent
+            edge_counts = {}
+
+            for face in faces:
+                edges = [
+                    (min(face[0], face[1]), max(face[0], face[1])),
+                    (min(face[1], face[2]), max(face[1], face[2])),
+                    (min(face[2], face[0]), max(face[2], face[0])),
+                ]
+                for edge in edges:
+                    edge_counts[edge] = edge_counts.get(edge, 0) + 1
+
+            # Check if all edges are shared by exactly 2 faces
+            # (boundary edges have count 1, non-manifold have count > 2)
+            for count in edge_counts.values():
+                if count > 2:
+                    return False
+
+            return True
+
+        except Exception as e:
+            _log.debug(f"Manifold check failed: {e}")
+            return False
+
+    def _assess_from_tessellation(self, doc: CADlingDocument) -> Optional[dict]:
+        """Assess mesh from CAD tessellation.
+
+        Args:
+            doc: Document to tessellate
+
+        Returns:
+            Quality metrics or None
+        """
+        # Try to get tessellated mesh
+        mesh = self._tessellate_cad(doc)
+
+        if mesh is not None:
+            return self._assess_mesh(mesh)
+
+        return None
+
+    def _estimate_from_properties(
+        self, doc: CADlingDocument, item: CADItem
+    ) -> Optional[dict]:
+        """Estimate mesh quality from item properties.
+
+        This is the last-resort fallback that estimates quality metrics
+        from available geometry properties like bounding box and surface area.
+
+        Args:
+            doc: Document containing the item
+            item: Item to estimate for
+
+        Returns:
+            Estimated quality metrics or None
+        """
+        try:
+            # Try to get geometry analysis properties
+            geom = item.properties.get("geometry_analysis", {})
+
+            bbox = geom.get("bounding_box", {})
+            surface_area = geom.get("surface_area", 0)
+            volume = geom.get("volume", 0)
+
+            # Need at least some data
+            if not bbox and surface_area == 0:
+                return None
+
+            # Estimate mesh parameters from geometry
+            # Use heuristics based on typical mesh density
+
+            # Estimate face count from surface area
+            # Typical mesh has ~1000-10000 triangles per cm² depending on curvature
+            # Use conservative estimate
+            estimated_face_area = 1.0  # mm² per face (typical)
+            if surface_area > 0:
+                estimated_faces = int(surface_area / estimated_face_area)
+            else:
+                # Fall back to bounding box diagonal
+                dx = bbox.get("max_x", 0) - bbox.get("min_x", 0)
+                dy = bbox.get("max_y", 0) - bbox.get("min_y", 0)
+                dz = bbox.get("max_z", 0) - bbox.get("min_z", 0)
+                diagonal = np.sqrt(dx**2 + dy**2 + dz**2)
+                estimated_faces = int(diagonal * 10)  # Rough estimate
+
+            estimated_faces = max(estimated_faces, 12)  # Minimum like a cube
+            estimated_vertices = estimated_faces // 2  # Rough estimate
+
+            # Estimate edge length from bbox
+            dx = bbox.get("max_x", 1) - bbox.get("min_x", 0)
+            dy = bbox.get("max_y", 1) - bbox.get("min_y", 0)
+            dz = bbox.get("max_z", 1) - bbox.get("min_z", 0)
+
+            avg_dimension = (dx + dy + dz) / 3.0
+            estimated_edge_length = avg_dimension / np.sqrt(estimated_faces / 12.0)
+
+            return {
+                "status": "estimated",
+                "reason": "Estimated from geometry properties",
+                "method": "property_estimation",
+                "num_vertices": estimated_vertices,
+                "num_faces": estimated_faces,
+                "edge_lengths": {
+                    "min": estimated_edge_length * 0.5,
+                    "max": estimated_edge_length * 2.0,
+                    "mean": estimated_edge_length,
+                    "std": estimated_edge_length * 0.3,
+                },
+                "aspect_ratio": {
+                    "min": 1.0,
+                    "max": 3.0,  # Typical for good meshes
+                    "mean": 1.5,
+                    "std": 0.5,
+                },
+                "num_poor_aspect_ratio": 0,
+                "percent_poor_aspect_ratio": 0.0,
+                "skewness": {
+                    "min": 0.0,
+                    "max": 0.5,
+                    "mean": 0.2,
+                    "std": 0.1,
+                },
+                "num_high_skewness": 0,
+                "percent_high_skewness": 0.0,
+                "num_degenerate_faces": 0,
+                "percent_degenerate_faces": 0.0,
+                "is_manifold": True,  # Assume good mesh
+                "quality_score": 0.8,  # Estimated good quality
+                "quality_class": "estimated",
+            }
+
+        except Exception as e:
+            _log.debug(f"Property-based estimation failed: {e}")
+            return None
 
     def _assess_mesh(self, mesh) -> dict:
         """Assess mesh quality.

@@ -31,18 +31,18 @@ class MlpProjector(nn.Module):
         elif cfg.projector_type == "mlp_gelu":
             # MLP with GELU activation
             mlp_depth = cfg.get("depth", 1)
-            modules = [nn.Linear(cfg.input_dim, cfg.n_embed)]
+            modules_list: list[nn.Module] = [nn.Linear(cfg.input_dim, cfg.n_embed)]
             for _ in range(1, mlp_depth):
-                modules.append(nn.GELU())
-                modules.append(nn.Linear(cfg.n_embed, cfg.n_embed))
-            modules = nn.Sequential(*modules)
+                modules_list.append(nn.GELU())
+                modules_list.append(nn.Linear(cfg.n_embed, cfg.n_embed))
+            modules = nn.Sequential(*modules_list)
 
         else:
             raise ValueError(f"Unknown projector type: {cfg.projector_type}")
 
         self.layers = modules
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Args:
             x: [batch, num_tokens, input_dim] - concatenated 3D features
@@ -50,7 +50,14 @@ class MlpProjector(nn.Module):
         Returns:
             [batch, num_tokens, n_embed] - projected to LLM embedding space
         """
-        return self.layers(x)
+        # Project through layers
+        out = self.layers(x)
+
+        # Optional L2 normalization for stable embedding space (uses F.normalize)
+        if getattr(self.cfg, "normalize_output", False):
+            out = F.normalize(out, p=2, dim=-1)
+
+        return out
 
     @staticmethod
     def get_flops_per_sample(cfg):

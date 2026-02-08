@@ -169,8 +169,8 @@ class VisionPipeline(BaseCADPipeline):
             vlm_model = self.vlm_options.vlm_model if self.vlm_options else None
 
             if not vlm_model:
-                _log.warning("No VLM model configured, skipping annotation extraction")
-                return conv_res
+                _log.warning("No VLM model configured, using geometry-based annotation fallback")
+                return self._generate_geometry_based_annotations(conv_res)
 
             _log.info(
                 f"Processing {len(rendered_views)} views with VLM: "
@@ -297,3 +297,101 @@ Format your response as a JSON array of annotations.
                 annotations.append(annotation_item)
 
         return annotations
+
+    def _generate_geometry_based_annotations(
+        self, conv_res: ConversionResult
+    ) -> ConversionResult:
+        """Generate annotations from geometry data when VLM unavailable.
+
+        Uses bounding boxes, surface types, and feature detection to create
+        basic annotations without vision model.
+
+        Args:
+            conv_res: Conversion result with document
+
+        Returns:
+            Updated conversion result with geometry-based annotations
+        """
+        from cadling.datamodel.stl import AnnotationItem
+
+        if not conv_res.document:
+            return conv_res
+
+        document = conv_res.document
+        annotations_added = 0
+
+        for item in document.items:
+            # Extract bounding box annotation
+            geometry_analysis = item.properties.get("geometry_analysis", {})
+            bbox = geometry_analysis.get("bounding_box", {})
+
+            if bbox:
+                # Create dimension annotations from bounding box
+                dims = {
+                    "width": bbox.get("size_x", 0),
+                    "height": bbox.get("size_y", 0),
+                    "depth": bbox.get("size_z", 0),
+                }
+
+                for dim_name, dim_value in dims.items():
+                    if dim_value and dim_value > 0:
+                        annotation = AnnotationItem(
+                            label={"text": f"{dim_name.capitalize()}"},
+                            text=f"{dim_name.capitalize()}: {dim_value:.2f}",
+                            annotation_type="dimension",
+                            value=str(dim_value),
+                            source_view="geometry_analysis",
+                        )
+                        document.add_item(annotation)
+                        annotations_added += 1
+
+            # Extract surface type annotations
+            surface_analysis = item.properties.get("surface_analysis", {})
+            surface_type = surface_analysis.get("surface_type")
+
+            if surface_type and surface_type != "UNKNOWN":
+                annotation = AnnotationItem(
+                    label={"text": "Surface"},
+                    text=f"Surface type: {surface_type}",
+                    annotation_type="note",
+                    value=surface_type,
+                    source_view="geometry_analysis",
+                )
+                document.add_item(annotation)
+                annotations_added += 1
+
+            # Extract manufacturing feature annotations
+            mfg_features = item.properties.get("manufacturing_features", [])
+            for feature in mfg_features:
+                feature_type = feature.get("type", "unknown")
+                params = feature.get("parameters", {})
+
+                # Format parameters as readable text
+                param_parts = []
+                if "diameter" in params:
+                    param_parts.append(f"Ø{params['diameter']:.2f}")
+                if "depth" in params:
+                    param_parts.append(f"depth: {params['depth']:.2f}")
+                if "radius" in params:
+                    param_parts.append(f"R{params['radius']:.2f}")
+
+                param_text = ", ".join(param_parts) if param_parts else ""
+                text = f"{feature_type.replace('_', ' ').title()}"
+                if param_text:
+                    text += f": {param_text}"
+
+                annotation = AnnotationItem(
+                    label={"text": feature_type},
+                    text=text,
+                    annotation_type="note",
+                    value=param_text,
+                    source_view="geometry_analysis",
+                )
+                document.add_item(annotation)
+                annotations_added += 1
+
+        _log.info(
+            f"Geometry-based annotation generated {annotations_added} annotations"
+        )
+
+        return conv_res

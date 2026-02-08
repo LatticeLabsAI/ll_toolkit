@@ -1,0 +1,611 @@
+# ============================================================================
+# LatticeLabs Toolkit - Monorepo Root Configuration
+# ============================================================================
+# This is the root pyproject.toml for the LatticeLabs Toolkit monorepo.
+# Individual packages (cadling, ll_stepnet, geotoken, ll_ocadr) have their
+# own pyproject.toml files and can be installed independently.
+#
+# IMPORTANT: PyTorch must be installed via conda-forge, not pip.
+# See cadling/CLAUDE.md for the full rationale (OpenMP conflicts on macOS).
+# ============================================================================
+
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "latticelabs-toolkit"
+version = "0.1.0"
+description = "LatticeLabs Toolkit: CAD document processing, neural networks for STEP/B-Rep, optical CAD recognition, and geometric tokenization"
+readme = "README.md"
+requires-python = ">=3.9,<3.13"
+license = {text = "MIT"}
+authors = [
+    {name = "LatticeLabs", email = "noreply@latticelabs.com"},
+]
+maintainers = [
+    {name = "LatticeLabs", email = "noreply@latticelabs.com"},
+]
+keywords = [
+    # CAD/3D
+    "CAD",
+    "STEP",
+    "STL",
+    "IGES",
+    "OBJ",
+    "B-Rep",
+    "mesh",
+    "geometry",
+    "3D",
+    # ML/AI
+    "neural-networks",
+    "deep-learning",
+    "transformers",
+    "graph-neural-networks",
+    "tokenization",
+    # Applications
+    "document-processing",
+    "optical-recognition",
+    "RAG",
+    "synthetic-data-generation",
+    "LLM",
+    "multimodal",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Manufacturing",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Image Recognition",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
+
+# Core dependencies shared across packages
+# NOTE: Heavy dependencies (torch, pythonocc) are NOT listed here.
+# Install via conda: conda env create -f cadling/environment.yml
+dependencies = [
+    # Data validation
+    "pydantic>=2.0,<3.0",
+
+    # Numerical computing
+    "numpy>=1.24,<2.0",
+
+    # Typing extensions for older Python versions
+    "typing-extensions>=4.5",
+
+    # CLI and display
+    "rich>=13.0",
+    "click>=8.0",
+    "typer>=0.9",
+
+    # Logging
+    "loguru>=0.7",
+]
+
+[project.optional-dependencies]
+# ============================================================================
+# Development dependencies
+# ============================================================================
+dev = [
+    # Testing
+    "pytest>=7.4",
+    "pytest-cov>=4.1",
+    "pytest-xdist>=3.5",         # Parallel test execution
+    "pytest-timeout>=2.2",       # Test timeouts
+    "pytest-asyncio>=0.23",      # Async test support
+    "hypothesis>=6.92",          # Property-based testing
+
+    # Linting and formatting
+    "black>=24.0",
+    "ruff>=0.2",
+    "mypy>=1.8",
+    "isort>=5.13",
+
+    # Pre-commit hooks
+    "pre-commit>=3.6",
+
+    # Documentation
+    "sphinx>=7.2",
+    "sphinx-rtd-theme>=2.0",
+    "myst-parser>=2.0",          # Markdown in Sphinx
+    "sphinx-autodoc-typehints>=1.25",
+
+    # Type stubs
+    "types-requests>=2.31",
+    "types-pillow>=10.0",
+]
+
+# ============================================================================
+# CAD processing dependencies
+# ============================================================================
+# NOTE: pythonocc-core MUST be installed via conda:
+#   conda install -c conda-forge pythonocc-core
+cad = [
+    "numpy-stl>=3.0",            # STL file handling
+    "trimesh>=4.0",              # General mesh processing
+    "networkx>=3.2",             # Topology graphs
+    "meshio>=5.3",               # Mesh I/O for multiple formats
+    "pyglet<2",                  # Required by trimesh for visualization
+]
+
+# ============================================================================
+# Machine learning dependencies
+# ============================================================================
+# NOTE: PyTorch and torch-geometric MUST be installed via conda-forge:
+#   conda install -c conda-forge pytorch torchvision torchaudio pytorch-geometric
+# This avoids OpenMP library conflicts on macOS (see cadling/CLAUDE.md)
+ml = [
+    "transformers>=4.37",
+    "accelerate>=0.26",
+    "safetensors>=0.4",
+    "einops>=0.7",
+    "scipy>=1.12",
+]
+
+# ============================================================================
+# Vision and multimodal dependencies
+# ============================================================================
+vision = [
+    "pillow>=10.2",
+    "opencv-python>=4.9",
+    "easyocr>=1.7",
+    "matplotlib>=3.8",
+]
+
+# ============================================================================
+# HuggingFace Hub integration
+# ============================================================================
+hub = [
+    "huggingface-hub>=0.20",
+    "datasets>=2.16",
+    "pyarrow>=14.0",
+    "tokenizers>=0.15",
+]
+
+# ============================================================================
+# 2D drawing support (DXF, PDF engineering drawings)
+# ============================================================================
+drawings = [
+    "ezdxf>=1.0",                # DXF file reading/writing
+    "pymupdf>=1.24.0",           # PDF parsing (vector extraction + raster rendering)
+]
+
+# ============================================================================
+# Inference and serving
+# ============================================================================
+inference = [
+    "vllm>=0.3",                 # Fast LLM inference
+    "ray>=2.9",                  # Distributed computing
+    "fastapi>=0.109",
+    "uvicorn>=0.27",
+]
+
+# ============================================================================
+# Individual packages (for explicit installation)
+# ============================================================================
+cadling = [
+    "latticelabs-toolkit[cad,ml,vision,hub,drawings]",
+]
+stepnet = [
+    "latticelabs-toolkit[ml]",
+]
+geotoken = [
+    "latticelabs-toolkit[cad]",
+]
+ocadr = [
+    "latticelabs-toolkit[cad,ml,vision,inference]",
+]
+
+# ============================================================================
+# All optional dependencies
+# ============================================================================
+all = [
+    "latticelabs-toolkit[dev,cad,ml,vision,hub,inference,drawings]",
+]
+
+[project.urls]
+Homepage = "https://github.com/latticelabs/toolkit"
+Documentation = "https://latticelabs-toolkit.readthedocs.io"
+Repository = "https://github.com/latticelabs/toolkit"
+Issues = "https://github.com/latticelabs/toolkit/issues"
+Changelog = "https://github.com/latticelabs/toolkit/blob/main/CHANGELOG.md"
+
+[project.scripts]
+# Main CLI entry point
+cadling = "cadling.cli.main:cli"
+# Additional CLI tools can be added here
+# geotoken = "geotoken.cli:main"
+# stepnet = "stepnet.cli:main"
+
+# ============================================================================
+# Setuptools Configuration
+# ============================================================================
+[tool.setuptools]
+include-package-data = true
+zip-safe = false
+
+[tool.setuptools.packages.find]
+where = [
+    "cadling",
+    "ll_stepnet",
+    "geotoken",
+    "ll_ocadr",
+    "lib",
+]
+include = [
+    "cadling*",
+    "stepnet*",
+    "geotoken*",
+    "ll_ocadr*",
+    "cadrec*",
+    "ocadr*",
+    "segnet*",
+    "vertdict*",
+]
+exclude = [
+    "tests*",
+    "docs*",
+    "resources*",
+]
+
+[tool.setuptools.package-data]
+"*" = ["py.typed", "*.json", "*.yaml", "*.yml"]
+
+# ============================================================================
+# Black - Code Formatter
+# ============================================================================
+[tool.black]
+line-length = 88
+target-version = ["py39", "py310", "py311", "py312"]
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+    \.git
+  | \.venv
+  | \.mypy_cache
+  | \.pytest_cache
+  | \.ruff_cache
+  | __pycache__
+  | build
+  | dist
+  | resources
+  | \.eggs
+)/
+'''
+
+# ============================================================================
+# Ruff - Linter
+# ============================================================================
+[tool.ruff]
+line-length = 88
+target-version = "py39"
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # pyflakes
+    "I",      # isort
+    "N",      # pep8-naming
+    "UP",     # pyupgrade
+    "B",      # flake8-bugbear
+    "C4",     # flake8-comprehensions
+    "DTZ",    # flake8-datetimez
+    "T10",    # flake8-debugger
+    "EXE",    # flake8-executable
+    "ISC",    # flake8-implicit-str-concat
+    "ICN",    # flake8-import-conventions
+    "PIE",    # flake8-pie
+    "PT",     # flake8-pytest-style
+    "Q",      # flake8-quotes
+    "RSE",    # flake8-raise
+    "RET",    # flake8-return
+    "SLF",    # flake8-self
+    "SIM",    # flake8-simplify
+    "TID",    # flake8-tidy-imports
+    "ARG",    # flake8-unused-arguments
+    "PL",     # pylint
+    "TRY",    # tryceratops
+    "FLY",    # flynt
+    "PERF",   # perflint
+    "FURB",   # refurb
+    "RUF",    # ruff-specific
+]
+ignore = [
+    "E501",    # line too long (handled by black)
+    "B008",    # do not perform function calls in argument defaults
+    "B905",    # zip strict parameter (Python 3.10+)
+    "PLR0913", # too many arguments
+    "PLR2004", # magic value comparison
+    "PLR0911", # too many return statements
+    "PLR0912", # too many branches
+    "PLR0915", # too many statements
+    "TRY003",  # long exception messages
+    "SLF001",  # private member access (often needed in tests)
+    "ARG001",  # unused function argument (often intentional)
+    "ARG002",  # unused method argument (often intentional)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401", "F403"]  # Allow unused imports in __init__
+"tests/**/*.py" = [
+    "S101",    # assert usage
+    "ARG",     # unused arguments in fixtures
+    "PLR2004", # magic values in tests
+]
+"**/cli/**/*.py" = [
+    "B008",    # function calls in defaults (typer/click pattern)
+]
+
+[tool.ruff.lint.isort]
+known-first-party = [
+    "cadling",
+    "stepnet",
+    "geotoken",
+    "ll_ocadr",
+    "cadrec",
+    "ocadr",
+    "segnet",
+    "vertdict",
+]
+section-order = [
+    "future",
+    "standard-library",
+    "third-party",
+    "first-party",
+    "local-folder",
+]
+
+[tool.ruff.lint.flake8-pytest-style]
+fixture-parentheses = false
+mark-parentheses = false
+
+# ============================================================================
+# isort - Import Sorting (for editors that don't use ruff)
+# ============================================================================
+[tool.isort]
+profile = "black"
+line_length = 88
+known_first_party = [
+    "cadling",
+    "stepnet",
+    "geotoken",
+    "ll_ocadr",
+    "cadrec",
+    "ocadr",
+    "segnet",
+    "vertdict",
+]
+skip_glob = [
+    "resources/*",
+    ".venv/*",
+]
+
+# ============================================================================
+# MyPy - Type Checker
+# ============================================================================
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+disallow_untyped_defs = false      # Start lenient, tighten later
+disallow_incomplete_defs = false
+check_untyped_defs = true
+no_implicit_optional = true
+strict_equality = true
+ignore_missing_imports = true
+show_error_codes = true
+show_column_numbers = true
+pretty = true
+exclude = [
+    "tests/",
+    "build/",
+    "dist/",
+    "resources/",
+    "\\.venv/",
+]
+
+[[tool.mypy.overrides]]
+module = [
+    "OCC.*",
+    "trimesh.*",
+    "numpy_stl.*",
+    "networkx.*",
+    "torch.*",
+    "torch_geometric.*",
+    "transformers.*",
+    "vllm.*",
+    "easyocr.*",
+    "cv2.*",
+    "scipy.*",
+    "matplotlib.*",
+    "ezdxf.*",
+    "fitz.*",
+]
+ignore_missing_imports = true
+
+# ============================================================================
+# Pytest - Testing
+# ============================================================================
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = [
+    "cadling/tests",
+    "ll_stepnet/tests",
+    "geotoken/tests",
+    "ll_ocadr/tests",
+]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "-v",
+    "--strict-markers",
+    "--strict-config",
+    "-ra",                           # Show extra test summary
+    "--tb=short",                    # Shorter tracebacks
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "requires_gpu: marks tests that require GPU",
+    "requires_pythonocc: marks tests that require pythonocc-core",
+    "requires_trimesh: marks tests that require trimesh",
+    "requires_torch: marks tests that require PyTorch",
+    "requires_ezdxf: marks tests that require ezdxf",
+    "requires_pymupdf: marks tests that require PyMuPDF",
+    "integration: marks integration tests",
+    "unit: marks unit tests",
+]
+# Timeout for individual tests (seconds)
+timeout = 300
+
+# ============================================================================
+# Coverage - Test Coverage
+# ============================================================================
+[tool.coverage.run]
+source = [
+    "cadling/cadling",
+    "ll_stepnet/stepnet",
+    "geotoken/geotoken",
+    "ll_ocadr/ll_ocadr",
+]
+branch = true
+parallel = true
+omit = [
+    "*/tests/*",
+    "*/test_*.py",
+    "*/__pycache__/*",
+    "*/.venv/*",
+    "*/resources/*",
+]
+
+[tool.coverage.paths]
+source = [
+    "cadling/cadling",
+    "ll_stepnet/stepnet",
+    "geotoken/geotoken",
+    "ll_ocadr/ll_ocadr",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "def __str__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "if typing.TYPE_CHECKING:",
+    "@abstractmethod",
+    "@abc.abstractmethod",
+    "class .*\\bProtocol\\):",
+    "@overload",
+    "\\.\\.\\.",
+]
+show_missing = true
+precision = 2
+fail_under = 0  # Set to desired coverage threshold when ready
+
+[tool.coverage.html]
+directory = "htmlcov"
+
+[tool.coverage.xml]
+output = "coverage.xml"
+
+# ============================================================================
+# Bandit - Security Linter
+# ============================================================================
+[tool.bandit]
+exclude_dirs = [
+    "tests",
+    "resources",
+    ".venv",
+]
+skips = [
+    "B101",  # assert_used (needed in tests)
+    "B104",  # hardcoded_bind_all_interfaces (dev servers)
+]
+
+# ============================================================================
+# Pyright - Static Type Checker (alternative to mypy)
+# ============================================================================
+[tool.pyright]
+pythonVersion = "3.9"
+pythonPlatform = "All"
+typeCheckingMode = "basic"
+include = [
+    "cadling/cadling",
+    "ll_stepnet/stepnet",
+    "geotoken/geotoken",
+    "ll_ocadr/ll_ocadr",
+]
+exclude = [
+    "**/node_modules",
+    "**/__pycache__",
+    "**/tests",
+    "**/resources",
+    "**/.venv",
+]
+reportMissingImports = false
+reportMissingTypeStubs = false
+
+# ============================================================================
+# Semantic Release (if using automated releases)
+# ============================================================================
+[tool.semantic_release]
+version_variable = [
+    "cadling/cadling/__init__.py:__version__",
+    "ll_stepnet/stepnet/__init__.py:__version__",
+    "geotoken/geotoken/__init__.py:__version__",
+]
+version_toml = [
+    "pyproject.toml:project.version",
+    "cadling/pyproject.toml:project.version",
+    "ll_stepnet/pyproject.toml:project.version",
+    "geotoken/pyproject.toml:project.version",
+]
+branch = "main"
+upload_to_pypi = false
+upload_to_release = true
+build_command = "pip install build && python -m build"
+
+# ============================================================================
+# PDM/UV (Alternative package managers)
+# ============================================================================
+[tool.pdm]
+[tool.pdm.dev-dependencies]
+dev = [
+    "pytest>=7.4",
+    "pytest-cov>=4.1",
+    "black>=24.0",
+    "ruff>=0.2",
+    "mypy>=1.8",
+]
+
+# ============================================================================
+# Commitizen - Conventional Commits
+# ============================================================================
+[tool.commitizen]
+name = "cz_conventional_commits"
+tag_format = "v$version"
+version_scheme = "semver"
+version_provider = "pep621"
+update_changelog_on_bump = true
+major_version_zero = true

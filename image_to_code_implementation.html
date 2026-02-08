@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>image_to_code.txt — Implementation Outline</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --surface2: #1c2333;
+    --border: #30363d;
+    --text: #e6edf3;
+    --text-muted: #8b949e;
+    --accent: #58a6ff;
+    --green: #3fb950;
+    --orange: #d29922;
+    --red: #f85149;
+    --purple: #bc8cff;
+    --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+    --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-sans);
+    line-height: 1.65;
+    padding: 2rem;
+    max-width: 960px;
+    margin: 0 auto;
+  }
+  h1 {
+    font-size: 1.9rem;
+    font-weight: 700;
+    margin-bottom: 0.4rem;
+    color: var(--accent);
+  }
+  h1 span.tag {
+    display: inline-block;
+    font-size: 0.75rem;
+    background: #1f6feb33;
+    color: var(--accent);
+    border: 1px solid #1f6feb55;
+    border-radius: 12px;
+    padding: 2px 10px;
+    vertical-align: middle;
+    margin-left: 8px;
+    font-weight: 500;
+  }
+  .subtitle {
+    color: var(--text-muted);
+    font-size: 0.95rem;
+    margin-bottom: 2rem;
+  }
+  h2 {
+    font-size: 1.3rem;
+    font-weight: 600;
+    margin: 2.2rem 0 0.8rem;
+    padding-bottom: 0.35rem;
+    border-bottom: 1px solid var(--border);
+    color: var(--text);
+  }
+  h3 {
+    font-size: 1.05rem;
+    font-weight: 600;
+    margin: 1.5rem 0 0.5rem;
+    color: var(--purple);
+  }
+  p { margin-bottom: 0.8rem; }
+  code {
+    font-family: var(--font-mono);
+    font-size: 0.85em;
+    background: var(--surface2);
+    padding: 2px 6px;
+    border-radius: 4px;
+    color: #f0883e;
+  }
+  pre {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem 1.2rem;
+    overflow-x: auto;
+    margin: 0.8rem 0 1.2rem;
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+    line-height: 1.55;
+    color: var(--text);
+  }
+  .file-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem 1.2rem;
+    margin: 0.8rem 0;
+  }
+  .file-card .path {
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+    color: var(--accent);
+    margin-bottom: 0.3rem;
+  }
+  .file-card .status {
+    display: inline-block;
+    font-size: 0.72rem;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 10px;
+    margin-left: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+  .status.new { background: #238636; color: #fff; }
+  .status.modified { background: #9e6a03; color: #fff; }
+  .status.unchanged { background: #30363d; color: var(--text-muted); }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 0.8rem 0 1.2rem;
+    font-size: 0.88rem;
+  }
+  th {
+    text-align: left;
+    padding: 0.5rem 0.7rem;
+    background: var(--surface2);
+    border-bottom: 2px solid var(--border);
+    color: var(--text-muted);
+    font-weight: 600;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  td {
+    padding: 0.45rem 0.7rem;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  tr:last-child td { border-bottom: none; }
+
+  .flow-diagram {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.5rem;
+    margin: 1rem 0;
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    line-height: 1.8;
+    white-space: pre;
+    overflow-x: auto;
+    color: var(--text-muted);
+  }
+  .flow-diagram em { color: var(--accent); font-style: normal; }
+  .flow-diagram strong { color: var(--green); font-weight: 600; }
+
+  .callout {
+    background: #1f6feb15;
+    border-left: 3px solid var(--accent);
+    padding: 0.8rem 1rem;
+    border-radius: 0 6px 6px 0;
+    margin: 1rem 0;
+    font-size: 0.9rem;
+  }
+  .callout.warn {
+    background: #d2992215;
+    border-left-color: var(--orange);
+  }
+
+  ul { padding-left: 1.3rem; margin-bottom: 0.8rem; }
+  li { margin-bottom: 0.35rem; }
+
+  .section-num {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    margin-right: 0.3rem;
+  }
+</style>
+</head>
+<body>
+
+<h1>image_to_code.txt <span class="tag">Phase 6.3</span></h1>
+<p class="subtitle">Implementation outline for the dedicated image-to-code prompt template and its integration across the LatticeLabs generation pipeline.</p>
+
+<h2><span class="section-num">1.</span> Problem Statement</h2>
+<p>
+  The implementation outline specified five prompt template files under <code>cadling/generation/codegen/prompts/</code>.
+  Four were implemented; <code>image_to_code.txt</code> was missing. The existing <code>text_to_code.txt</code> contained a
+  generic <code>{IMAGE_SECTION}</code> placeholder that injected a minimal 6-line image preamble when an image was provided —
+  but it lacked the structured analysis guidance an LLM needs to reliably reverse-engineer 3D geometry from a 2D image.
+</p>
+<p>
+  The <code>OpenSCADGenerator</code> had no image support at all — its <code>generate()</code> method accepted only
+  <code>description: str</code> and always stripped the <code>{IMAGE_SECTION}</code> placeholder.
+</p>
+
+<h2><span class="section-num">2.</span> What Was Created</h2>
+
+<div class="file-card">
+  <div class="path">cadling/generation/codegen/prompts/image_to_code.txt <span class="status new">new</span></div>
+  <p>A dedicated prompt template for image-primary CAD code generation. 175 lines containing six structured sections that guide the LLM through a rigorous image-to-geometry pipeline.</p>
+</div>
+
+<h3>Template Structure</h3>
+<table>
+<tr><th>Section</th><th>Placeholder</th><th>Purpose</th></tr>
+<tr>
+  <td><strong>Task</strong></td>
+  <td>—</td>
+  <td>Sets the objective: generate executable CAD code from a reference image that produces a watertight solid.</td>
+</tr>
+<tr>
+  <td><strong>Reference Image</strong></td>
+  <td><code>{IMAGE_DATA}</code></td>
+  <td>Receives the base64 data URI with MIME type. Tells the LLM to analyze geometry, proportions, and features.</td>
+</tr>
+<tr>
+  <td><strong>Supplementary Text</strong></td>
+  <td><code>{DESCRIPTION}</code></td>
+  <td>Optional text description. When present, its dimensions override image-inferred values. Set to "(none provided)" when absent.</td>
+</tr>
+<tr>
+  <td><strong>Image Analysis Instructions</strong></td>
+  <td>—</td>
+  <td>Four-step analysis framework the LLM must follow before writing code:<br/>
+    Step 1 — Identify overall form (shape class, aspect ratio, symmetry)<br/>
+    Step 2 — Decompose into features (additive, subtractive, transition, pattern, surface)<br/>
+    Step 3 — Estimate dimensions in mm (proportional reasoning, standard hardware mapping)<br/>
+    Step 4 — Plan modeling sequence (base → secondary → cuts → fillets)
+  </td>
+</tr>
+<tr>
+  <td><strong>Multi-View Guide</strong></td>
+  <td>—</td>
+  <td>Interpretation rules for isometric, orthographic front/side/top, section views, and detail views. Cross-reference conflict resolution (prefer orthographic over perspective).</td>
+</tr>
+<tr>
+  <td><strong>Image Type Handling</strong></td>
+  <td>—</td>
+  <td>Adaptation strategies for 5 image source types: engineering drawings (extract annotated dims), CAD screenshots (use shading cues), photographs (account for perspective distortion), hand sketches (focus on topology), exploded views (generate single component).</td>
+</tr>
+<tr>
+  <td><strong>Code Requirements</strong></td>
+  <td>—</td>
+  <td>Parametric variables at top, commented modeling steps mapped to image features, occluded geometry handling with INFERRED/ASSUMED/UNCERTAIN annotations.</td>
+</tr>
+<tr>
+  <td><strong>Output Format</strong></td>
+  <td>—</td>
+  <td>Fenced code block (python for CadQuery, openscad for OpenSCAD).</td>
+</tr>
+</table>
+
+<h3>Key Design Decisions</h3>
+<div class="callout">
+  <strong>Why a separate template instead of extending text_to_code.txt?</strong> — The image-primary workflow requires
+  fundamentally different cognitive scaffolding. A text-primary prompt says "here's what to build"; an image-primary prompt
+  says "figure out what to build from this picture." The analysis steps (form ID → feature decomposition → dimension
+  estimation → sequence planning) are specific to visual reasoning and would bloat the text-only path unnecessarily.
+</div>
+
+<h2><span class="section-num">3.</span> What Was Modified</h2>
+
+<div class="file-card">
+  <div class="path">cadling/generation/codegen/prompts/__init__.py <span class="status modified">modified</span></div>
+  <p>Added <code>load_image_to_code_prompt()</code> function and registered it in <code>__all__</code>. Updated the module docstring to list the new file.</p>
+</div>
+
+<h3>New Function</h3>
+<pre>def load_image_to_code_prompt() -> str:
+    """Load the image-to-code user prompt template.
+
+    Placeholders:
+        {IMAGE_DATA}: Replaced with base64-encoded image and metadata.
+        {DESCRIPTION}: Replaced with supplementary text (may be empty).
+
+    Returns:
+        Image-to-code prompt template text.
+    """
+    return load_prompt("image_to_code.txt")</pre>
+
+<h3>Updated Exports</h3>
+<pre>__all__ = [
+    "load_prompt",
+    "load_cadquery_system_prompt",
+    "load_openscad_system_prompt",
+    "load_text_to_code_prompt",
+    "load_image_to_code_prompt",   # ← added
+    "load_repair_prompt",
+]</pre>
+
+<hr style="border-color: var(--border); margin: 2rem 0;" />
+
+<div class="file-card">
+  <div class="path">cadling/generation/codegen/cadquery_generator.py <span class="status modified">modified</span></div>
+  <p>Refactored <code>CadQueryGenerator._build_user_prompt()</code> to route between text-primary and image-primary templates. Extracted image encoding into a reusable static method.</p>
+</div>
+
+<h3>New Method: <code>_encode_image()</code></h3>
+<pre>@staticmethod
+def _encode_image(image_path: str | Path) -> tuple[str, str, int] | None:
+    """Encode an image file to base64 data-URI.
+    Returns (data_uri, mime_type, raw_byte_count) or None."""</pre>
+<p>Deduplicates the base64 encoding logic that was previously inline in <code>_build_user_prompt()</code>. Supports PNG, JPEG, WebP, and GIF.</p>
+
+<h3>Updated Routing Logic in <code>_build_user_prompt()</code></h3>
+<div class="flow-diagram"><em>_build_user_prompt(description, image_path)</em>
+  │
+  ├─ image_path is None?
+  │   └─ yes → <strong>text_to_code.txt</strong> with {IMAGE_SECTION} = ""
+  │
+  ├─ image exists but description is substantive?
+  │   └─ yes → <strong>text_to_code.txt</strong> with {IMAGE_SECTION} = base64 block
+  │
+  └─ image exists AND description is empty or auto-generated?
+      └─ yes → <strong>image_to_code.txt</strong> with {IMAGE_DATA} = base64 block
+                                        {DESCRIPTION} = text or "(none provided)"</div>
+<p>
+  The "auto-generated" detection checks against a known set of placeholder strings
+  that the CLI produces when <code>--from-image</code> is used without <code>--from-text</code>:
+</p>
+<pre>_AUTO_DESCRIPTIONS = {
+    "",
+    "Generate a 3D CAD model that matches the provided reference image. "
+    "Infer the geometry, dimensions, and features from the image.",
+}</pre>
+
+<hr style="border-color: var(--border); margin: 2rem 0;" />
+
+<div class="file-card">
+  <div class="path">cadling/generation/codegen/openscad_generator.py <span class="status modified">modified</span></div>
+  <p>Added image support that was previously absent. The <code>OpenSCADGenerator</code> now accepts reference images with the same routing logic as <code>CadQueryGenerator</code>.</p>
+</div>
+
+<h3>Changes</h3>
+<table>
+<tr><th>Before</th><th>After</th></tr>
+<tr>
+  <td><code>_build_user_prompt(self, description: str)</code></td>
+  <td><code>_build_user_prompt(self, description: str, image_path: str | None = None)</code></td>
+</tr>
+<tr>
+  <td><code>generate(self, description: str)</code></td>
+  <td><code>generate(self, description: str, reference_image_path: str | None = None)</code></td>
+</tr>
+<tr>
+  <td>Always stripped <code>{IMAGE_SECTION}</code></td>
+  <td>Routes to <code>image_to_code.txt</code> or injects image into <code>text_to_code.txt</code></td>
+</tr>
+<tr>
+  <td>No <code>_encode_image</code> method</td>
+  <td>Added <code>_encode_image()</code> static method (identical to CadQuery's)</td>
+</tr>
+</table>
+
+<h2><span class="section-num">4.</span> Files That Were NOT Modified (Already Correct)</h2>
+
+<div class="file-card">
+  <div class="path">cadling/cli/generate.py <span class="status unchanged">no change needed</span></div>
+  <p>Already passes <code>image_path</code> through to both backends. The CLI's <code>--from-image</code> flag and auto-description fallback were already in place.</p>
+</div>
+<div class="file-card">
+  <div class="path">cadling/generation/pipeline.py <span class="status unchanged">no change needed</span></div>
+  <p>Already passes <code>request.image_path</code> to both <code>CadQueryGenerator.generate()</code> and the OpenSCAD codegen path. The routing change happens inside the generators, not the pipeline.</p>
+</div>
+<div class="file-card">
+  <div class="path">cadling/datamodel/generation.py <span class="status unchanged">no change needed</span></div>
+  <p><code>GenerationRequest.image_path</code> field already exists as <code>Optional[str]</code>.</p>
+</div>
+
+<h2><span class="section-num">5.</span> Complete File Inventory</h2>
+
+<table>
+<tr><th>File</th><th>Action</th><th>Lines Changed</th></tr>
+<tr>
+  <td><code>prompts/image_to_code.txt</code></td>
+  <td><span class="status new" style="margin:0">new</span></td>
+  <td>175 lines</td>
+</tr>
+<tr>
+  <td><code>prompts/__init__.py</code></td>
+  <td><span class="status modified" style="margin:0">modified</span></td>
+  <td>+19 lines (new function + docstring + __all__ entry)</td>
+</tr>
+<tr>
+  <td><code>cadquery_generator.py</code></td>
+  <td><span class="status modified" style="margin:0">modified</span></td>
+  <td>Replaced 58-line block with 98-line refactored version (+40 net)</td>
+</tr>
+<tr>
+  <td><code>openscad_generator.py</code></td>
+  <td><span class="status modified" style="margin:0">modified</span></td>
+  <td>Replaced 48-line block with 135-line version (+87 net)</td>
+</tr>
+<tr>
+  <td><code>cli/generate.py</code></td>
+  <td><span class="status unchanged" style="margin:0">unchanged</span></td>
+  <td>—</td>
+</tr>
+<tr>
+  <td><code>generation/pipeline.py</code></td>
+  <td><span class="status unchanged" style="margin:0">unchanged</span></td>
+  <td>—</td>
+</tr>
+<tr>
+  <td><code>datamodel/generation.py</code></td>
+  <td><span class="status unchanged" style="margin:0">unchanged</span></td>
+  <td>—</td>
+</tr>
+</table>
+
+<h2><span class="section-num">6.</span> Usage Examples</h2>
+
+<h3>CLI: Image-only generation (uses image_to_code.txt)</h3>
+<pre>cadling generate --from-image photo_of_bracket.png --output bracket.step</pre>
+<p>No <code>--from-text</code> flag → CLI generates auto-description → detected as placeholder → routes to <code>image_to_code.txt</code> template with full analysis instructions.</p>
+
+<h3>CLI: Image + text generation (uses text_to_code.txt with image section)</h3>
+<pre>cadling generate \
+  --from-text "A flanged bearing housing, 120mm OD, 4 M8 bolt holes" \
+  --from-image bearing_sketch.png \
+  --output housing.step</pre>
+<p>Substantive text description → routes to <code>text_to_code.txt</code> with the image injected into <code>{IMAGE_SECTION}</code>. Text dimensions take precedence; image informs shape/proportions.</p>
+
+<h3>Python API: Image-primary with CadQuery backend</h3>
+<pre>from cadling.generation.codegen.cadquery_generator import CadQueryGenerator
+
+gen = CadQueryGenerator(model_name="claude-3-opus", api_provider="anthropic")
+script = gen.generate(
+    description="",  # empty → triggers image_to_code.txt
+    reference_image_path="renders/housing_iso.png",
+)</pre>
+
+<h3>Python API: Image-primary with OpenSCAD backend</h3>
+<pre>from cadling.generation.codegen.openscad_generator import OpenSCADGenerator
+
+gen = OpenSCADGenerator(model_name="gpt-4o", api_provider="openai")
+script = gen.generate(
+    description="",  # empty → triggers image_to_code.txt
+    reference_image_path="renders/housing_iso.png",
+)</pre>
+
+<h3>Full pipeline: Image → validated STEP</h3>
+<pre>from cadling.generation.pipeline import GenerationPipeline
+from cadling.datamodel.generation import GenerationRequest, GenerationConfig, GenerationBackend
+
+config = GenerationConfig(
+    backend=GenerationBackend.CODEGEN_CADQUERY,
+    validate_output=True,
+    max_retries=3,
+)
+pipeline = GenerationPipeline(config)
+
+request = GenerationRequest(
+    image_path="photo_of_part.jpg",
+    # text_prompt omitted → pipeline auto-generates placeholder → image_to_code.txt
+)
+results = pipeline.generate(request)
+
+for r in results:
+    print(f"Valid: {r.valid}, Path: {r.output_path}")</pre>
+
+<h2><span class="section-num">7.</span> Prompt Template Routing Summary</h2>
+
+<div class="flow-diagram"><strong>Input conditions → Template selection</strong>
+
+┌──────────────────────────────┬──────────────────────────────────────┐
+│ Input                        │ Template used                        │
+├──────────────────────────────┼──────────────────────────────────────┤
+│ text only                    │ <em>text_to_code.txt</em>                    │
+│ text + image                 │ <em>text_to_code.txt</em> + {IMAGE_SECTION}  │
+│ image only                   │ <em>image_to_code.txt</em>                   │
+│ image + empty/auto text      │ <em>image_to_code.txt</em>                   │
+│ (error retry, any modality)  │ <em>repair.txt</em>                          │
+└──────────────────────────────┴──────────────────────────────────────┘
+
+System prompts (backend-specific, always prepended):
+  CadQuery backend  → <em>cadquery_system.txt</em>
+  OpenSCAD backend  → <em>openscad_system.txt</em>
+</div>
+
+<h2><span class="section-num">8.</span> Design Rationale</h2>
+
+<h3>Why structured analysis steps?</h3>
+<p>
+  LLMs generating CAD from images without structured guidance tend to produce oversimplified geometry — they'll
+  see a bracket and output a box with two holes, missing ribs, fillets, mounting ears, and slot features. The
+  four-step analysis framework (form → features → dimensions → sequence) forces the model to enumerate features
+  before writing code, dramatically improving completeness. This mirrors how the Text2CAD paper structures its
+  "expert-level" annotations.
+</p>
+
+<h3>Why image type handling?</h3>
+<p>
+  A photograph of a machined part, an engineering drawing, and a hand sketch all contain geometric information
+  but require fundamentally different interpretation strategies. Perspective distortion in photos, annotated
+  dimensions in drawings, and topological-but-not-dimensional accuracy in sketches each need explicit handling
+  instructions. Without this, LLMs apply photograph-appropriate reasoning to all image types.
+</p>
+
+<h3>Why confidence annotations?</h3>
+<p>
+  Occluded geometry is the primary failure mode in image-to-CAD. A single isometric view of a part hides
+  roughly 50% of the geometry. The <code>INFERRED</code> / <code>ASSUMED</code> / <code>UNCERTAIN</code>
+  comment convention makes hidden assumptions explicit, enabling downstream humans (or validation loops) to
+  identify which geometric choices to verify.
+</p>
+
+<h3>Why standard hole size mapping?</h3>
+<p>
+  The most common image-to-CAD dimension error is hole sizing. Providing the ISO metric clearance hole
+  table (M3=3.2mm through M10=10.5mm) in the template gives the LLM a concrete lookup table for the
+  most frequently occurring features, reducing dimension estimation errors for the highest-value geometry.
+</p>
+
+</body>
+</html>

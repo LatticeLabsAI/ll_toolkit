@@ -364,3 +364,20 @@ def register_critique(name: str, template: CADCritiquePromptTemplate) -> None:
         template: Critique template to register
     """
     _CRITIQUE_PROMPTS[name] = template
+
+
+# =============================================================================
+# Annotation Level Consistency Critique
+# =============================================================================
+
+LEVEL_CONSISTENCY_CRITIQUE = (
+    "Evaluate whether this Q&A pair's detail level matches its declared "
+    "annotation level of '{annotation_level}'.\n\n"
+    "An ABSTRACT answer should describe general shape and purpose without coordinates.\n"
+    "An INTERMEDIATE answer should name specific features and relationships.\n"
+    "A DETAILED answer should include dimensions, tolerances, and material properties.\n"
+    "An EXPERT answer should include exact coordinates, parametric specs, and construction sequence.\n\n"
+    "Question: {question}\n"
+    "Answer: {answer}\n\n"
+    "Rate level consistency from 1 (completely wrong level) to 5 (perfect match)."
+)

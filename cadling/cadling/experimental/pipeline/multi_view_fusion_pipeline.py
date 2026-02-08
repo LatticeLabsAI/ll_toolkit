@@ -23,6 +23,10 @@ from collections import defaultdict
 from typing import TYPE_CHECKING, Any, Dict, List
 
 from cadling.pipeline.base_pipeline import BaseCADPipeline
+from cadling.experimental.models import (
+    FeatureRecognitionVlmModel,
+    PMIExtractionModel,
+)
 
 if TYPE_CHECKING:
     from cadling.datamodel.base_models import ConversionResult
@@ -112,12 +116,6 @@ class MultiViewFusionPipeline(BaseCADPipeline):
             )
 
         self.fusion_strategy = options.fusion_strategy
-
-        # Import experimental models
-        from cadling.experimental.models import (
-            FeatureRecognitionVlmModel,
-            PMIExtractionModel,
-        )
 
         # Configure enrichment models
         from cadling.experimental.datamodel import CADAnnotationOptions
@@ -233,35 +231,216 @@ class MultiViewFusionPipeline(BaseCADPipeline):
     def _render_all_views(self, item) -> Dict[str, Any]:
         """Render all configured views for an item.
 
+        Attempts rendering in order of preference:
+        1. Item's associated backend (if it has ``render_view()``)
+        2. Shape's own ``render_view()`` method
+        3. Software fallback via Open3D / trimesh (if available)
+        4. Placeholder metadata (always succeeds — stores view params)
+
         Args:
             item: The CAD item to render
 
         Returns:
-            Dictionary mapping view name to rendered image
+            Dictionary mapping view name to rendered image or metadata dict
         """
         rendered_views = {}
 
-        # Placeholder for actual rendering
-        # Real implementation would use visualization backend
+        # Try to get shape from item for rendering
+        shape = getattr(item, "_shape", None)
+        if shape is None and hasattr(item, "properties") and isinstance(item.properties, dict):
+            shape = item.properties.get("_shape")
+
+        # Try to get rendering backend
+        backend = None
+        try:
+            if hasattr(item, "_backend") and item._backend is not None:
+                backend = item._backend
+            elif shape is not None and hasattr(shape, "render_view") and callable(shape.render_view):
+                backend = shape
+        except Exception as e:
+            _log.debug(f"Could not get rendering backend: {e}")
+
+        # Build render kwargs from options (uses resolution, lighting, etc.)
+        render_opts = {
+            "resolution": getattr(self.options, "resolution", 1024),
+            "enable_lighting": getattr(self.options, "enable_lighting", True),
+            "background_color": getattr(self.options, "background_color", "white"),
+            "anti_aliasing": getattr(self.options, "anti_aliasing", True),
+            "render_edges": getattr(self.options, "render_edges", False),
+        }
+
+        # Render each configured view
         for view_config in self.options.views:
             view_name = view_config.name
 
-            # rendered_views[view_name] = render_view(
-            #     item,
-            #     azimuth=view_config.azimuth,
-            #     elevation=view_config.elevation,
-            #     distance=view_config.distance,
-            #     resolution=self.options.resolution,
-            #     lighting=self.options.enable_lighting,
-            #     ...
-            # )
+            try:
+                rendered_image = None
 
-            _log.debug(
-                f"[Render] View {view_name}: "
-                f"az={view_config.azimuth}, el={view_config.elevation}"
-            )
+                # Strategy 1: backend with render_view
+                if backend is not None and hasattr(backend, "render_view"):
+                    rendered_image = backend.render_view(
+                        view_name,
+                        azimuth=view_config.azimuth,
+                        elevation=view_config.elevation,
+                        distance=getattr(view_config, "distance", None),
+                        **render_opts,
+                    )
+
+                # Strategy 2: software fallback via Open3D
+                if rendered_image is None and shape is not None:
+                    rendered_image = self._software_render(
+                        shape, view_config, render_opts
+                    )
+
+                # Strategy 3: placeholder metadata (always succeeds)
+                if rendered_image is None:
+                    rendered_image = {
+                        "type": "placeholder",
+                        "view_name": view_name,
+                        "azimuth": view_config.azimuth,
+                        "elevation": view_config.elevation,
+                        "distance": getattr(view_config, "distance", None),
+                        "render_options": render_opts,
+                    }
+                    _log.debug(
+                        f"[Render] Using placeholder for view {view_name}: "
+                        f"no rendering backend available"
+                    )
+
+                rendered_views[view_name] = rendered_image
+                _log.debug(
+                    f"[Render] View {view_name}: "
+                    f"az={view_config.azimuth}, el={view_config.elevation}"
+                )
+
+            except Exception as e:
+                _log.warning(f"Failed to render view {view_name}: {e}")
+                # Still store placeholder on error
+                rendered_views[view_name] = {
+                    "type": "error",
+                    "view_name": view_name,
+                    "error": str(e),
+                }
 
         return rendered_views
+
+    @staticmethod
+    def _software_render(shape, view_config, render_opts) -> Any:
+        """Attempt software rendering via Open3D or trimesh.
+
+        Args:
+            shape: OCC shape object
+            view_config: View configuration
+            render_opts: Rendering options dict
+
+        Returns:
+            Rendered image data, or None if libraries unavailable
+        """
+        try:
+            import numpy as np
+
+            # Try Open3D first
+            try:
+                import open3d as o3d
+                from OCC.Extend.DataExchange import write_stl_file
+                import tempfile
+                import os
+
+                # Export shape to temporary STL for Open3D
+                with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as tmp:
+                    tmp_path = tmp.name
+
+                write_stl_file(shape, tmp_path)
+                mesh = o3d.io.read_triangle_mesh(tmp_path)
+                os.unlink(tmp_path)
+
+                if mesh.is_empty():
+                    return None
+
+                mesh.compute_vertex_normals()
+
+                # Set up off-screen renderer
+                resolution = render_opts.get("resolution", 1024)
+                renderer = o3d.visualization.rendering.OffscreenRenderer(
+                    resolution, resolution
+                )
+
+                # Configure material
+                material = o3d.visualization.rendering.MaterialRecord()
+                material.shader = "defaultLit" if render_opts.get("enable_lighting", True) else "defaultUnlit"
+
+                renderer.scene.add_geometry("mesh", mesh, material)
+
+                # Set camera from view config
+                az = np.radians(view_config.azimuth)
+                el = np.radians(view_config.elevation)
+                dist = getattr(view_config, "distance", None)
+                if dist is None:
+                    bounds = mesh.get_axis_aligned_bounding_box()
+                    dist = np.linalg.norm(bounds.get_extent()) * 2.0
+
+                eye = np.array([
+                    dist * np.cos(el) * np.sin(az),
+                    dist * np.sin(el),
+                    dist * np.cos(el) * np.cos(az),
+                ])
+                center = np.array([0.0, 0.0, 0.0])
+                up = np.array([0.0, 1.0, 0.0])
+
+                renderer.setup_camera(60.0, center, eye, up)
+                image = renderer.render_to_image()
+
+                return np.asarray(image)
+
+            except ImportError:
+                _log.debug("Open3D not available, trying trimesh fallback")
+
+            # Try trimesh as fallback
+            try:
+                import trimesh
+                from OCC.Extend.DataExchange import write_stl_file
+                import tempfile
+                import os
+
+                with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as tmp:
+                    tmp_path = tmp.name
+
+                write_stl_file(shape, tmp_path)
+                mesh = trimesh.load(tmp_path)
+                os.unlink(tmp_path)
+
+                if mesh.is_empty:
+                    return None
+
+                # Use trimesh scene rendering
+                resolution = render_opts.get("resolution", 1024)
+                scene = trimesh.Scene(mesh)
+
+                # Set camera
+                az = np.radians(view_config.azimuth)
+                el = np.radians(view_config.elevation)
+                dist = getattr(view_config, "distance", None) or mesh.bounding_sphere.primitive.radius * 3.0
+
+                camera_transform = trimesh.transformations.compose_matrix(
+                    translate=[
+                        dist * np.cos(el) * np.sin(az),
+                        dist * np.sin(el),
+                        dist * np.cos(el) * np.cos(az),
+                    ]
+                )
+                scene.camera_transform = camera_transform
+
+                # Render to PNG bytes
+                png_data = scene.save_image(resolution=(resolution, resolution))
+                return png_data
+
+            except ImportError:
+                _log.debug("trimesh not available, software rendering unavailable")
+
+        except Exception as e:
+            _log.debug(f"Software rendering failed: {e}")
+
+        return None
 
     def _fuse_multi_view_results(self, item) -> None:
         """Fuse results from multiple views using configured strategy.

@@ -665,6 +665,7 @@ class TestIntegration:
         # Add 5 features in a linear pattern
         for i in range(5):
             item = Mock()
+            item.label = Mock(text="hole")  # Properly configure label
             item.properties = {
                 "geometry_analysis": {
                     "centroid": [i * 10.0, 0.0, 0.0],

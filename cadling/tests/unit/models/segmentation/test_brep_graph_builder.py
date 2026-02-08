@@ -4,6 +4,12 @@ import numpy as np
 import pytest
 from pathlib import Path
 
+# Skip all tests in this module if required dependencies are not installed
+# NOTE: torch-geometric is a required dependency (see pyproject.toml [ml] extras)
+# OCP (pythonocc-core) is conda-only and may not be available via pip
+pytest.importorskip("torch_geometric")
+pytest.importorskip("OCP")
+
 from cadling.models.segmentation.brep_graph_builder import BRepFaceGraphBuilder
 
 

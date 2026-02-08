@@ -17,7 +17,8 @@ Constants:
 
 from __future__ import annotations
 
-from typing import Any
+import copy
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
@@ -45,6 +46,7 @@ class CADQaPromptTemplate(BaseModel):
     answer_prompt: str
     description: str = ""
     examples: list[dict[str, Any]] = Field(default_factory=list)
+    annotation_level: Optional[str] = None
 
     def format_question_prompt(self, context: str, **kwargs) -> str:
         """Format the question generation prompt with context.
@@ -73,6 +75,32 @@ class CADQaPromptTemplate(BaseModel):
         """
         return self.answer_prompt.format(
             context=context, question=question, **kwargs
+        )
+
+    def with_annotation_level(self, level: str) -> CADQaPromptTemplate:
+        """Create a copy of this template with annotation level constraints applied.
+
+        Uses AnnotationLevelPromptModifier to wrap question and answer prompts
+        with level-specific instructions.
+
+        Args:
+            level: Annotation level name ('abstract', 'intermediate', 'detailed', 'expert')
+
+        Returns:
+            New CADQaPromptTemplate with level-modified prompts
+        """
+        from cadling.sdg.qa.prompts.annotation_prompts import AnnotationLevelPromptModifier
+
+        modifier = AnnotationLevelPromptModifier(level)
+
+        return CADQaPromptTemplate(
+            name=f"{self.name}_{level}",
+            question_type=self.question_type,
+            question_prompt=modifier.modify_question_prompt(self.question_prompt),
+            answer_prompt=modifier.modify_answer_prompt(self.answer_prompt),
+            description=f"{self.description} [Level: {level}]",
+            examples=self.examples.copy(),
+            annotation_level=level,
         )
 
 
@@ -407,3 +435,22 @@ def register_prompt(name: str, template: CADQaPromptTemplate) -> None:
         template: Prompt template to register
     """
     _GENERATION_PROMPTS[name] = template
+
+
+def get_prompts_for_level(
+    base_prompts: list[CADQaPromptTemplate],
+    level: str,
+) -> list[CADQaPromptTemplate]:
+    """Wrap all base prompts with annotation level constraints.
+
+    Creates level-specific variants of each base prompt by applying
+    the annotation level modifier to both question and answer prompts.
+
+    Args:
+        base_prompts: List of base prompt templates to wrap
+        level: Annotation level name ('abstract', 'intermediate', 'detailed', 'expert')
+
+    Returns:
+        List of new prompt templates with level constraints applied
+    """
+    return [prompt.with_annotation_level(level) for prompt in base_prompts]

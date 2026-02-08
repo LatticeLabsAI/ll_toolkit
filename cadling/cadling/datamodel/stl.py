@@ -10,8 +10,9 @@ Classes:
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
+import numpy as np
 from pydantic import Field, field_validator
 
 from cadling.datamodel.base_models import (
@@ -153,6 +154,43 @@ class MeshItem(CADItem):
             x_min=min(xs), y_min=min(ys), z_min=min(zs),
             x_max=max(xs), y_max=max(ys), z_max=max(zs)
         )
+
+    def to_numpy(self) -> Tuple[np.ndarray, np.ndarray]:
+        """Return (vertices, faces) as numpy arrays for GeoTokenizer.
+
+        Converts the internal list-of-lists storage to numpy arrays
+        matching the format expected by geotoken.GeoTokenizer.tokenize().
+
+        Returns:
+            Tuple of:
+                - vertices: np.ndarray of shape (N, 3), dtype float32
+                - faces: np.ndarray of shape (F, 3), dtype int64
+        """
+        if not self.vertices:
+            return np.zeros((0, 3), dtype=np.float32), np.zeros((0, 3), dtype=np.int64)
+        vertices = np.array(self.vertices, dtype=np.float32)
+        faces = np.array(self.facets, dtype=np.int64) if self.facets else np.zeros((0, 3), dtype=np.int64)
+        return vertices, faces
+
+    def to_numpy_vertices(self) -> np.ndarray:
+        """Return vertices only as (N, 3) float32 array.
+
+        Returns:
+            np.ndarray of shape (N, 3), dtype float32
+        """
+        if not self.vertices:
+            return np.zeros((0, 3), dtype=np.float32)
+        return np.array(self.vertices, dtype=np.float32)
+
+    def to_numpy_normals(self) -> np.ndarray:
+        """Return face normals as (F, 3) float32 array.
+
+        Returns:
+            np.ndarray of shape (F, 3), dtype float32
+        """
+        if not self.normals:
+            return np.zeros((0, 3), dtype=np.float32)
+        return np.array(self.normals, dtype=np.float32)
 
 
 class STLDocument(CADlingDocument):
