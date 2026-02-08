@@ -135,3 +135,29 @@ Configured in `cadling/pyproject.toml`:
 ## Known State
 
 See `cadling/docs/RequiredToBeCorrected.md` for ~200 methods with placeholder/incomplete implementations that need production-quality code. High priority: backend abstract method implementations, geometry analysis, graph builder, geometry extractors, assembly mate detection.
+
+## geotoken Package
+
+Geometric tokenizer for CAD/mesh data. See `geotoken/README.md` for full documentation.
+
+**Quick Commands:**
+```bash
+# Install
+pip install -e ./geotoken
+
+# Run tests
+cd geotoken && pytest tests/ -v
+
+# Run examples
+python geotoken/docs/examples/mesh_tokenization.py
+```
+
+**Key Classes:**
+- `GeoTokenizer`: Mesh tokenization
+- `CommandSequenceTokenizer`: CAD command sequences
+- `GraphTokenizer`: B-Rep topology graphs
+- `CADVocabulary`: Token → ID encoding
+
+**Integration:**
+- cadling: `from cadling.backend.geotoken_integration import GeoTokenIntegration`
+- ll_stepnet: `from ll_stepnet.stepnet.data import GeoTokenDataset`
