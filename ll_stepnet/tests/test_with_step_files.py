@@ -1,11 +1,14 @@
 """
 Tests for LL-STEPNet using actual STEP files.
 """
-
-import torch
 import sys
 from pathlib import Path
 from datetime import datetime
+
+import pytest
+
+# Skip entire module if torch is not installed
+torch = pytest.importorskip("torch")
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))

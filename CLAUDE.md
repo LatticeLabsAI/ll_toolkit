@@ -36,6 +36,32 @@ cd ../ll_stepnet && pip install -e . && cd ../cadling
 
 **Never run** `pip install torch` — it will cause `OMP: Error #15` crashes.
 
+## OpenMP / PyTorch Import Order (macOS Critical)
+
+On macOS (especially Apple Silicon), mixing different OpenMP library sources causes a fatal crash:
+
+```
+OMP: Error #15: Initializing libomp.dylib, but found libomp.dylib already initialized.
+```
+
+**Root Cause:** PyTorch bundles `libomp.dylib` while conda-forge packages use `llvm-openmp`. Loading both crashes the process.
+
+**Rules to prevent this:**
+
+1. **ALL packages use `conda-forge` channel only** — NEVER use the `pytorch` channel
+2. **Each `tests/conftest.py` imports torch FIRST** before any other imports (except stdlib)
+3. **Test files use `torch = pytest.importorskip("torch")` at module level** — not inside methods
+4. **Set `OMP_NUM_THREADS=1` on macOS** as extra protection (conftest.py does this automatically)
+
+**Affected Files:**
+- `ll_stepnet/environment.yml` — must use `conda-forge` only
+- `ll_ocadr/environment.yml` — must use `conda-forge` only
+- `ll_stepnet/tests/conftest.py` — imports torch first for OpenMP protection
+
+**References:**
+- [PyTorch Issue #44282](https://github.com/pytorch/pytorch/issues/44282)
+- [PyTorch Issue #132372](https://github.com/pytorch/pytorch/issues/132372)
+
 ## Build & Test Commands
 
 All commands run from `cadling/` directory:

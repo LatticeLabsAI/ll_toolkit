@@ -16,7 +16,9 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
-import torch
+
+# Skip entire module if torch is not installed
+torch = pytest.importorskip("torch")
 
 # ---------------------------------------------------------------------------
 # ll_stepnet imports

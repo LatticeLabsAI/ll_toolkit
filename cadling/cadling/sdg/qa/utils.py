@@ -39,6 +39,7 @@ T = TypeVar("T", bound=BaseModel)
 # Check available LLM libraries
 _OPENAI_AVAILABLE = False
 _ANTHROPIC_AVAILABLE = False
+_MLX_AVAILABLE = False
 
 try:
     import openai
@@ -51,6 +52,12 @@ try:
     _ANTHROPIC_AVAILABLE = True
 except ImportError:
     _log.debug("anthropic not available")
+
+try:
+    import mlx_lm
+    _MLX_AVAILABLE = True
+except ImportError:
+    _log.debug("mlx-lm not available")
 
 
 def initialize_llm(options: LlmOptions) -> Any:
@@ -129,6 +136,22 @@ def initialize_llm(options: LlmOptions) -> Any:
         client = openai.OpenAI(base_url=options.url, api_key=api_key)
         _log.info(f"Initialized OpenAI-compatible client at {options.url}")
         return client
+
+    elif options.provider == LlmProvider.MLX:
+        if not _MLX_AVAILABLE:
+            raise ImportError(
+                "mlx-lm package required for MLX provider. "
+                "Install with: pip install mlx-lm"
+            )
+
+        import mlx_lm
+
+        # Load model and tokenizer (may return 2 or 3 values)
+        result = mlx_lm.load(options.model_id)
+        model = result[0]
+        tokenizer = result[1]
+        _log.info(f"Initialized MLX model: {options.model_id}")
+        return {"model": model, "tokenizer": tokenizer, "model_id": options.model_id}
 
     else:
         raise ValueError(f"Unsupported provider: {options.provider}")
@@ -228,8 +251,92 @@ class ChatAgent:
             )
             return response.content[0].text
 
+        elif self.provider == LlmProvider.MLX:
+            import mlx_lm
+            from mlx_lm.sample_utils import make_sampler
+
+            model = self.client["model"]
+            tokenizer = self.client["tokenizer"]
+
+            # Apply chat template if available
+            if hasattr(tokenizer, "apply_chat_template"):
+                messages = [{"role": "user", "content": prompt}]
+                formatted_prompt = tokenizer.apply_chat_template(
+                    messages,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                )
+            else:
+                formatted_prompt = prompt
+
+            # Create sampler with temperature
+            sampler = make_sampler(temp=self.temperature)
+
+            # Generate response using MLX
+            response = mlx_lm.generate(
+                model=model,
+                tokenizer=tokenizer,
+                prompt=formatted_prompt,
+                max_tokens=tokens,
+                sampler=sampler,
+            )
+
+            # Post-process MLX response
+            response = self._clean_mlx_response(response, formatted_prompt)
+            return response
+
         else:
             raise ValueError(f"Unsupported provider: {self.provider}")
+
+    def _clean_mlx_response(self, response: str, formatted_prompt: str) -> str:
+        """Clean MLX-generated response of common artifacts.
+
+        Args:
+            response: Raw MLX response text.
+            formatted_prompt: The formatted prompt that was sent to the model.
+
+        Returns:
+            Cleaned response text.
+        """
+        if not response:
+            return response
+
+        cleaned = response.strip()
+
+        # Remove common end-of-text tokens from various models
+        end_tokens = [
+            "<|endoftext|>",
+            "<|im_end|>",
+            "<|eot_id|>",
+            "</s>",
+            "<|end|>",
+            "<|assistant|>",
+            "[/INST]",
+        ]
+        for token in end_tokens:
+            if cleaned.endswith(token):
+                cleaned = cleaned[: -len(token)].strip()
+            # Also handle case where token appears mid-response
+            if token in cleaned:
+                cleaned = cleaned.split(token)[0].strip()
+
+        # Some models echo back the prompt - strip it if present
+        if formatted_prompt and cleaned.startswith(formatted_prompt):
+            cleaned = cleaned[len(formatted_prompt):].strip()
+
+        # Remove common assistant prefixes some models add
+        prefixes_to_strip = [
+            "Assistant:",
+            "assistant:",
+            "ASSISTANT:",
+            "Response:",
+            "response:",
+        ]
+        for prefix in prefixes_to_strip:
+            if cleaned.startswith(prefix):
+                cleaned = cleaned[len(prefix):].strip()
+
+        return cleaned
 
 
 # =============================================================================

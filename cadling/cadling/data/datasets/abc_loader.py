@@ -90,15 +90,83 @@ class ABCLoader(BaseCADDataset):
         return sample
 
     def download(self) -> None:
-        """Download ABC dataset.
+        """Download ABC dataset (1M CAD STEP files).
 
-        The ABC dataset should be downloaded from:
-        https://deep-geometry.github.io/abc-dataset/
+        Attempts automated download in order of preference:
+
+        1. **HuggingFace Hub** — pre-processed graph features via
+           ``huggingface_hub.snapshot_download``.
+        2. **ABC dataset chunks** — individual chunk archives from the
+           ABC dataset API (https://archive.nyu.edu/handle/2451/61215).
+        3. **Manual fallback** — logs the URL and expected directory layout.
+
+        After download, STEP files are placed in ``root_dir/{split}/``.
         """
+        if self._verify_integrity():
+            _log.info("ABC dataset already present at %s", self.root_dir)
+            return
+
+        self.root_dir.mkdir(parents=True, exist_ok=True)
+
+        # --- Strategy 1: HuggingFace Hub (pre-processed graphs) ---
+        try:
+            from huggingface_hub import snapshot_download
+
+            _log.info("Downloading ABC dataset from HuggingFace Hub...")
+            snapshot_download(
+                repo_id="abc-dataset/abc-step",
+                repo_type="dataset",
+                local_dir=str(self.root_dir),
+                allow_patterns=["*.step", "*.stp", "*.txt"],
+            )
+
+            if self._verify_integrity():
+                _log.info("ABC dataset downloaded via HuggingFace Hub")
+                return
+
+        except ImportError:
+            _log.debug("huggingface_hub not installed; trying direct download")
+        except Exception as exc:
+            _log.warning("HuggingFace Hub download failed: %s", exc)
+
+        # --- Strategy 2: ABC dataset API (first chunk only for quick start) ---
+        try:
+            import os
+            import tempfile
+            import urllib.request
+            import zipfile
+
+            # Download first chunk (0000) as a quick-start subset
+            chunk_url = (
+                "https://archive.nyu.edu/rest/bitstreams/"
+                "89542/retrieve"  # abc_0000_step_v00.zip
+            )
+            _log.info(
+                "Downloading ABC chunk 0000 from archive.nyu.edu for quick start..."
+            )
+
+            (self.root_dir / self.split).mkdir(parents=True, exist_ok=True)
+
+            with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
+                tmp_path = tmp.name
+                urllib.request.urlretrieve(chunk_url, tmp_path)
+
+            with zipfile.ZipFile(tmp_path, "r") as zf:
+                zf.extractall(str(self.root_dir / self.split))
+            os.unlink(tmp_path)
+
+            if self._verify_integrity():
+                _log.info("ABC chunk 0000 extracted to %s/%s", self.root_dir, self.split)
+                return
+
+        except Exception as exc:
+            _log.warning("Direct ABC download failed: %s", exc)
+
+        # --- Strategy 3: Manual instructions ---
         _log.info(
-            "ABC dataset download not automated. Please download STEP "
-            "files from https://deep-geometry.github.io/abc-dataset/ "
-            "and place in %s/{train,val,test}/",
+            "Automated download unsuccessful. Please download STEP files "
+            "from https://deep-geometry.github.io/abc-dataset/ and place "
+            "in %s/{train,val,test}/",
             self.root_dir,
         )
 

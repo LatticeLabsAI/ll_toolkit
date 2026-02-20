@@ -1,0 +1,141 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ll_gen"
+version = "0.1.0"
+description = "Generation orchestration for the LatticeLabs CAD toolkit — Neural Propose, Deterministic Dispose"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9,<3.13"
+authors = [
+    {name = "LatticeLabs"},
+]
+
+dependencies = [
+    "numpy>=1.24",
+    "pydantic>=2.0",
+]
+
+[project.optional-dependencies]
+# Core CAD processing (for disposal engine)
+cad = [
+    # pythonocc-core must be installed via conda-forge
+    # cadquery must be installed via conda-forge or pip
+    "numpy-stl>=3.0",
+    "trimesh>=4.0",
+]
+
+# Neural generation (for proposal generation)
+ml = [
+    # torch must be installed via conda-forge to avoid OpenMP conflicts
+    "transformers>=4.35",
+    "safetensors",
+    "einops",
+]
+
+# Dataset loading
+data = [
+    "datasets>=2.14",
+    "huggingface-hub>=0.17",
+]
+
+# Conditioning (text/image/multimodal encoders)
+conditioning = [
+    "transformers>=4.35",
+    "Pillow>=9.0",
+    "sentence-transformers>=2.2",
+]
+
+# Visual verification
+vision = [
+    "Pillow>=9.0",
+]
+
+# Full installation (everything)
+all = [
+    "ll_gen[cad,ml,data,vision,conditioning]",
+]
+
+# Development
+dev = [
+    "pytest>=7.4",
+    "pytest-timeout>=2.1",
+    "pytest-cov>=4.0",
+    "pytest-xdist>=3.0",
+    "black>=23.0",
+    "ruff>=0.1",
+    "mypy>=1.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["ll_gen*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+timeout = 300
+markers = [
+    "slow: marks tests as slow (deselect with -m 'not slow')",
+    "requires_gpu: marks tests that need a GPU",
+    "requires_pythonocc: marks tests that need pythonocc-core",
+    "requires_cadquery: marks tests that need cadquery",
+    "requires_torch: marks tests that need PyTorch",
+    "requires_cadling: marks tests that need cadling package",
+    "requires_geotoken: marks tests that need geotoken package",
+    "integration: marks integration tests",
+    "unit: marks unit tests",
+]
+
+[tool.black]
+line-length = 88
+target-version = ["py39", "py310", "py311", "py312"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py39"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "N",   # pep8-naming
+    "UP",  # pyupgrade
+    "B",   # bugbear
+]
+ignore = [
+    "E501",  # line too long (handled by black)
+]
+
+[tool.mypy]
+python_version = "3.9"
+check_untyped_defs = true
+disallow_untyped_defs = false
+warn_return_any = true
+warn_unused_configs = true
+
+[tool.coverage.run]
+source = ["ll_gen"]
+omit = ["*/tests/*", "*/test_*.py"]
+branch = true
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "@abstractmethod",
+    "except ImportError",
+    "_OCC_AVAILABLE = False",
+    "_CADLING_.*_AVAILABLE = False",
+    "_STEPNET_AVAILABLE = False",
+    "_TORCH_AVAILABLE = False",
+    "_PIL_AVAILABLE = False",
+]
+show_missing = true
+fail_under = 0

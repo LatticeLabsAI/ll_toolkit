@@ -98,10 +98,71 @@ class Text2CADLoader(BaseCADDataset):
         return sample
 
     def download(self) -> None:
-        """Download Text2CAD dataset."""
+        """Download Text2CAD dataset (660K text-annotated CAD models).
+
+        Attempts automated download in order of preference:
+
+        1. **HuggingFace Hub** via ``huggingface_hub.snapshot_download``.
+        2. **Manual fallback** — logs the URL and expected directory layout.
+
+        Text2CAD data consists of JSONL files pairing four levels of text
+        annotations (abstract, intermediate, detailed, expert) with
+        command sequences.  After download the expected layout is::
+
+            root_dir/
+                train/
+                    annotations.jsonl
+                val/
+                    annotations.jsonl
+                test/
+                    annotations.jsonl
+        """
+        if self._verify_integrity():
+            _log.info("Text2CAD dataset already present at %s", self.root_dir)
+            return
+
+        self.root_dir.mkdir(parents=True, exist_ok=True)
+
+        # --- Strategy 1: HuggingFace Hub ---
+        try:
+            from huggingface_hub import snapshot_download
+
+            _log.info("Downloading Text2CAD dataset from HuggingFace Hub...")
+            snapshot_download(
+                repo_id="SadilKhan/Text2CAD",
+                repo_type="dataset",
+                local_dir=str(self.root_dir),
+                allow_patterns=["*.jsonl", "*.json", "*.csv"],
+            )
+
+            if self._verify_integrity():
+                _log.info("Text2CAD dataset downloaded via HuggingFace Hub")
+                return
+
+            # Handle data/ prefix layout
+            data_dir = self.root_dir / "data"
+            if data_dir.exists():
+                import shutil
+
+                for split_name in ("train", "val", "test"):
+                    src = data_dir / split_name
+                    dst = self.root_dir / split_name
+                    if src.exists() and not dst.exists():
+                        shutil.copytree(str(src), str(dst))
+                if self._verify_integrity():
+                    _log.info("Text2CAD restructured from data/ prefix")
+                    return
+
+        except ImportError:
+            _log.debug("huggingface_hub not installed")
+        except Exception as exc:
+            _log.warning("HuggingFace Hub download failed: %s", exc)
+
+        # --- Strategy 2: Manual instructions ---
         _log.info(
-            "Text2CAD download not automated. Please download from "
-            "the Text2CAD project and place data in %s/{train,val,test}/",
+            "Automated download unsuccessful. Please download from "
+            "https://github.com/SadilKhan/Text2CAD or HuggingFace Hub "
+            "and place JSONL files in %s/{train,val,test}/",
             self.root_dir,
         )
 

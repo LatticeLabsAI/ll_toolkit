@@ -78,11 +78,11 @@ def generate_group():
 @click.option(
     "--provider",
     type=click.Choice(
-        ["openai", "anthropic", "vllm", "ollama", "openai_compatible"],
+        ["openai", "anthropic", "vllm", "ollama", "openai_compatible", "mlx"],
         case_sensitive=False,
     ),
     default="openai",
-    help="LLM API provider (default: openai).",
+    help="LLM API provider (default: openai). Use 'mlx' for Apple Silicon native.",
 )
 @click.option(
     "--validate/--no-validate",
@@ -119,6 +119,11 @@ def generate_group():
     is_flag=True,
     help="Enable verbose logging output.",
 )
+@click.option(
+    "--debug",
+    is_flag=True,
+    help="Debug mode: dump full LLM response and auto-save scripts on failure.",
+)
 def generate_cmd(
     text_prompt: Optional[str],
     image_path: Optional[str],
@@ -132,6 +137,7 @@ def generate_cmd(
     save_script: Optional[str],
     api_key: Optional[str],
     verbose: bool,
+    debug: bool,
 ) -> None:
     """Generate a CAD model from text description or reference image.
 
@@ -209,6 +215,7 @@ def generate_cmd(
                 max_retries=max_retries,
                 timeout=timeout,
                 save_script=save_script,
+                debug=debug,
             )
         elif backend.lower() == "openscad":
             _generate_openscad(
@@ -242,6 +249,7 @@ def _generate_cadquery(
     max_retries: int,
     timeout: int,
     save_script: Optional[str],
+    debug: bool = False,
 ) -> None:
     """Run CadQuery generation pipeline.
 
@@ -255,6 +263,7 @@ def _generate_cadquery(
         max_retries: Max retry attempts.
         timeout: Script execution timeout.
         save_script: Optional path to save generated script.
+        debug: Enable debug mode for verbose LLM response output.
     """
     from cadling.generation.codegen.cadquery_generator import (
         CadQueryGenerator,
@@ -340,6 +349,12 @@ def _generate_cadquery(
         )
         click.echo(f"Script generated ({len(script)} chars)", err=True)
 
+        # Debug: show raw script content
+        if debug:
+            click.echo("\n--- DEBUG: Generated Script ---", err=True)
+            click.echo(script, err=True)
+            click.echo("--- END DEBUG ---\n", err=True)
+
         # Save script if requested
         if save_script:
             script_path = Path(save_script)
@@ -355,6 +370,21 @@ def _generate_cadquery(
             click.echo(
                 f"Execution failed: {exec_result['error']}", err=True
             )
+            # Auto-save script on failure for debugging (if not already saved)
+            if not save_script:
+                import tempfile
+                with tempfile.NamedTemporaryFile(
+                    mode="w",
+                    suffix=".py",
+                    prefix="cadquery_failed_",
+                    delete=False,
+                ) as tmp:
+                    tmp.write(script)
+                    failed_script_path = tmp.name
+                click.echo(
+                    f"Failed script auto-saved to: {failed_script_path}",
+                    err=True,
+                )
             sys.exit(1)
 
         click.echo(
@@ -368,6 +398,21 @@ def _generate_cadquery(
 
         if not export_ok:
             click.echo("STEP export failed.", err=True)
+            # Auto-save script on export failure
+            if not save_script:
+                import tempfile
+                with tempfile.NamedTemporaryFile(
+                    mode="w",
+                    suffix=".py",
+                    prefix="cadquery_export_failed_",
+                    delete=False,
+                ) as tmp:
+                    tmp.write(script)
+                    failed_script_path = tmp.name
+                click.echo(
+                    f"Script auto-saved to: {failed_script_path}",
+                    err=True,
+                )
             sys.exit(1)
 
         click.echo(f"STEP file: {output_path}", err=True)

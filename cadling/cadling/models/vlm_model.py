@@ -28,14 +28,28 @@ if TYPE_CHECKING:
 
 _log = logging.getLogger(__name__)
 
-# Try to import optional dependencies
-_TRANSFORMERS_AVAILABLE = False
-try:
-    from transformers import AutoModelForVision2Seq, AutoProcessor
+# NOTE: transformers imports are lazy to avoid segfault when OCC is also loaded
+# AutoProcessor in particular loads image processing libs that conflict with OCC
+_TRANSFORMERS_AVAILABLE = None  # None = not checked yet
+_transformers_modules = None
 
-    _TRANSFORMERS_AVAILABLE = True
-except ImportError:
-    _log.debug("transformers not available for InlineVlmModel")
+
+def _get_transformers():
+    """Lazy import of transformers to avoid segfault with OCC."""
+    global _TRANSFORMERS_AVAILABLE, _transformers_modules
+    if _TRANSFORMERS_AVAILABLE is None:
+        try:
+            from transformers import AutoModelForVision2Seq, AutoProcessor
+            _transformers_modules = {
+                "AutoModelForVision2Seq": AutoModelForVision2Seq,
+                "AutoProcessor": AutoProcessor,
+            }
+            _TRANSFORMERS_AVAILABLE = True
+        except ImportError:
+            _log.debug("transformers not available for InlineVlmModel")
+            _transformers_modules = {}
+            _TRANSFORMERS_AVAILABLE = False
+    return _transformers_modules
 
 _OPENAI_AVAILABLE = False
 try:
@@ -53,13 +67,24 @@ try:
 except ImportError:
     _log.debug("anthropic not available for ApiVlmModel")
 
-_EASYOCR_AVAILABLE = False
-try:
-    import easyocr
+# NOTE: easyocr import is lazy to avoid segfault when OCC is also loaded
+# The conflict occurs between OCC's OpenCASCADE libs and easyocr's cv2/torch
+_EASYOCR_AVAILABLE = None  # None = not checked yet, True/False = checked
+_easyocr_module = None
 
-    _EASYOCR_AVAILABLE = True
-except ImportError:
-    _log.debug("easyocr not available for OCR enhancement")
+
+def _get_easyocr():
+    """Lazy import of easyocr to avoid segfault with OCC."""
+    global _EASYOCR_AVAILABLE, _easyocr_module
+    if _EASYOCR_AVAILABLE is None:
+        try:
+            import easyocr
+            _easyocr_module = easyocr
+            _EASYOCR_AVAILABLE = True
+        except ImportError:
+            _log.debug("easyocr not available for OCR enhancement")
+            _EASYOCR_AVAILABLE = False
+    return _easyocr_module if _EASYOCR_AVAILABLE else None
 
 
 class VlmAnnotation(BaseModel):
@@ -168,13 +193,15 @@ class VlmModel(ABC):
         self.options = options
         self.ocr_reader = None
 
-        # Initialize OCR if requested
-        if options.use_ocr and _EASYOCR_AVAILABLE:
-            try:
-                self.ocr_reader = easyocr.Reader(["en"])
-                _log.info("Initialized EasyOCR reader")
-            except Exception as e:
-                _log.warning(f"Failed to initialize EasyOCR: {e}")
+        # Initialize OCR if requested (lazy import to avoid OCC conflict)
+        if options.use_ocr:
+            easyocr = _get_easyocr()
+            if easyocr is not None:
+                try:
+                    self.ocr_reader = easyocr.Reader(["en"])
+                    _log.info("Initialized EasyOCR reader")
+                except Exception as e:
+                    _log.warning(f"Failed to initialize EasyOCR: {e}")
 
     @abstractmethod
     def predict(self, image: Image.Image, prompt: str) -> VlmResponse:
@@ -559,7 +586,9 @@ class InlineVlmModel(VlmModel):
         super().__init__(options)
         self.options: InlineVlmOptions = options
 
-        if not _TRANSFORMERS_AVAILABLE:
+        # Check transformers availability via lazy import
+        transformers = _get_transformers()
+        if not transformers:
             raise ImportError(
                 "transformers package required for InlineVlmModel. "
                 "Install with: pip install transformers"
@@ -574,6 +603,11 @@ class InlineVlmModel(VlmModel):
         Returns:
             Tuple of (processor, model)
         """
+        # Get lazy-loaded transformers classes
+        transformers = _get_transformers()
+        AutoProcessor = transformers["AutoProcessor"]
+        AutoModelForVision2Seq = transformers["AutoModelForVision2Seq"]
+
         try:
             _log.info(f"Loading model from {self.options.model_path}...")
 

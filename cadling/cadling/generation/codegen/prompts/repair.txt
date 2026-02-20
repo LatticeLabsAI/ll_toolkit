@@ -47,12 +47,59 @@ The following errors occurred during execution or validation:
    - Add small clearance (0.01 mm) to cutting tools
    - Check that both operands are valid solids
 
-5. Common fixes:
-   - Add `centered=(True, True, False)` to `.box()` for proper centering
-   - Use `.center(x, y)` to move workplane before placing features
+5. Common fixes for positioning:
+   - `.box(w, h, d, centered=(True, True, False))` - centers box on X/Y, not Z
+   - `.center(x, y)` - moves workplane origin before creating features
    - Ensure `.cutThruAll()` is called on a face workplane, not raw solid
    - Replace `.faces(">Z").fillet(r)` with `.edges(">Z").fillet(r)` if needed
    - Add `.workplane()` between `.faces()` and 2D sketch operations
+
+   ⚠️ INVALID API CALLS (never use these):
+   - `.workplane(centered=True)` - workplane() does NOT accept 'centered'
+   - `.workplane(center=...)` - use .center(x, y) AFTER workplane() instead
+
+   ✓ CORRECT workplane() parameters: offset, origin, centerOption, invert
+
+6. If you see "BRep_API: command not done" or similar BRep/OpenCASCADE errors:
+   This means an OpenCASCADE kernel operation failed. Common causes and fixes:
+
+   a) **Fillet/chamfer too aggressive**:
+      - Reduce fillet radius to < 1/3 of the smallest adjacent edge length
+      - Try removing fillets entirely for the first working version
+      - Example: If edges are 10mm, use `.fillet(2.0)` not `.fillet(5.0)`
+
+   b) **Boolean operations on non-overlapping geometry**:
+      - Ensure cut/union operands actually intersect
+      - Add 0.01mm overlap to ensure proper intersection
+      - Move one operand slightly so they touch
+
+   c) **Invalid sketch/wire for extrusion**:
+      - Ensure all sketch profiles are closed (no gaps)
+      - Avoid zero-length lines or arcs
+      - Don't create self-intersecting profiles
+      - Use `.close()` to explicitly close wire paths
+
+   d) **Extrusion direction issues**:
+      - Use explicit positive distances (e.g., `.extrude(10)` not `.extrude(-10)`)
+      - Avoid extruding through the shape origin
+      - Check that workplane normal points the expected direction
+
+   e) **Complex organic shapes (chairs, furniture, sculptures)**:
+      - Simplify to boxy/geometric primitives first
+      - Build subcomponents separately, then union at the end
+      - Avoid complex lofts or sweeps - use stepped approximations
+      - Create each leg/arm/seat as a separate solid before combining
+      - Test that each component is valid before combining with `.union()`
+
+   f) **Loft failures**:
+      - Ensure loft sections have the same number of vertices
+      - Make sections roughly the same shape
+      - Prefer `.extrude()` with taper or stepped geometry over `.loft()`
+
+   g) **Sweep failures**:
+      - Ensure the path is smooth (no sharp corners)
+      - Profile must not intersect the path
+      - Prefer discrete extrusions over sweeps when possible
 
 ## Output Format
 

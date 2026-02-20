@@ -4,11 +4,16 @@ Verifies that ll_stepnet's CommandType, PARAMETER_MASKS, STEPGraphEncoder,
 and GeoTokenDataset all use native formats that match geotoken and cadling
 directly — no adapters or conversion needed.
 """
+from __future__ import annotations
+
 import sys
 import os
+
 import pytest
-import torch
 import numpy as np
+
+# Skip entire module if torch is not installed
+torch = pytest.importorskip("torch")
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 

@@ -173,6 +173,7 @@ class CadQueryGenerator:
             "vllm": LlmProvider.VLLM,
             "ollama": LlmProvider.OLLAMA,
             "openai_compatible": LlmProvider.OPENAI_COMPATIBLE,
+            "mlx": LlmProvider.MLX,
         }
 
         provider = provider_map.get(self.api_provider.lower())
@@ -408,12 +409,78 @@ class CadQueryGenerator:
             f"{last_error}"
         )
 
+    def repair(
+        self,
+        code: str,
+        error: str,
+        description: str,
+    ) -> str:
+        """Repair CadQuery code based on error message using LLM.
+
+        Sends the failing code, error message, and original description to the
+        LLM with a repair-specific prompt to generate a fixed version.
+
+        Args:
+            code: The failing CadQuery script.
+            error: Error message from execution or validation.
+            description: Original text description of the desired part.
+
+        Returns:
+            Repaired CadQuery Python script.
+
+        Raises:
+            RuntimeError: If repair fails after max_retries attempts.
+        """
+        from cadling.generation.codegen.prompts import load_repair_prompt
+
+        agent = self._get_agent()
+        system_prompt = self._build_system_prompt()
+
+        repair_template = load_repair_prompt()
+        user_prompt = repair_template.replace("{DESCRIPTION}", description)
+        user_prompt = user_prompt.replace("{PREVIOUS_CODE}", code)
+        user_prompt = user_prompt.replace("{ERRORS}", error)
+
+        full_prompt = f"{system_prompt}\n\n---\n\n{user_prompt}"
+
+        last_error_exc: Exception | None = None
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                _log.info(
+                    "CadQuery repair attempt %d/%d for error: %s",
+                    attempt,
+                    self.max_retries,
+                    error[:80],
+                )
+                response = agent.ask(full_prompt, max_tokens=4096)
+                script = self._extract_code(response)
+                _log.info(
+                    "Repaired CadQuery script (%d chars) on attempt %d",
+                    len(script),
+                    attempt,
+                )
+                return script
+            except Exception as e:
+                last_error_exc = e
+                _log.warning(
+                    "CadQuery repair attempt %d failed: %s", attempt, e
+                )
+                if attempt < self.max_retries:
+                    time.sleep(1.0 * attempt)
+
+        raise RuntimeError(
+            f"CadQuery repair failed after {self.max_retries} attempts: "
+            f"{last_error_exc}"
+        )
+
     def _extract_code(self, response: str) -> str:
         """Extract Python code block from LLM response.
 
         Looks for fenced code blocks (```python ... ```) and returns the
         content. Falls back to the entire response if no code block found
         but the response appears to be valid Python.
+
+        Handles MLX-specific artifacts like special tokens and prompt echoes.
 
         Args:
             response: Raw LLM response text.
@@ -424,35 +491,279 @@ class CadQueryGenerator:
         Raises:
             ValueError: If no valid Python code can be extracted.
         """
-        # Try fenced code blocks first
+        # Step 1: Clean common MLX/LLM artifacts from response
+        cleaned = self._clean_llm_response(response)
+
+        # Step 2: Try fenced code blocks first
         pattern = r"```(?:python)?\s*\n(.*?)```"
-        matches = re.findall(pattern, response, re.DOTALL)
+        matches = re.findall(pattern, cleaned, re.DOTALL)
         if matches:
             # Return the longest code block (most likely to be the full script)
             code = max(matches, key=len).strip()
             if code:
-                return code
+                return self._clean_extracted_code(code)
 
-        # Fallback: check if the entire response looks like Python
-        lines = response.strip().split("\n")
-        python_indicators = ["import ", "from ", "result ", "cq.", "Workplane", "def "]
+        # Step 3: Try to find code between import and result assignment
+        import_match = re.search(
+            r"(import cadquery as cq[\s\S]*?result\s*=[\s\S]*?)(?:\n\n[A-Z]|\Z)",
+            cleaned,
+            re.MULTILINE,
+        )
+        if import_match:
+            code = import_match.group(1).strip()
+            if code:
+                return self._clean_extracted_code(code)
+
+        # Step 4: Fallback - find lines starting with Python indicators
+        lines = cleaned.split("\n")
+        python_indicators = [
+            "import ",
+            "from ",
+            "result ",
+            "result=",
+            "cq.",
+            "Workplane",
+            "def ",
+            "#",  # Comments
+        ]
         code_lines = []
         in_code = False
 
         for line in lines:
             stripped = line.strip()
+            # Start capturing when we see a Python indicator
             if any(stripped.startswith(ind) for ind in python_indicators):
                 in_code = True
+            # Stop capturing at clear non-code markers (explanation text)
+            if in_code and stripped and re.match(r"^[A-Z][a-z]+.*[.:!]$", stripped):
+                # Looks like an English sentence, might be post-code explanation
+                # Only break if we already have substantial code
+                if len(code_lines) > 5:
+                    break
             if in_code:
                 code_lines.append(line)
 
         if code_lines:
-            return "\n".join(code_lines).strip()
+            return self._clean_extracted_code("\n".join(code_lines))
 
         raise ValueError(
             "Could not extract valid Python code from LLM response. "
-            f"Response preview: {response[:200]}"
+            f"Response preview: {cleaned[:200]}"
         )
+
+    def _clean_llm_response(self, response: str) -> str:
+        """Clean common LLM artifacts from response text.
+
+        Removes special tokens, JSON wrappers, and other artifacts that
+        some models (especially MLX-served local models) may produce.
+
+        Args:
+            response: Raw LLM response text.
+
+        Returns:
+            Cleaned response text.
+        """
+        cleaned = response
+
+        # Remove common end-of-text tokens from various models
+        end_tokens = [
+            "<|endoftext|>",
+            "<|im_end|>",
+            "<|eot_id|>",
+            "</s>",
+            "<|end|>",
+            "<|assistant|>",
+            "[/INST]",
+            "```\n\n---",  # Common markdown ending
+        ]
+        for token in end_tokens:
+            if token in cleaned:
+                cleaned = cleaned.split(token)[0]
+
+        # Remove thinking/reasoning blocks some models produce
+        # E.g., <thinking>...</thinking> or <|think|>...</|think|>
+        cleaned = re.sub(r"<\|?thinking\|?>.*?</?\|?thinking\|?>", "", cleaned, flags=re.DOTALL)
+        cleaned = re.sub(r"<\|?think\|?>.*?</?\|?think\|?>", "", cleaned, flags=re.DOTALL)
+
+        # Remove JSON wrapper if model wrapped response in JSON
+        # E.g., {"code": "import cadquery..."}
+        json_match = re.search(r'\{\s*"code"\s*:\s*"(.*?)"\s*\}', cleaned, re.DOTALL)
+        if json_match:
+            # Unescape JSON string
+            cleaned = json_match.group(1).replace("\\n", "\n").replace('\\"', '"')
+
+        return cleaned.strip()
+
+    def _clean_extracted_code(self, code: str) -> str:
+        """Clean extracted code of remaining artifacts.
+
+        Args:
+            code: Extracted Python code.
+
+        Returns:
+            Cleaned Python code.
+        """
+        lines = code.split("\n")
+        cleaned_lines = []
+
+        for line in lines:
+            # Skip lines that are clearly not Python
+            stripped = line.strip()
+
+            # Skip empty markdown artifacts
+            if stripped in ("```", "```python", "```py"):
+                continue
+
+            # Skip lines that look like model commentary
+            if stripped.startswith("This ") and stripped.endswith(":"):
+                continue
+            if stripped.startswith("Here ") and "code" in stripped.lower():
+                continue
+
+            cleaned_lines.append(line)
+
+        # Remove trailing empty lines
+        while cleaned_lines and not cleaned_lines[-1].strip():
+            cleaned_lines.pop()
+
+        # Ensure we have a result assignment
+        code_text = "\n".join(cleaned_lines)
+
+        # If code doesn't have 'result =' anywhere, try to find the last
+        # workplane assignment and alias it to 'result'
+        if "result" not in code_text and "=" in code_text:
+            # Find the last variable assignment that looks like a workplane
+            last_assignment_match = re.search(
+                r"^(\w+)\s*=\s*\(?.*(?:Workplane|\.extrude|\.box|\.cylinder)",
+                code_text,
+                re.MULTILINE,
+            )
+            if last_assignment_match:
+                var_name = last_assignment_match.group(1)
+                if var_name != "cq":
+                    code_text += f"\nresult = {var_name}"
+                    _log.debug("Added 'result = %s' to extracted code", var_name)
+
+        return code_text.strip()
+
+    def generate_from_graph(
+        self,
+        node_features: "np.ndarray",
+        edge_index: Optional["np.ndarray"] = None,
+        adjacency: Optional[Dict[int, List[int]]] = None,
+        edge_features: Optional["np.ndarray"] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        max_iterations: int = 3,
+    ) -> Dict[str, Any]:
+        """Generate CadQuery code from decoded graph features.
+
+        Converts graph node/edge features into a structured prompt and uses
+        the LLM to generate CadQuery code. Includes validation and retry loop.
+
+        Args:
+            node_features: Face features [N, feature_dim] from decoder
+            edge_index: Adjacency in COO format [2, M]
+            adjacency: Adjacency as dict (alternative to edge_index)
+            edge_features: Optional edge features [M, edge_dim]
+            metadata: Optional metadata (volume, bbox, etc.)
+            max_iterations: Maximum generate-validate iterations
+
+        Returns:
+            Dictionary with:
+                - success: Whether generation succeeded
+                - script: Generated CadQuery script
+                - prompt: The prompt used for generation
+                - iterations: Number of iterations used
+                - errors: List of errors encountered
+
+        Example:
+            generator = CadQueryGenerator(model_name="gpt-4")
+            result = generator.generate_from_graph(
+                node_features=decoded_features,
+                edge_index=adjacency,
+            )
+            if result["success"]:
+                print(result["script"])
+        """
+        import numpy as np
+
+        from cadling.generation.codegen.graph_prompt_formatter import GraphToPromptFormatter
+
+        # Format graph as prompt
+        formatter = GraphToPromptFormatter()
+        prompt = formatter.format_for_cadquery(
+            node_features=node_features,
+            edge_index=edge_index,
+            adjacency=adjacency,
+            edge_features=edge_features,
+            metadata=metadata,
+        )
+
+        errors: List[str] = []
+        final_script = ""
+
+        for iteration in range(1, max_iterations + 1):
+            try:
+                _log.info(
+                    "Graph-to-code generation attempt %d/%d",
+                    iteration,
+                    max_iterations,
+                )
+
+                if iteration == 1:
+                    script = self.generate(prompt)
+                else:
+                    # Use repair with accumulated errors
+                    error_context = "\n".join(f"- {err}" for err in errors[-3:])
+                    script = self.repair(
+                        code=final_script,
+                        error=error_context,
+                        description=prompt,
+                    )
+
+                final_script = script
+
+                # Basic syntax validation
+                try:
+                    compile(script, "<graph_generated>", "exec")
+                except SyntaxError as e:
+                    errors.append(f"Syntax error: {e}")
+                    continue
+
+                # Check for required result assignment
+                if "result" not in script:
+                    errors.append("Script missing 'result' variable assignment")
+                    continue
+
+                _log.info(
+                    "Generated CadQuery script from graph (%d chars) on iteration %d",
+                    len(script),
+                    iteration,
+                )
+
+                return {
+                    "success": True,
+                    "script": script,
+                    "prompt": prompt,
+                    "iterations": iteration,
+                    "errors": errors,
+                }
+
+            except Exception as e:
+                errors.append(f"Generation error: {e}")
+                _log.warning(
+                    "Graph-to-code generation attempt %d failed: %s",
+                    iteration,
+                    e,
+                )
+
+        return {
+            "success": False,
+            "script": final_script,
+            "prompt": prompt,
+            "iterations": max_iterations,
+            "errors": errors,
+        }
 
 
 class CadQueryExecutor:

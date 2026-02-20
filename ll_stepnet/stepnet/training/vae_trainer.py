@@ -37,9 +37,19 @@ class VAETrainer:
     - KL divergence regularization on the latent distribution
     - Latent space visualization at each epoch
 
+    Supports two model output conventions:
+
+    - **Dict output** (STEPVAE): ``forward()`` returns a dict with keys
+      ``command_logits``, ``param_logits``, ``mu``, ``log_var``, ``kl_loss``,
+      and optionally ``recon_loss`` and ``loss``.
+    - **Tuple output** (legacy): ``forward()`` returns
+      ``(reconstructed, mu, log_var)``.
+
+    The trainer auto-detects which convention is used on the first batch
+    and adapts accordingly.
+
     Args:
         model: VAE model with encode(), decode(), and reparameterize() methods.
-            The model's forward() should return (reconstructed, mu, log_var).
         train_dataloader: Training data loader.
         val_dataloader: Optional validation data loader.
         optimizer: Optimizer instance. Creates AdamW with lr=1e-4 if None.
@@ -90,6 +100,7 @@ class VAETrainer:
         self.epoch = 0
         self.global_step = 0
         self.best_val_loss = float("inf")
+        self._dict_output: Optional[bool] = None  # Auto-detect on first batch
         self.history: Dict[str, List[float]] = {
             "train_loss": [],
             "recon_loss": [],
@@ -154,6 +165,75 @@ class VAETrainer:
         kl = -0.5 * torch.sum(1 + log_var - mu.pow(2) - log_var.exp(), dim=-1)
         return kl.mean()
 
+    def _unpack_model_output(
+        self,
+        output: Any,
+        target_ids: torch.Tensor,
+    ) -> tuple:
+        """Unpack model forward output, handling both dict and tuple formats.
+
+        STEPVAE returns a dict with ``command_logits``, ``param_logits``,
+        ``mu``, ``log_var``, ``kl_loss``, and optionally ``recon_loss`` /
+        ``loss``.  Legacy models return ``(reconstructed, mu, log_var)``
+        as a plain tuple.
+
+        This method normalises both into a consistent set of values that
+        the training loop can consume, so callers don't need to branch.
+
+        Args:
+            output: Raw model forward output (dict or tuple).
+            target_ids: Target token IDs for loss computation.
+
+        Returns:
+            Tuple of (reconstructed, mu, log_var, recon_loss, kl_loss) where
+            *reconstructed* is the logits tensor ``[B, S, V]`` used for
+            accuracy and MSE metrics, and *recon_loss* / *kl_loss* are
+            scalar tensors.  For dict outputs that already include precomputed
+            losses we reuse them; for tuple outputs we compute them here.
+        """
+        if isinstance(output, dict):
+            # --- STEPVAE-style dict output ---
+            if self._dict_output is None:
+                self._dict_output = True
+                _log.info(
+                    "Detected dict model output (STEPVAE convention). "
+                    "Losses will be extracted from the model output dict."
+                )
+
+            mu = output["mu"]
+            log_var = output["log_var"]
+            command_logits = output["command_logits"]  # [B, S, C]
+
+            # Use pre-computed losses when available
+            if "loss" in output and "recon_loss" in output:
+                recon_loss = output["recon_loss"]
+                kl_loss = output["kl_loss"]
+            else:
+                # Compute losses ourselves
+                recon_loss = self._reconstruction_loss(command_logits, target_ids)
+                kl_loss = self._kl_divergence(mu, log_var)
+
+            # Use command_logits as the "reconstructed" tensor for metrics
+            reconstructed = command_logits
+
+            return reconstructed, mu, log_var, recon_loss, kl_loss
+
+        else:
+            # --- Legacy tuple output: (reconstructed, mu, log_var) ---
+            if self._dict_output is None:
+                self._dict_output = False
+                _log.info(
+                    "Detected tuple model output (legacy convention). "
+                    "Losses will be computed by the trainer."
+                )
+
+            reconstructed, mu, log_var = output
+
+            recon_loss = self._reconstruction_loss(reconstructed, target_ids)
+            kl_loss = self._kl_divergence(mu, log_var)
+
+            return reconstructed, mu, log_var, recon_loss, kl_loss
+
     def train_epoch(self) -> Dict[str, float]:
         """Train for one epoch with beta-VAE warmup.
 
@@ -183,12 +263,11 @@ class VAETrainer:
             token_ids = batch["token_ids"].to(self.device)
             target_ids = batch.get("target_ids", token_ids).to(self.device)
 
-            # Forward pass: model returns (reconstructed, mu, log_var)
-            reconstructed, mu, log_var = self.model(token_ids)
-
-            # Compute losses
-            recon_loss = self._reconstruction_loss(reconstructed, target_ids)
-            kl_loss = self._kl_divergence(mu, log_var)
+            # Forward pass: handles both dict (STEPVAE) and tuple (legacy) output
+            output = self.model(token_ids)
+            reconstructed, mu, log_var, recon_loss, kl_loss = (
+                self._unpack_model_output(output, target_ids)
+            )
             total_loss = recon_loss + beta * kl_loss
 
             # Backward pass
@@ -262,12 +341,11 @@ class VAETrainer:
             token_ids = batch["token_ids"].to(self.device)
             target_ids = batch.get("target_ids", token_ids).to(self.device)
 
-            # Forward pass
-            reconstructed, mu, log_var = self.model(token_ids)
-
-            # Losses
-            recon_loss = self._reconstruction_loss(reconstructed, target_ids)
-            kl_loss = self._kl_divergence(mu, log_var)
+            # Forward pass: handles both dict (STEPVAE) and tuple (legacy) output
+            output = self.model(token_ids)
+            reconstructed, mu, log_var, recon_loss, kl_loss = (
+                self._unpack_model_output(output, target_ids)
+            )
             total_loss = recon_loss + beta * kl_loss
 
             total_loss_sum += total_loss.item()
@@ -340,7 +418,11 @@ class VAETrainer:
                 mu, _ = self.model.encode(token_ids)
             else:
                 # Fallback: run full forward and extract mu
-                _, mu, _ = self.model(token_ids)
+                output = self.model(token_ids)
+                if isinstance(output, dict):
+                    mu = output["mu"]
+                else:
+                    _, mu, _ = output
 
             all_mu.append(mu.cpu())
             if "labels" in batch:

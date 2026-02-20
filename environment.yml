@@ -66,6 +66,9 @@ dependencies:
       - datasets>=2.16.0
       - pyarrow>=14.0.0
 
+      # OCCWL - Pythonic wrapper for pythonocc (occ_wrapper.py patches compatibility)
+      - git+https://github.com/AutodeskAILab/occwl.git
+
       # Local packages (installed in development mode)
       - -e ./ll_stepnet
       - -e ./cadling

@@ -198,17 +198,49 @@ class StreamingCadlingConfig:
         max_samples: Maximum samples to load (None = all).
         max_commands: Maximum command sequence length (pad/truncate).
         compact_topology: Use 48-dim compact topology (cadling native).
+
+        lazy_load_topology: Whether to load topology on-demand.
+        topology_cache_size: Maximum topologies to cache in memory.
+        preprocess_fn: Preprocessing function name ('geotoken', 'tokenize', None).
+        prefetch_factor: Number of batches to prefetch in background.
+        max_memory_mb: Maximum memory for cached data.
+        chunk_size: Number of samples per processing chunk.
+        include_graph_data: Whether to include graph/topology data.
+        graph_feature_dim: Expected node feature dimension (48 cadling, 129 legacy).
+        num_workers: Number of dataloader workers.
     """
 
+    # Dataset source
     dataset_id: str = ""
     split: str = "train"
     streaming: bool = True
+
+    # Batching
     batch_size: int = 8
     shuffle: bool = True
     shuffle_buffer_size: int = 10000
     max_samples: Optional[int] = None
     max_commands: int = 60
+
+    # Lazy loading
+    lazy_load_topology: bool = True
+    topology_cache_size: int = 1000
+
+    # Preprocessing
+    preprocess_fn: Optional[str] = None  # 'geotoken' | 'tokenize' | None
+    prefetch_factor: int = 2
+
+    # Memory management
+    max_memory_mb: int = 4096
+    chunk_size: int = 1000
+
+    # Graph data
+    include_graph_data: bool = False
+    graph_feature_dim: int = 48
     compact_topology: bool = True
+
+    # Workers
+    num_workers: int = 4
 
 
 def get_config(task: str = 'classification', **kwargs):

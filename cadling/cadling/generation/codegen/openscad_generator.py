@@ -146,6 +146,7 @@ class OpenSCADGenerator:
             "vllm": LlmProvider.VLLM,
             "ollama": LlmProvider.OLLAMA,
             "openai_compatible": LlmProvider.OPENAI_COMPATIBLE,
+            "mlx": LlmProvider.MLX,
         }
 
         provider = provider_map.get(self.api_provider.lower())
@@ -355,6 +356,50 @@ class OpenSCADGenerator:
 
         script = self._extract_code(response)
         _log.info("Generated OpenSCAD script (%d chars)", len(script))
+        return script
+
+    def repair(
+        self,
+        code: str,
+        error: str,
+        description: str,
+    ) -> str:
+        """Repair OpenSCAD code based on error message using LLM.
+
+        Sends the failing code, error message, and original description to the
+        LLM with a repair-specific prompt to generate a fixed version.
+
+        Args:
+            code: The failing OpenSCAD script.
+            error: Error message from execution or validation.
+            description: Original text description of the desired part.
+
+        Returns:
+            Repaired OpenSCAD script.
+
+        Raises:
+            RuntimeError: If repair LLM call fails.
+        """
+        from cadling.generation.codegen.prompts import load_repair_prompt
+
+        agent = self._get_agent()
+        system_prompt = self._build_system_prompt()
+
+        repair_template = load_repair_prompt()
+        user_prompt = repair_template.replace("{DESCRIPTION}", description)
+        user_prompt = user_prompt.replace("{PREVIOUS_CODE}", code)
+        user_prompt = user_prompt.replace("{ERRORS}", error)
+
+        full_prompt = f"{system_prompt}\n\n---\n\n{user_prompt}"
+
+        _log.info("OpenSCAD repair for error: %s", error[:80])
+        try:
+            response = agent.ask(full_prompt, max_tokens=4096)
+        except Exception as e:
+            raise RuntimeError(f"OpenSCAD repair LLM call failed: {e}") from e
+
+        script = self._extract_code(response)
+        _log.info("Repaired OpenSCAD script (%d chars)", len(script))
         return script
 
     def _extract_code(self, response: str) -> str:

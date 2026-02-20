@@ -35,3 +35,8 @@ target-version = ['py38', 'py39', 'py310', 'py311']
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "requires_torch: marks tests that require torch",
+    "requires_transformers: marks tests that require transformers library",
+]

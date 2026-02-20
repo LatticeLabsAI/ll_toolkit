@@ -1,20 +1,28 @@
 """End-to-end integration tests for the CAD generation pipeline.
 
-Tests the full pipeline: text prompt → conditioning → VAE/Diffusion →
-command decoding → (optional) reconstruction → validation.
+Tests the full pipeline: text prompt -> conditioning -> VAE/Diffusion ->
+command decoding -> (optional) reconstruction -> validation.
 
 These tests verify that all components wire together correctly and
 produce valid outputs. For full benchmark metrics (COV, MMD, JSD),
 see the evaluation module.
+
+IMPORTANT: torch is imported by conftest.py BEFORE this module loads.
+This prevents OpenMP conflicts on macOS. Do NOT add any imports above
+this docstring that might load OpenMP (numpy, scipy, sklearn, transformers).
 """
 from __future__ import annotations
 
 import logging
-import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional
 
 import pytest
+
+# torch is guaranteed to be imported first by conftest.py
+# We import it here at module level for direct use in tests
+# This is safe because conftest.py has already initialized OpenMP
+torch = pytest.importorskip("torch")
 
 _log = logging.getLogger(__name__)
 
@@ -23,29 +31,10 @@ _log = logging.getLogger(__name__)
 # Fixtures
 # ------------------------------------------------------------------
 
-@pytest.fixture
-def device():
-    """Get the appropriate device for testing."""
-    try:
-        import torch
-        if torch.cuda.is_available():
-            return "cuda"
-        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-            return "mps"
-    except ImportError:
-        pass
-    return "cpu"
+# device fixture is now provided by conftest.py
 
 
-@pytest.fixture
-def sample_encoder_config():
-    """Create a minimal encoder config for testing."""
-    class EncoderConfig:
-        vocab_size: int = 50000
-        token_embed_dim: int = 128  # Smaller for faster tests
-        num_transformer_layers: int = 2
-        dropout: float = 0.1
-    return EncoderConfig()
+# sample_encoder_config fixture is now provided by conftest.py
 
 
 @pytest.fixture
@@ -53,9 +42,8 @@ def vae_model(sample_encoder_config, device):
     """Create a STEPVAE model for testing."""
     try:
         from stepnet import STEPVAE
-        import torch
     except ImportError:
-        pytest.skip("stepnet or torch not installed")
+        pytest.skip("stepnet not installed")
 
     model = STEPVAE(
         encoder_config=sample_encoder_config,
@@ -87,11 +75,7 @@ def text_conditioner(device):
     return conditioner
 
 
-@pytest.fixture
-def temp_output_dir():
-    """Create a temporary directory for output files."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        yield Path(tmpdir)
+# temp_output_dir fixture is now provided by conftest.py
 
 
 # ------------------------------------------------------------------
@@ -103,8 +87,6 @@ class TestVAEGeneration:
 
     def test_vae_sample_produces_command_preds(self, vae_model, device):
         """VAE.sample() should produce command and parameter predictions."""
-        import torch
-
         with torch.no_grad():
             output = vae_model.sample(num_samples=2, seq_len=20)
 
@@ -127,8 +109,6 @@ class TestVAEGeneration:
 
     def test_vae_forward_returns_logits(self, vae_model, device):
         """VAE.forward() should return command and parameter logits."""
-        import torch
-
         batch_size, seq_len = 2, 20
         token_ids = torch.randint(0, 1000, (batch_size, seq_len), device=device)
 
@@ -154,8 +134,6 @@ class TestConditioningIntegration:
     @pytest.mark.slow
     def test_text_conditioner_encode(self, text_conditioner):
         """TextConditioner should encode text to conditioning embeddings."""
-        import torch
-
         # Create dummy tokenized input
         batch_size, text_len = 2, 10
         text_input_ids = torch.randint(0, 30000, (batch_size, text_len))
@@ -175,8 +153,6 @@ class TestConditioningIntegration:
     @pytest.mark.slow
     def test_text_conditioner_skip_early_blocks(self, text_conditioner):
         """TextConditioner should skip cross-attention for early blocks."""
-        import torch
-
         batch_size, seq_len = 2, 20
         hidden_states = torch.randn(batch_size, seq_len, 128)
         text_input_ids = torch.randint(0, 30000, (batch_size, 10))
@@ -214,7 +190,6 @@ class TestCADGenerationPipeline:
         """CADGenerationPipeline should generate from VAE."""
         try:
             from stepnet import CADGenerationPipeline
-            import torch
         except ImportError:
             pytest.skip("stepnet not installed")
 
@@ -241,7 +216,6 @@ class TestCADGenerationPipeline:
         try:
             from stepnet import CADGenerationPipeline
             from geotoken.tokenizer import TokenSequence
-            import torch
         except ImportError:
             pytest.skip("stepnet or geotoken not installed")
 
@@ -270,14 +244,13 @@ class TestGeotokenEncoding:
     def test_encode_to_tensor(self):
         """encode_to_tensor should produce fixed-length tensor."""
         try:
-            import torch
             from geotoken.tokenizer import (
                 encode_to_tensor,
                 CommandToken,
                 CommandType,
             )
         except ImportError:
-            pytest.skip("geotoken or torch not installed")
+            pytest.skip("geotoken not installed")
 
         # Create sample command tokens
         tokens = [
@@ -309,14 +282,13 @@ class TestGeotokenEncoding:
     def test_batch_encode_to_tensor(self):
         """batch_encode_to_tensor should stack multiple sequences."""
         try:
-            import torch
             from geotoken.tokenizer import (
                 batch_encode_to_tensor,
                 CommandToken,
                 CommandType,
             )
         except ImportError:
-            pytest.skip("geotoken or torch not installed")
+            pytest.skip("geotoken not installed")
 
         # Create batch of command tokens
         batch = [
@@ -342,7 +314,6 @@ class TestEndToEndGeneration:
         """Test VAE generation without reconstruction."""
         try:
             from stepnet import CADGenerationPipeline
-            import torch
         except ImportError:
             pytest.skip("stepnet not installed")
 
@@ -369,11 +340,6 @@ class TestEndToEndGeneration:
     @pytest.mark.slow
     def test_vae_with_text_conditioning(self, vae_model, text_conditioner, device):
         """Test VAE generation with text conditioning."""
-        try:
-            import torch
-        except ImportError:
-            pytest.skip("torch not installed")
-
         # This test requires transformers to be installed
         try:
             tokenizer = text_conditioner.tokenizer

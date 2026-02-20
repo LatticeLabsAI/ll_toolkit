@@ -1,10 +1,14 @@
 name: ll-stepnet
 channels:
-  - pytorch
+  # CRITICAL: Use conda-forge ONLY for PyTorch to avoid OpenMP conflicts on macOS.
+  # The 'pytorch' channel bundles a different libomp.dylib that conflicts with
+  # conda-forge's llvm-openmp, causing segfaults when transformers/sklearn loads.
+  # See: https://github.com/pytorch/pytorch/issues/44282
   - conda-forge
   - defaults
 dependencies:
   - python=3.10
+  # PyTorch MUST come from conda-forge to avoid OpenMP conflicts on macOS
   - pytorch>=2.0.0
   - numpy>=1.24.0
   - pip

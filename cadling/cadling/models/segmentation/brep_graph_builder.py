@@ -958,6 +958,9 @@ class BRepFaceGraphBuilder:
         (one per adjacent face). This method constructs the coedge graph
         with next/prev/mate pointers required by BRepNetEncoder.
 
+        Tries OCC-based extraction first (more accurate), falls back to
+        STEP text parsing if OCC shape is not available.
+
         Coedge features (12 dims):
           - edge curve type one-hot (6): LINE, CIRCLE, ELLIPSE, B_SPLINE, PARABOLA, OTHER
           - edge length (1)
@@ -971,9 +974,24 @@ class BRepFaceGraphBuilder:
         Returns:
             CoedgeData object for use with BRepNetEncoder.
         """
-
         from cadling.models.segmentation.architectures.brep_net import CoedgeData
 
+        # Try OCC-based extraction first (more accurate)
+        shape = self._load_shape_from_document(doc)
+        if shape is not None:
+            try:
+                coedge_data = self._build_coedge_graph_from_occ(shape)
+                if coedge_data is not None and coedge_data.features.shape[0] > 0:
+                    _log.info(
+                        f"Built coedge graph from OCC shape: "
+                        f"{coedge_data.features.shape[0]} coedges"
+                    )
+                    return coedge_data
+            except Exception as e:
+                _log.debug(f"OCC coedge extraction failed, falling back to STEP text: {e}")
+
+        # Fall back to STEP text parsing
+        _log.debug("Using STEP text parsing for coedge extraction")
         face_entities = self._extract_face_entities(doc)
         num_faces = len(face_entities)
 
@@ -1161,6 +1179,45 @@ class BRepFaceGraphBuilder:
             mate_indices=mate_indices,
             face_indices=face_indices,
         )
+
+    def _build_coedge_graph_from_occ(self, shape) -> "CoedgeData | None":
+        """Build coedge graph directly from OCC shape using CoedgeExtractor.
+
+        This is more accurate than STEP text parsing because it uses
+        BRepTools_WireExplorer for proper edge ordering within face loops.
+
+        Args:
+            shape: OCC TopoDS_Shape
+
+        Returns:
+            CoedgeData object or None if extraction fails
+        """
+        from cadling.models.segmentation.architectures.brep_net import CoedgeData
+
+        try:
+            from cadling.lib.topology.coedge_extractor import CoedgeExtractor
+
+            extractor = CoedgeExtractor()
+            coedge_data = extractor.extract_coedge_data(shape, feature_dim=12)
+
+            if coedge_data["features"].shape[0] == 0:
+                return None
+
+            # Convert numpy arrays to torch tensors
+            return CoedgeData(
+                features=torch.from_numpy(coedge_data["features"]).float(),
+                next_indices=torch.from_numpy(coedge_data["next_indices"]).long(),
+                prev_indices=torch.from_numpy(coedge_data["prev_indices"]).long(),
+                mate_indices=torch.from_numpy(coedge_data["mate_indices"]).long(),
+                face_indices=torch.from_numpy(coedge_data["face_indices"]).long(),
+            )
+
+        except ImportError:
+            _log.debug("CoedgeExtractor not available")
+            return None
+        except Exception as e:
+            _log.debug(f"OCC coedge extraction failed: {e}")
+            return None
 
     def _extract_edges_from_shape(self, shape) -> list:
         """Extract all TopoDS_Edge objects from shape.

@@ -10,7 +10,9 @@ Covers:
 import sys
 import os
 import pytest
-import torch
+
+# Skip entire module if torch is not installed
+torch = pytest.importorskip("torch")
 import torch.nn as nn
 import numpy as np
 

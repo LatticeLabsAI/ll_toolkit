@@ -11,6 +11,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pytest
 
+# Skip entire module if torch is not installed (stepnet requires torch)
+pytest.importorskip("torch")
+
 # Direct submodule imports to avoid __init__.py's heavy dependency chain
 _config_mod = importlib.import_module("stepnet.config")
 _reser_mod = importlib.import_module("stepnet.reserialization")

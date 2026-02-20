@@ -9,12 +9,15 @@ Tests cover:
 
 Uses pytest, torch, and MagicMock for heavy dependencies.
 """
+from __future__ import annotations
 
 import pytest
-import torch
-import torch.nn as nn
 from unittest.mock import MagicMock, patch, PropertyMock
 from typing import Dict, Optional
+
+# Skip entire module if torch is not installed
+torch = pytest.importorskip("torch")
+import torch.nn as nn
 
 # Import the modules to test
 from stepnet.tasks import (

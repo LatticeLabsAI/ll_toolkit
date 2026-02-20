@@ -816,3 +816,42 @@ class CommandExecutor:
         except Exception as e:
             _log.error("STEP export error: %s", e)
             return False
+
+    def execute_tokens(
+        self,
+        token_ids: List[int],
+        output_path: Optional[str] = None,
+    ) -> Optional[Any]:
+        """Execute token sequence and optionally export to STEP.
+
+        Convenience wrapper that combines execute() and export_step() for
+        integration with generation pipelines.
+
+        Args:
+            token_ids: List of quantized command token IDs.
+            output_path: Optional file path to export the result as STEP.
+                If provided and execution succeeds, exports automatically.
+
+        Returns:
+            TopoDS_Shape if execution succeeded, None otherwise.
+        """
+        result = self.execute(token_ids)
+
+        if not result.get("valid", False):
+            _log.warning(
+                "Token execution failed: %s",
+                "; ".join(result.get("errors", ["Unknown error"])),
+            )
+            return None
+
+        shape = result.get("shape")
+        if shape is None:
+            _log.warning("Token execution produced no shape")
+            return None
+
+        if output_path is not None:
+            export_ok = self.export_step(shape, output_path)
+            if not export_ok:
+                _log.warning("STEP export failed, but returning shape anyway")
+
+        return shape

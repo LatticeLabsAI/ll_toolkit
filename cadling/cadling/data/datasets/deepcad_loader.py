@@ -92,9 +92,16 @@ class DeepCADLoader(BaseCADDataset):
         return sample
 
     def download(self) -> None:
-        """Download DeepCAD dataset.
+        """Download DeepCAD dataset (178K sketch-and-extrude sequences).
 
-        The DeepCAD dataset should be placed in root_dir with structure:
+        Attempts automated download in order of preference:
+
+        1. **HuggingFace Hub** via ``huggingface_hub.snapshot_download``.
+        2. **Direct GitHub release** tarball from the DeepCAD repository.
+        3. **Manual fallback** — logs the URL and expected directory layout.
+
+        After download, the dataset is placed in ``root_dir`` with structure::
+
             root_dir/
                 train/
                     *.json
@@ -103,10 +110,80 @@ class DeepCADLoader(BaseCADDataset):
                 test/
                     *.json
         """
+        if self._verify_integrity():
+            _log.info("DeepCAD dataset already present at %s", self.root_dir)
+            return
+
+        self.root_dir.mkdir(parents=True, exist_ok=True)
+
+        # --- Strategy 1: HuggingFace Hub ---
+        try:
+            from huggingface_hub import snapshot_download
+
+            _log.info("Downloading DeepCAD dataset from HuggingFace Hub...")
+            snapshot_download(
+                repo_id="Wenchao/DeepCAD",
+                repo_type="dataset",
+                local_dir=str(self.root_dir),
+                allow_patterns=["*.json", "*.jsonl"],
+            )
+
+            if self._verify_integrity():
+                _log.info("DeepCAD dataset downloaded via HuggingFace Hub")
+                return
+
+            # Some Hub layouts nest data under a data/ prefix
+            data_dir = self.root_dir / "data"
+            if data_dir.exists():
+                import shutil
+
+                for split_name in ("train", "val", "test"):
+                    src = data_dir / split_name
+                    dst = self.root_dir / split_name
+                    if src.exists() and not dst.exists():
+                        shutil.copytree(str(src), str(dst))
+                if self._verify_integrity():
+                    _log.info("DeepCAD restructured from data/ prefix")
+                    return
+
+        except ImportError:
+            _log.debug("huggingface_hub not installed; trying direct download")
+        except Exception as exc:
+            _log.warning("HuggingFace Hub download failed: %s", exc)
+
+        # --- Strategy 2: Direct GitHub release tarball ---
+        try:
+            import os
+            import tarfile
+            import tempfile
+            import urllib.request
+
+            url = (
+                "https://github.com/ChrisWu1997/DeepCAD/releases/download/"
+                "v1.0/DeepCAD_data.tar.gz"
+            )
+            _log.info("Downloading DeepCAD from GitHub: %s", url)
+
+            with tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False) as tmp:
+                tmp_path = tmp.name
+                urllib.request.urlretrieve(url, tmp_path)
+
+            with tarfile.open(tmp_path, "r:gz") as tar:
+                tar.extractall(path=str(self.root_dir))
+            os.unlink(tmp_path)
+
+            if self._verify_integrity():
+                _log.info("DeepCAD extracted from GitHub release")
+                return
+
+        except Exception as exc:
+            _log.warning("Direct download failed: %s", exc)
+
+        # --- Strategy 3: Manual instructions ---
         _log.info(
-            "DeepCAD dataset download not implemented. Please manually "
-            "download from https://github.com/ChrisWu1997/DeepCAD and "
-            "place JSON files in %s/{train,val,test}/",
+            "Automated download unsuccessful. Please download manually "
+            "from https://github.com/ChrisWu1997/DeepCAD and place JSON "
+            "files in %s/{train,val,test}/",
             self.root_dir,
         )
 

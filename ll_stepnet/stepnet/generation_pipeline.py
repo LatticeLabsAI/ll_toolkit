@@ -24,10 +24,26 @@ Example usage:
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import torch
 import torch.nn as nn
+
+from stepnet.generation.errors import (
+    CADGenerationError,
+    DependencyMissingError,
+    InvalidLatentError,
+    ModelSamplingError,
+    ReconstructionError,
+    TokenDecodingError,
+    ValidationError,
+)
+from stepnet.generation.fallbacks import (
+    FallbackConfig,
+    FallbackHandler,
+    FallbackResult,
+    FallbackStrategy,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -53,6 +69,8 @@ class CADGenerationPipeline:
         device: str = 'cpu',
         executor_tolerance: float = 1e-6,
         quantization_levels: int = 256,
+        fallback_config: Optional[FallbackConfig] = None,
+        on_error: Optional[Callable[[CADGenerationError], None]] = None,
     ) -> None:
         """Initialize the CAD generation pipeline.
 
@@ -62,6 +80,8 @@ class CADGenerationPipeline:
             device: Target device - 'cpu' or 'cuda'.
             executor_tolerance: Tolerance threshold for cadling CommandExecutor.
             quantization_levels: Number of quantization bins per parameter.
+            fallback_config: Configuration for error recovery strategies.
+            on_error: Optional callback invoked when generation errors occur.
 
         Raises:
             ValueError: If mode is not one of the supported modes.
@@ -77,6 +97,12 @@ class CADGenerationPipeline:
         self.device = device
         self.executor_tolerance = executor_tolerance
         self.quantization_levels = quantization_levels
+        self.fallback_config = fallback_config or FallbackConfig()
+        self.on_error = on_error
+        self._fallback_handler = FallbackHandler(
+            config=self.fallback_config,
+            on_error=on_error,
+        )
 
         # Infer mode from model if not explicitly set (as fallback)
         self._inferred_model_type = self._infer_model_type(model)
@@ -106,6 +132,30 @@ class CADGenerationPipeline:
             return 'StructuredDiffusion'
         else:
             return class_name
+
+    def _validate_latent(
+        self,
+        latent: torch.Tensor,
+        max_value: float = 1000.0,
+    ) -> None:
+        """Validate latent vector for NaN, Inf, and range issues.
+
+        Args:
+            latent: Latent tensor to validate.
+            max_value: Maximum allowed absolute value.
+
+        Raises:
+            InvalidLatentError: If latent contains invalid values.
+        """
+        if torch.isnan(latent).any():
+            raise InvalidLatentError.from_tensor(latent, "contains NaN values")
+        if torch.isinf(latent).any():
+            raise InvalidLatentError.from_tensor(latent, "contains Inf values")
+        if latent.abs().max() > max_value:
+            raise InvalidLatentError.from_tensor(
+                latent,
+                f"values out of range (max={latent.abs().max():.2f} > {max_value})",
+            )
 
     def generate(
         self,
@@ -169,26 +219,57 @@ class CADGenerationPipeline:
                     )
                     result['token_sequence'] = token_seq
                     result['commands'] = self._token_sequence_to_commands(token_seq)
-                except ImportError:
-                    _log.debug(
-                        "geotoken not available; skipping TokenSequence decoding"
+
+                    # Cache valid sample for potential substitution
+                    self._fallback_handler.cache_valid_sample(
+                        token_seq, f"sample_{batch_idx}"
                     )
+                except ImportError as e:
+                    error = DependencyMissingError.for_dependency(
+                        "geotoken", "TokenSequence decoding"
+                    )
+                    error.original_exception = e
+                    _log.debug("geotoken not available; skipping TokenSequence decoding")
+                    result['decode_error'] = str(error)
                 except Exception as e:
-                    _log.warning(f"TokenSequence decoding failed: {e}")
-                    result['decode_error'] = str(e)
+                    error = TokenDecodingError(
+                        message=f"TokenSequence decoding failed: {e}",
+                        context={"batch_index": batch_idx},
+                        original_exception=e,
+                    )
+                    fallback = self._fallback_handler.handle(
+                        error,
+                        partial_result=result,
+                        context_id=f"decode_{batch_idx}",
+                    )
+                    result['decode_error'] = str(error)
+                    result['fallback_result'] = fallback.to_dict()
 
                 # Reconstruct via cadling (if requested and available)
                 if reconstruct and 'token_sequence' in result:
                     try:
                         recon_result = self._reconstruct(result['token_sequence'])
                         result.update(recon_result)
-                    except ImportError:
-                        _log.debug(
-                            "cadling not available; skipping reconstruction"
+                    except ImportError as e:
+                        error = DependencyMissingError.for_dependency(
+                            "cadling", "geometry reconstruction"
                         )
+                        error.original_exception = e
+                        _log.debug("cadling not available; skipping reconstruction")
+                        result['error'] = str(error)
                     except Exception as e:
-                        _log.warning(f"Reconstruction failed: {e}")
-                        result['error'] = str(e)
+                        error = ReconstructionError(
+                            message=f"Reconstruction failed: {e}",
+                            context={"batch_index": batch_idx},
+                            original_exception=e,
+                        )
+                        fallback = self._fallback_handler.handle(
+                            error,
+                            partial_result=result,
+                            context_id=f"recon_{batch_idx}",
+                        )
+                        result['error'] = str(error)
+                        result['fallback_result'] = fallback.to_dict()
 
                 results.append(result)
 
@@ -221,13 +302,24 @@ class CADGenerationPipeline:
             Dictionary with 'command_logits' and 'param_logits'.
         """
         if not hasattr(self.model, 'sample'):
-            raise RuntimeError("Model does not have a 'sample' method")
+            raise ModelSamplingError(
+                message="Model does not have a 'sample' method",
+                recoverable=False,
+                context={"model_type": type(self.model).__name__},
+            )
 
-        sample_output = self.model.sample(
-            num_samples=num_samples,
-            seq_len=seq_len,
-            device=self.device,
-        )
+        try:
+            sample_output = self.model.sample(
+                num_samples=num_samples,
+                seq_len=seq_len,
+                device=self.device,
+            )
+        except Exception as e:
+            raise ModelSamplingError(
+                message=f"VAE sampling failed: {e}",
+                original_exception=e,
+                context={"num_samples": num_samples, "seq_len": seq_len},
+            )
 
         # Check if the model already provides logits directly
         if 'command_logits' in sample_output and 'param_logits' in sample_output:
@@ -490,14 +582,22 @@ class CADGenerationPipeline:
             stage_latents.append(sample_output['latents'])
 
         if not stage_latents:
-            raise RuntimeError(
-                "Diffusion sample output contains no decodable latents. "
-                "Expected stage keys %s or 'latents' key. "
-                "Got keys: %s" % (stage_names, list(sample_output.keys()))
+            raise ModelSamplingError(
+                message="Diffusion sample output contains no decodable latents",
+                context={
+                    "expected_keys": stage_names,
+                    "got_keys": list(sample_output.keys()),
+                },
             )
 
         # Concatenate all stage latents: [B, sum(D_i)]
         concatenated = torch.cat(stage_latents, dim=-1)
+
+        # Validate concatenated latents
+        try:
+            self._validate_latent(concatenated)
+        except InvalidLatentError:
+            raise  # Re-raise InvalidLatentError as-is
         batch_size = concatenated.shape[0]
         combined_dim = concatenated.shape[1]
 

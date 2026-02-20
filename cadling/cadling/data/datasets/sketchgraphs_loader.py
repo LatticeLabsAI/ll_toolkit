@@ -105,11 +105,72 @@ class SketchGraphsLoader(BaseCADDataset):
         return sample
 
     def download(self) -> None:
-        """Download SketchGraphs dataset."""
+        """Download SketchGraphs dataset (15M parametric sketches).
+
+        Attempts automated download in order of preference:
+
+        1. **HuggingFace Hub** via ``huggingface_hub.snapshot_download``.
+        2. **S3 pre-processed sequences** from the PrincetonLIPS release.
+        3. **Manual fallback** — logs the URL and expected directory layout.
+
+        After download, JSON/JSONL files are placed in ``root_dir/{split}/``.
+        """
+        if self._verify_integrity():
+            _log.info("SketchGraphs dataset already present at %s", self.root_dir)
+            return
+
+        self.root_dir.mkdir(parents=True, exist_ok=True)
+
+        # --- Strategy 1: HuggingFace Hub ---
+        try:
+            from huggingface_hub import snapshot_download
+
+            _log.info("Downloading SketchGraphs from HuggingFace Hub...")
+            snapshot_download(
+                repo_id="PrincetonLIPS/SketchGraphs",
+                repo_type="dataset",
+                local_dir=str(self.root_dir),
+                allow_patterns=["*.json", "*.jsonl", "*.npy"],
+            )
+
+            if self._verify_integrity():
+                _log.info("SketchGraphs downloaded via HuggingFace Hub")
+                return
+
+        except ImportError:
+            _log.debug("huggingface_hub not installed")
+        except Exception as exc:
+            _log.warning("HuggingFace Hub download failed: %s", exc)
+
+        # --- Strategy 2: Direct S3 download (pre-processed sequences) ---
+        try:
+            import os
+            import tempfile
+            import urllib.request
+
+            url = (
+                "https://sketchgraphs.cs.princeton.edu/sequence/sg_t16_train.npy"
+            )
+            _log.info("Downloading SketchGraphs sequences from %s", url)
+
+            (self.root_dir / self.split).mkdir(parents=True, exist_ok=True)
+            dest = self.root_dir / self.split / "sg_t16_train.npy"
+
+            urllib.request.urlretrieve(url, str(dest))
+
+            if self._verify_integrity():
+                _log.info("SketchGraphs sequences downloaded to %s", dest)
+                return
+
+        except Exception as exc:
+            _log.warning("Direct S3 download failed: %s", exc)
+
+        # --- Strategy 3: Manual instructions ---
         _log.info(
-            "SketchGraphs download not automated. Please download from "
+            "Automated download unsuccessful. Please download from "
             "https://github.com/PrincetonLIPS/SketchGraphs and place "
-            "data in %s/", self.root_dir,
+            "data in %s/",
+            self.root_dir,
         )
 
     def _verify_integrity(self) -> bool:

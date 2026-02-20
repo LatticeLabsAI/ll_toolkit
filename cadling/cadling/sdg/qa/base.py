@@ -59,6 +59,7 @@ class LlmProvider(str, Enum):
     VLLM = "vllm"
     OLLAMA = "ollama"
     OPENAI_COMPATIBLE = "openai_compatible"
+    MLX = "mlx"
 
 
 class QuestionType(str, Enum):

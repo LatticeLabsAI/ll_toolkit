@@ -11,11 +11,13 @@ Classes:
     ConstraintSolver: Solve sketch constraints for geometric consistency
     ValidationFeedbackLoop: Iterative validation and repair loop
     GenerationResult: Result container for generation pipeline output
+    GraphReconstructor: Reconstruct OCC primitives from decoded graph features
 
 Example:
     from cadling.generation.reconstruction import (
         CommandExecutor,
         ValidationFeedbackLoop,
+        GraphReconstructor,
     )
 
     executor = CommandExecutor(tolerance=1e-6)
@@ -24,6 +26,10 @@ Example:
     result = loop.run(command_tokens, mode='command')
     if result.valid:
         executor.export_step(result.shape, "output.step")
+
+    # Or use graph-based reconstruction
+    reconstructor = GraphReconstructor()
+    primitives = reconstructor.reconstruct(node_features, edge_index)
 """
 
 from __future__ import annotations
@@ -43,6 +49,11 @@ from cadling.generation.reconstruction.validation_loop import (
     GenerationResult,
     ValidationFeedbackLoop,
 )
+from cadling.generation.reconstruction.graph_reconstructor import (
+    GraphReconstructor,
+    ReconstructedPrimitive,
+    ReconstructionResult,
+)
 
 __all__ = [
     "BSplineSurfaceFitter",
@@ -51,6 +62,9 @@ __all__ = [
     "ConstraintSolver",
     "ConstraintType",
     "GenerationResult",
+    "GraphReconstructor",
+    "ReconstructedPrimitive",
+    "ReconstructionResult",
     "SketchConstraint",
     "TopologyMerger",
     "ValidationFeedbackLoop",

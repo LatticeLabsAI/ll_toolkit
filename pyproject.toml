@@ -130,7 +130,10 @@ dev = [
 # ============================================================================
 # NOTE: pythonocc-core MUST be installed via conda:
 #   conda install -c conda-forge pythonocc-core
+# OCCWL: pip install git+https://github.com/AutodeskAILab/occwl.git
+# (occ_wrapper.py patches OCCWL for pythonocc 7.8.x compatibility)
 cad = [
+    "deprecate>=1.0",            # Utility for deprecation warnings
     "numpy-stl>=3.0",            # STL file handling
     "trimesh>=4.0",              # General mesh processing
     "networkx>=3.2",             # Topology graphs
@@ -420,6 +423,7 @@ exclude = [
 [[tool.mypy.overrides]]
 module = [
     "OCC.*",
+    "occwl.*",
     "trimesh.*",
     "numpy_stl.*",
     "networkx.*",
@@ -446,6 +450,7 @@ testpaths = [
     "ll_stepnet/tests",
     "geotoken/tests",
     "ll_ocadr/tests",
+    "ll_gen/tests",
 ]
 python_files = ["test_*.py", "*_test.py"]
 python_classes = ["Test*"]

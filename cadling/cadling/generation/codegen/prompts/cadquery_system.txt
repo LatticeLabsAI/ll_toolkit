@@ -250,3 +250,108 @@ result = (
     .fillet(2.0)
 )
 ```
+
+## Common Method Signatures
+
+### Workplane Creation & Navigation
+- `cq.Workplane("XY")` - Create workplane on XY/XZ/YZ plane
+- `.workplane(offset=0, centerOption="CenterOfMass")` - New workplane on current face
+  - Valid params: offset, origin, centerOption, invert
+  - ❌ NO 'centered' parameter! Use .center(x, y) instead
+- `.center(x, y)` - Move workplane origin
+- `.faces(">Z")` - Select faces, then call .workplane()
+
+### 3D Primitives
+- `.box(length, width, height, centered=(True,True,True), combine=True)`
+  - centered: tuple of 3 bools for X, Y, Z centering
+- `.cylinder(height, radius, centered=(True,True,True), combine=True)`
+- `.sphere(radius, centered=True)`
+
+### 2D Sketches
+- `.rect(width, height, centered=True)` - 2D rectangle
+- `.circle(radius)` - 2D circle (always centered)
+
+### Common Mistakes to Avoid
+1. ❌ `.workplane(centered=True)` → ✓ `.center(x, y)` after workplane
+2. ❌ `.faces(">Z").box(...)` → ✓ `.faces(">Z").workplane().box(...)`
+3. ❌ `.fillet(r)` on edges too small for radius → reduce radius or skip
+
+### Complex Shape Strategies (Furniture, Organic Forms)
+
+For chairs, sofas, armchairs, and similar furniture or organic shapes:
+
+1. **Build modular**: Create seat, back, arms, legs as separate solids, then union
+2. **Use stepped approximations**: Instead of smooth curves, use angled/stepped geometry
+3. **Avoid complex lofts**: CadQuery lofts can fail - prefer extrusions with tapers
+4. **Add fillets LAST**: Build the basic shape first, add edge treatments at the very end
+5. **Test each component**: Ensure each part is a valid solid before combining
+6. **Use simple primitives**: Boxes, cylinders, and spheres are most reliable
+
+Example armchair approach (boxy approximation):
+```python
+import cadquery as cq
+
+# Dimensions (mm)
+seat_width = 500
+seat_depth = 450
+seat_height = 50
+seat_z = 350  # Height off ground
+
+back_width = 500
+back_depth = 80
+back_height = 400
+
+arm_width = 80
+arm_depth = 400
+arm_height = 200
+
+leg_diameter = 60
+leg_height = 350
+
+# Build components separately
+seat = (
+    cq.Workplane("XY")
+    .box(seat_width, seat_depth, seat_height, centered=(True, True, False))
+    .translate((0, 0, seat_z))
+)
+
+back = (
+    cq.Workplane("XY")
+    .box(back_width, back_depth, back_height, centered=(True, True, False))
+    .translate((0, -seat_depth/2 + back_depth/2, seat_z + seat_height))
+)
+
+arm_left = (
+    cq.Workplane("XY")
+    .box(arm_width, arm_depth, arm_height, centered=(True, True, False))
+    .translate((-seat_width/2 + arm_width/2, 0, seat_z))
+)
+
+arm_right = (
+    cq.Workplane("XY")
+    .box(arm_width, arm_depth, arm_height, centered=(True, True, False))
+    .translate((seat_width/2 - arm_width/2, 0, seat_z))
+)
+
+# Legs at four corners
+leg_positions = [
+    (-seat_width/2 + leg_diameter, -seat_depth/2 + leg_diameter),
+    (seat_width/2 - leg_diameter, -seat_depth/2 + leg_diameter),
+    (-seat_width/2 + leg_diameter, seat_depth/2 - leg_diameter),
+    (seat_width/2 - leg_diameter, seat_depth/2 - leg_diameter),
+]
+
+legs = cq.Workplane("XY")
+for x, y in leg_positions:
+    leg = cq.Workplane("XY").center(x, y).circle(leg_diameter/2).extrude(leg_height)
+    legs = legs.union(leg)
+
+# Combine all components
+result = seat.union(back).union(arm_left).union(arm_right).union(legs)
+```
+
+Key principles for complex shapes:
+- **Keep it simple**: A boxy chair that works is better than a curved chair that fails
+- **No fillets on first pass**: Get the geometry working before adding edge treatments
+- **Union at the end**: Build each part, validate it mentally, then combine
+- **Reasonable dimensions**: Use real-world dimensions (chair seat ~450mm height)
