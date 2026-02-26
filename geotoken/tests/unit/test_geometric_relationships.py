@@ -82,18 +82,18 @@ class TestRelationshipDetectorInit:
         detector = RelationshipDetector()
         assert detector.angle_tolerance == 1e-3
         assert detector.distance_tolerance == 1e-4
-        assert detector.max_face_pairs == 100
+        assert detector.max_faces == 100
 
     def test_custom_initialization(self):
         """Test initialization with custom values."""
         detector = RelationshipDetector(
             angle_tolerance=0.01,
             distance_tolerance=0.001,
-            max_face_pairs=50,
+            max_faces=50,
         )
         assert detector.angle_tolerance == 0.01
         assert detector.distance_tolerance == 0.001
-        assert detector.max_face_pairs == 50
+        assert detector.max_faces == 50
 
 
 class TestDetectFaceRelationships:
@@ -137,16 +137,17 @@ class TestDetectFaceRelationships:
         # Single face has no pairs
         assert relationships == []
 
-    def test_max_face_pairs_limit(self):
-        """Test that max_face_pairs limits computation."""
+    def test_max_faces_limit(self):
+        """Test that max_faces limits computation via random sampling."""
         # Create many faces
         n = 200
         vertices = np.random.randn(n * 3, 3)
         faces = np.arange(n * 3).reshape(n, 3)
 
-        detector = RelationshipDetector(max_face_pairs=10)
+        detector = RelationshipDetector(max_faces=10)
         relationships = detector.detect_face_relationships(vertices, faces)
         # Should not check all pairs, limiting computation
+        assert len(relationships) <= 10
 
 
 class TestVerifyRelationships:
@@ -163,11 +164,11 @@ class TestVerifyRelationships:
         assert rate == 1.0
 
     def test_verify_empty_relationships(self, cube_mesh):
-        """Test verification with empty relationship list returns None."""
+        """Test verification with empty relationship list returns 1.0."""
         vertices, faces = cube_mesh
         detector = RelationshipDetector()
         rate = detector.verify_relationships([], vertices, faces)
-        assert rate is None
+        assert rate == 1.0
 
     def test_verify_after_translation(self, cube_mesh):
         """Test that translation preserves relationships."""

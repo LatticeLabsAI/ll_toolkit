@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
     from cadling.datamodel.base_models import CADItem, CADlingDocument
@@ -110,6 +110,121 @@ class EnrichmentModel(ABC):
             True if model requires GPU, False otherwise
         """
         return False
+
+    def _get_backend_resource(self, doc: CADlingDocument, resource_name: str):
+        """Get a resource from the document's backend using multiple attribute patterns.
+
+        Tries the following patterns in order:
+        1. backend.{resource_name} (e.g., backend.shape)
+        2. backend._{resource_name} (e.g., backend._shape)
+        3. backend.load_{resource_name}() (e.g., backend.load_shape())
+        4. backend.get_{resource_name}() (e.g., backend.get_shape())
+
+        Args:
+            doc: Document with backend
+            resource_name: Base name of the resource (e.g., "shape", "mesh")
+
+        Returns:
+            The resource if found, None otherwise
+        """
+        if not hasattr(doc, '_backend') or doc._backend is None:
+            _log.debug("No backend available for %s loading", resource_name)
+            return None
+
+        backend = doc._backend
+
+        attr_patterns = [
+            (resource_name, False),
+            (f"_{resource_name}", False),
+            (f"load_{resource_name}", True),
+            (f"get_{resource_name}", True),
+        ]
+
+        try:
+            for attr_name, is_method in attr_patterns:
+                if hasattr(backend, attr_name):
+                    attr = getattr(backend, attr_name)
+                    if is_method:
+                        if callable(attr):
+                            result = attr()
+                            if result is not None:
+                                _log.debug("Loaded %s from backend.%s()", resource_name, attr_name)
+                                return result
+                    else:
+                        if attr is not None:
+                            _log.debug("Loaded %s from backend.%s", resource_name, attr_name)
+                            return attr
+
+            _log.debug(
+                "Backend %s does not provide %s (tried: %s)",
+                type(backend).__name__, resource_name,
+                ", ".join(p[0] for p in attr_patterns),
+            )
+            return None
+
+        except Exception as e:
+            _log.error("Failed to load %s from backend: %s", resource_name, e)
+            return None
+
+    def _get_step_text(self, doc: CADlingDocument, item: CADItem) -> "Optional[str]":
+        """Get STEP text from document or item.
+
+        Shared utility for enrichment models that need to parse STEP text
+        as a fallback when OCC shapes are unavailable.
+
+        Args:
+            doc: Document containing the item
+            item: Item to get text for
+
+        Returns:
+            STEP text or None
+        """
+        # Try item text
+        if hasattr(item, 'text') and item.text:
+            return item.text
+
+        # Try document raw content
+        if hasattr(doc, 'raw_content') and doc.raw_content:
+            return doc.raw_content
+
+        # Try backend content
+        if hasattr(doc, '_backend') and doc._backend:
+            if hasattr(doc._backend, 'content'):
+                return doc._backend.content
+
+        return None
+
+    def _get_shape_for_item(
+        self, doc: CADlingDocument, item: CADItem
+    ) -> "Optional[any]":
+        """Get shape object for analysis or validation.
+
+        Shared utility for enrichment models that need to access the
+        underlying OCC shape or trimesh object.
+
+        Args:
+            doc: Document containing the item
+            item: Item to get shape for
+
+        Returns:
+            Shape object (OCC shape or trimesh), or None
+        """
+        # Check if item has shape stored
+        if hasattr(item, "_shape") and item._shape is not None:
+            return item._shape
+
+        # Try to load from backend based on format
+        format_str = str(doc.format).lower()
+
+        has_pythonocc = getattr(self, 'has_pythonocc', False)
+        has_trimesh = getattr(self, 'has_trimesh', False)
+
+        if format_str in ["step", "iges", "brep"] and has_pythonocc:
+            return self._get_backend_resource(doc, "shape")
+        elif format_str == "stl" and has_trimesh:
+            return self._get_backend_resource(doc, "mesh")
+
+        return None
 
     def get_model_info(self) -> dict[str, str]:
         """Get information about this model.

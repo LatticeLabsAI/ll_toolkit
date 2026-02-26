@@ -6,6 +6,7 @@ Uses STEP-aware architecture combining:
 - Token sequence modeling (STEPTransformerEncoder)
 - Topology/geometry understanding (STEPGraphEncoder)
 """
+from __future__ import annotations
 
 import torch
 import torch.nn as nn
@@ -42,6 +43,7 @@ class STEPForCausalLM(nn.Module):
 
         self.vocab_size = vocab_size
         self.embed_dim = embed_dim
+        self.max_length = max_length
         self.graph_node_dim = graph_node_dim
 
         # Use STEP-aware transformer decoder (causal attention)
@@ -103,7 +105,7 @@ class STEPForCausalLM(nn.Module):
             if node_features is None:
                 # Create default node features
                 num_nodes = adj_matrix.shape[0]
-                node_features = torch.randn(num_nodes, self.graph_node_dim, device=input_ids.device)
+                node_features = torch.zeros(num_nodes, self.graph_node_dim, device=input_ids.device)
 
             # Graph encoding
             graph_features = self.graph_encoder(node_features, adj_matrix)  # [num_nodes, node_dim]
@@ -157,6 +159,7 @@ class STEPForCausalLM(nn.Module):
         Returns:
             Generated token IDs [batch_size, seq_len + max_new_tokens]
         """
+        was_training = self.training
         self.eval()
 
         for _ in range(max_new_tokens):
@@ -180,6 +183,8 @@ class STEPForCausalLM(nn.Module):
                 # Append to sequence
                 input_ids = torch.cat([input_ids, next_token], dim=1)
 
+        if was_training:
+            self.train()
         return input_ids
 
 
@@ -282,7 +287,7 @@ class STEPForMaskedLM(nn.Module):
             if node_features is None:
                 # Create default node features
                 num_nodes = adj_matrix.shape[0]
-                node_features = torch.randn(num_nodes, self.graph_node_dim, device=input_ids.device)
+                node_features = torch.zeros(num_nodes, self.graph_node_dim, device=input_ids.device)
 
             # Graph encoding
             graph_features = self.graph_encoder(node_features, adj_matrix)  # [num_nodes, node_dim]
@@ -422,7 +427,11 @@ def mask_tokens(
         masked_input: [batch_size, seq_len] - input with masks
         labels: [batch_size, seq_len] - targets (-100 for non-masked)
     """
+    input_ids = input_ids.clone()
     labels = input_ids.clone()
+
+    # Compute mask/replace/keep probabilities from parameters
+    mask_ratio = 1.0 - replace_prob - random_prob  # e.g. 0.8 for default 80/10/10
 
     # Create mask probability matrix
     probability_matrix = torch.full(labels.shape, mask_prob)
@@ -435,15 +444,17 @@ def mask_tokens(
     masked_indices = torch.bernoulli(probability_matrix).bool()
     labels[~masked_indices] = -100  # Only compute loss on masked tokens
 
-    # 80% of the time, replace with [MASK]
-    indices_replaced = torch.bernoulli(torch.full(labels.shape, 0.8)).bool() & masked_indices
+    # mask_ratio of the time, replace with [MASK]
+    indices_replaced = torch.bernoulli(torch.full(labels.shape, mask_ratio)).bool() & masked_indices
     input_ids[indices_replaced] = mask_token_id
 
-    # 10% of the time, replace with random token
-    indices_random = torch.bernoulli(torch.full(labels.shape, 0.1)).bool() & masked_indices & ~indices_replaced
+    # replace_prob of the time, replace with random token
+    # Conditional probability: replace_prob / (replace_prob + random_prob) among non-replaced masked tokens
+    remaining_prob = replace_prob / (replace_prob + random_prob) if (replace_prob + random_prob) > 0 else 0.0
+    indices_random = torch.bernoulli(torch.full(labels.shape, remaining_prob)).bool() & masked_indices & ~indices_replaced
     random_words = torch.randint(vocab_size, labels.shape, dtype=torch.long, device=input_ids.device)
     input_ids[indices_random] = random_words[indices_random]
 
-    # 10% of the time, keep original token (do nothing)
+    # random_prob of the time, keep original token (do nothing)
 
     return input_ids, labels

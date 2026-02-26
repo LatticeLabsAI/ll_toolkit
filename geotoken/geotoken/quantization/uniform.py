@@ -27,6 +27,8 @@ class UniformQuantizer:
         Args:
             bits: Bit width for all coordinates (default 8 = 256 levels)
         """
+        if not (1 <= bits <= 32):
+            raise ValueError(f"bits must be 1-32, got {bits}")
         self.bits = bits
         self.levels = 2 ** bits
 

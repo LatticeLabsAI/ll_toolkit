@@ -29,6 +29,7 @@ import hashlib
 import json
 import logging
 import os
+import tempfile
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
@@ -207,6 +208,9 @@ class FeatureCache:
                 data = json.load(f, object_hook=numpy_decoder)
 
             _log.debug(f"Cache hit: {key[:16]}...")
+            # Unwrap: set() stores as {"_cached_at": ..., "features": ...}
+            if isinstance(data, dict) and "features" in data:
+                return data["features"]
             return data
 
         except Exception as e:
@@ -236,8 +240,21 @@ class FeatureCache:
                 "features": features,
             }
 
-            with open(cache_file, "w") as f:
-                json.dump(data, f, cls=NumpyEncoder, indent=2)
+            # Atomic write: write to temp file then rename to prevent corruption
+            tmp_fd, tmp_path = tempfile.mkstemp(
+                dir=str(self.cache_dir), suffix=".json.tmp"
+            )
+            try:
+                with os.fdopen(tmp_fd, "w") as f:
+                    json.dump(data, f, cls=NumpyEncoder, indent=2)
+                os.replace(tmp_path, str(cache_file))
+            except BaseException:
+                # Clean up temp file on failure
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+                raise
 
             _log.debug(f"Cached features: {key[:16]}...")
             return True
@@ -280,7 +297,13 @@ class FeatureCache:
         cleared = 0
         now = time.time()
 
-        for cache_file in self.cache_dir.glob("*.json"):
+        # Clean both completed cache files and orphaned temp files
+        import itertools
+        cache_files = itertools.chain(
+            self.cache_dir.glob("*.json"),
+            self.cache_dir.glob("*.json.tmp"),
+        )
+        for cache_file in cache_files:
             try:
                 if max_age_seconds is not None:
                     age = now - cache_file.stat().st_mtime
@@ -345,7 +368,7 @@ class FeatureCache:
         # Try cache first
         cached = self.get(key)
         if cached is not None:
-            return cached.get("features", cached)
+            return cached
 
         # Compute features
         features = compute_fn()
@@ -357,18 +380,23 @@ class FeatureCache:
 
 
 # Convenience function for quick access
+import threading
+
 _global_cache: Optional[FeatureCache] = None
+_global_cache_lock = threading.Lock()
 
 
 def get_feature_cache() -> FeatureCache:
-    """Get global feature cache instance.
+    """Get global feature cache instance (thread-safe).
 
     Returns:
         Global FeatureCache instance
     """
     global _global_cache
     if _global_cache is None:
-        _global_cache = FeatureCache()
+        with _global_cache_lock:
+            if _global_cache is None:
+                _global_cache = FeatureCache()
     return _global_cache
 
 

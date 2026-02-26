@@ -299,7 +299,7 @@ def main():
     print("=" * 80)
 
     # Paths
-    gatgpt_core = "/Users/ryanoboyle/gatgpt/core"
+    gatgpt_core = os.environ.get("GATGPT_CORE_PATH", str(Path(__file__).resolve().parent.parent.parent / "gatgpt" / "core"))
     ll_stepnet_base = "/Users/ryanoboyle/LatticeLabs_toolkit/ll_stepnet"
     output_dir = f"{ll_stepnet_base}/data/learning_curve/methods"
     report_file = f"{ll_stepnet_base}/data/learning_curve/deduplication_report.txt"

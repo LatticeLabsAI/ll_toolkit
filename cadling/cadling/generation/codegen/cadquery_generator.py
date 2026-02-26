@@ -35,6 +35,7 @@ import base64
 import logging
 import re
 import signal
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -912,13 +913,244 @@ class CadQueryExecutor:
             return False
 
     def _sandbox_execute(self, script: str) -> dict:
-        """Execute CadQuery script in a restricted sandbox.
+        """Execute CadQuery script in a subprocess sandbox.
 
-        Sets up a restricted namespace with only allowed builtins and
-        modules, then executes the script with a timeout via signal alarm.
+        Validates the script AST for safety, then executes it in an isolated
+        subprocess with a timeout and restricted permissions. Falls back to
+        in-process restricted execution if subprocess isolation is unavailable.
 
         Args:
             script: CadQuery Python script string.
+
+        Returns:
+            Dictionary with 'shape', 'success', and 'error' keys.
+        """
+        import ast
+
+        # --- Step 1: AST validation before any execution ---
+        try:
+            tree = ast.parse(script, filename="<cadquery_script>")
+        except SyntaxError as e:
+            _log.error("Script has syntax errors: %s", e)
+            return {"shape": None, "success": False, "error": f"Syntax error: {e}"}
+
+        # Walk the AST to detect dangerous constructs
+        _FORBIDDEN_NAMES = {
+            "eval", "exec", "compile", "globals", "locals", "vars",
+            "__import__", "getattr", "setattr", "delattr",
+            "breakpoint", "exit", "quit",
+            "open",  # file I/O
+        }
+        _FORBIDDEN_ATTRIBUTES = {
+            "__subclasses__", "__bases__", "__class__", "__mro__",
+            "__globals__", "__code__", "__builtins__",
+            "system", "popen", "subprocess", "Popen",
+        }
+
+        for node in ast.walk(tree):
+            # Check function calls to forbidden names
+            if isinstance(node, ast.Call):
+                func = node.func
+                if isinstance(func, ast.Name) and func.id in _FORBIDDEN_NAMES:
+                    return {
+                        "shape": None,
+                        "success": False,
+                        "error": f"Forbidden function call: {func.id}()",
+                    }
+            # Check forbidden attribute access
+            if isinstance(node, ast.Attribute):
+                if node.attr in _FORBIDDEN_ATTRIBUTES:
+                    return {
+                        "shape": None,
+                        "success": False,
+                        "error": f"Forbidden attribute access: .{node.attr}",
+                    }
+            # Check forbidden Name references (e.g., os, sys, subprocess)
+            if isinstance(node, ast.Name) and node.id in {"os", "sys", "subprocess", "shutil"}:
+                return {
+                    "shape": None,
+                    "success": False,
+                    "error": f"Forbidden module reference: {node.id}",
+                }
+            # Disallow Import/ImportFrom of non-allowed modules
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    top_level = alias.name.split(".")[0]
+                    if top_level not in self._ALLOWED_MODULES:
+                        return {
+                            "shape": None,
+                            "success": False,
+                            "error": (
+                                f"Import of '{alias.name}' is not allowed in sandbox. "
+                                f"Allowed modules: {sorted(self._ALLOWED_MODULES)}"
+                            ),
+                        }
+            if isinstance(node, ast.ImportFrom):
+                if node.module:
+                    top_level = node.module.split(".")[0]
+                    if top_level not in self._ALLOWED_MODULES:
+                        return {
+                            "shape": None,
+                            "success": False,
+                            "error": (
+                                f"Import from '{node.module}' is not allowed in sandbox. "
+                                f"Allowed modules: {sorted(self._ALLOWED_MODULES)}"
+                            ),
+                        }
+
+        _log.debug("AST validation passed for CadQuery script")
+
+        # --- Step 2: Try subprocess-based execution for full isolation ---
+        subprocess_result = self._subprocess_execute(script)
+        if subprocess_result is not None:
+            return subprocess_result
+
+        # --- Step 3: Fallback to in-process restricted execution ---
+        _log.debug("Subprocess execution unavailable, using in-process sandbox")
+        return self._inprocess_execute(script)
+
+    def _subprocess_execute(self, script: str) -> dict | None:
+        """Execute CadQuery script in an isolated subprocess.
+
+        Writes the script to a temporary file and runs it in a subprocess
+        with a timeout. Returns None if subprocess execution is not feasible
+        (e.g., cadquery not importable in subprocess).
+
+        Args:
+            script: CadQuery Python script string.
+
+        Returns:
+            Result dict, or None if subprocess execution is not feasible.
+        """
+        import subprocess
+        import json
+        import textwrap
+
+        # Build a wrapper script that executes the user code and serializes
+        # the result to a temp STEP file so the parent can load it
+        wrapper = textwrap.dedent("""\
+            import sys
+            import json
+            import tempfile
+
+            try:
+                import cadquery as cq
+            except ImportError:
+                print(json.dumps({{"success": False, "error": "cadquery not available"}}))
+                sys.exit(1)
+
+            import math
+            import os
+
+            tmp_path = None
+            try:
+                exec_globals = {{"cq": cq, "cadquery": cq, "math": math}}
+                exec(compile({script_repr}, "<cadquery_script>", "exec"), exec_globals)
+
+                result = exec_globals.get("result")
+                if result is None:
+                    for var_name in ("part", "model", "shape", "body", "solid"):
+                        result = exec_globals.get(var_name)
+                        if result is not None:
+                            break
+
+                if result is None:
+                    print(json.dumps({{"success": False, "error": "No result variable"}}))
+                    sys.exit(0)
+
+                # Export to temp STEP for parent to load
+                tmp = tempfile.NamedTemporaryFile(suffix=".step", delete=False)
+                tmp_path = tmp.name
+                tmp.close()
+
+                if isinstance(result, cq.Workplane):
+                    cq.exporters.export(result, tmp_path, exportType="STEP")
+                elif hasattr(result, "exportStep"):
+                    result.exportStep(tmp_path)
+                else:
+                    assy = cq.Assembly()
+                    assy.add(result)
+                    assy.save(tmp_path, exportType="STEP")
+
+                print(json.dumps({{"success": True, "step_path": tmp_path}}))
+
+            except Exception as e:
+                # Clean up temp file on failure so it doesn't leak
+                if tmp_path is not None:
+                    try:
+                        os.unlink(tmp_path)
+                    except OSError:
+                        pass
+                print(json.dumps({{"success": False, "error": str(e)}}))
+                sys.exit(0)
+        """).format(script_repr=repr(script))
+
+        try:
+            proc = subprocess.run(
+                [sys.executable, "-c", wrapper],
+                capture_output=True,
+                text=True,
+                timeout=self.timeout,
+            )
+
+            if proc.returncode != 0 and not proc.stdout.strip():
+                _log.debug(
+                    "Subprocess failed (rc=%d): %s",
+                    proc.returncode,
+                    proc.stderr[:200],
+                )
+                return None
+
+            output = proc.stdout.strip()
+            if not output:
+                return None
+
+            result_data = json.loads(output)
+
+            if result_data.get("success") and result_data.get("step_path"):
+                # Load the STEP file back into a CadQuery shape
+                step_path = result_data["step_path"]
+                try:
+                    import cadquery as cq
+
+                    shape = cq.importers.importStep(step_path)
+                    _log.info("Subprocess execution succeeded, loaded STEP result")
+                    return {"shape": shape, "success": True, "error": None}
+                except Exception as e:
+                    _log.warning("Failed to load subprocess STEP result: %s", e)
+                    return {"shape": None, "success": False, "error": str(e)}
+                finally:
+                    import os
+                    try:
+                        os.unlink(step_path)
+                    except OSError:
+                        pass
+            else:
+                return {
+                    "shape": None,
+                    "success": False,
+                    "error": result_data.get("error", "Unknown subprocess error"),
+                }
+
+        except subprocess.TimeoutExpired:
+            _log.error("Subprocess execution timed out after %ds", self.timeout)
+            return {
+                "shape": None,
+                "success": False,
+                "error": f"Script execution exceeded {self.timeout}s timeout",
+            }
+        except (json.JSONDecodeError, FileNotFoundError, OSError) as e:
+            _log.debug("Subprocess execution not feasible: %s", e)
+            return None
+
+    def _inprocess_execute(self, script: str) -> dict:
+        """Fallback in-process restricted execution.
+
+        Uses restricted builtins and signal-based timeout. Only used when
+        subprocess execution is unavailable.
+
+        Args:
+            script: CadQuery Python script string (already AST-validated).
 
         Returns:
             Dictionary with 'shape', 'success', and 'error' keys.
@@ -1229,115 +1461,140 @@ class CadQueryValidator:
                 - 'attempts': Number of attempts made
                 - 'errors': List of error messages from all attempts
         """
+        import os
+
         from cadling.generation.codegen.prompts import load_repair_prompt
 
         repair_template = load_repair_prompt()
         all_errors: List[str] = []
         final_script = ""
         final_validation: dict = {}
+        # Track temp STEP files so we can clean up intermediates on failure
+        temp_step_paths: List[str] = []
 
-        for attempt in range(1, max_retries + 1):
-            _log.info(
-                "Validate-and-retry attempt %d/%d for: %s",
-                attempt,
-                max_retries,
-                description[:80],
-            )
-
-            # Step 1: Generate script
-            try:
-                if attempt == 1:
-                    script = generator.generate(description)
-                else:
-                    # Build repair prompt with previous errors
-                    error_context = "\n".join(
-                        f"- {err}" for err in all_errors[-5:]
-                    )
-                    repair_prompt = repair_template.replace(
-                        "{DESCRIPTION}", description
-                    )
-                    repair_prompt = repair_prompt.replace(
-                        "{PREVIOUS_CODE}", final_script
-                    )
-                    repair_prompt = repair_prompt.replace(
-                        "{ERRORS}", error_context
-                    )
-
-                    system_prompt = generator._build_system_prompt()
-                    full_prompt = f"{system_prompt}\n\n---\n\n{repair_prompt}"
-                    agent = generator._get_agent()
-                    response = agent.ask(full_prompt, max_tokens=4096)
-                    script = generator._extract_code(response)
-
-                final_script = script
-
-            except Exception as e:
-                error_msg = f"Attempt {attempt}: Generation failed - {e}"
-                _log.error(error_msg)
-                all_errors.append(error_msg)
-                continue
-
-            # Step 2: Execute
-            exec_result = executor.execute(script)
-            if not exec_result["success"]:
-                error_msg = (
-                    f"Attempt {attempt}: Execution failed - "
-                    f"{exec_result['error']}"
-                )
-                _log.warning(error_msg)
-                all_errors.append(error_msg)
-                continue
-
-            # Step 3: Export to temp STEP file
-            with tempfile.NamedTemporaryFile(
-                suffix=".step", delete=False
-            ) as tmp:
-                step_path = tmp.name
-
-            export_ok = executor.export_step(exec_result, step_path)
-            if not export_ok:
-                error_msg = f"Attempt {attempt}: STEP export failed"
-                _log.warning(error_msg)
-                all_errors.append(error_msg)
-                continue
-
-            # Step 4: Validate
-            validation = self.validate(step_path)
-            final_validation = validation
-
-            if validation["valid"]:
+        try:
+            for attempt in range(1, max_retries + 1):
                 _log.info(
-                    "Valid model produced on attempt %d/%d",
+                    "Validate-and-retry attempt %d/%d for: %s",
                     attempt,
                     max_retries,
+                    description[:80],
                 )
-                return {
-                    "success": True,
-                    "step_path": step_path,
-                    "script": final_script,
-                    "validation": validation,
-                    "attempts": attempt,
-                    "errors": all_errors,
-                }
 
-            # Validation failed -- collect errors for next attempt
-            for err in validation["errors"]:
-                error_msg = f"Attempt {attempt}: Validation - {err}"
-                all_errors.append(error_msg)
-            _log.warning(
-                "Validation failed on attempt %d: %s",
-                attempt,
-                validation["errors"],
+                # Step 1: Generate script
+                try:
+                    if attempt == 1:
+                        script = generator.generate(description)
+                    else:
+                        # Build repair prompt with previous errors
+                        error_context = "\n".join(
+                            f"- {err}" for err in all_errors[-5:]
+                        )
+                        repair_prompt = repair_template.replace(
+                            "{DESCRIPTION}", description
+                        )
+                        repair_prompt = repair_prompt.replace(
+                            "{PREVIOUS_CODE}", final_script
+                        )
+                        repair_prompt = repair_prompt.replace(
+                            "{ERRORS}", error_context
+                        )
+
+                        system_prompt = generator._build_system_prompt()
+                        full_prompt = f"{system_prompt}\n\n---\n\n{repair_prompt}"
+                        agent = generator._get_agent()
+                        response = agent.ask(full_prompt, max_tokens=4096)
+                        script = generator._extract_code(response)
+
+                    final_script = script
+
+                except Exception as e:
+                    error_msg = f"Attempt {attempt}: Generation failed - {e}"
+                    _log.error(error_msg)
+                    all_errors.append(error_msg)
+                    continue
+
+                # Step 2: Execute
+                exec_result = executor.execute(script)
+                if not exec_result["success"]:
+                    error_msg = (
+                        f"Attempt {attempt}: Execution failed - "
+                        f"{exec_result['error']}"
+                    )
+                    _log.warning(error_msg)
+                    all_errors.append(error_msg)
+                    continue
+
+                # Step 3: Export to temp STEP file
+                with tempfile.NamedTemporaryFile(
+                    suffix=".step", delete=False
+                ) as tmp:
+                    step_path = tmp.name
+                temp_step_paths.append(step_path)
+
+                export_ok = executor.export_step(exec_result, step_path)
+                if not export_ok:
+                    error_msg = f"Attempt {attempt}: STEP export failed"
+                    _log.warning(error_msg)
+                    all_errors.append(error_msg)
+                    continue
+
+                # Step 4: Validate
+                validation = self.validate(step_path)
+                final_validation = validation
+
+                if validation["valid"]:
+                    _log.info(
+                        "Valid model produced on attempt %d/%d",
+                        attempt,
+                        max_retries,
+                    )
+                    # Clean up intermediate temp files (not the successful one)
+                    for tmp_path in temp_step_paths:
+                        if tmp_path != step_path:
+                            try:
+                                os.unlink(tmp_path)
+                            except OSError:
+                                pass
+                    return {
+                        "success": True,
+                        "step_path": step_path,
+                        "script": final_script,
+                        "validation": validation,
+                        "attempts": attempt,
+                        "errors": all_errors,
+                    }
+
+                # Validation failed -- collect errors for next attempt
+                for err in validation["errors"]:
+                    error_msg = f"Attempt {attempt}: Validation - {err}"
+                    all_errors.append(error_msg)
+                _log.warning(
+                    "Validation failed on attempt %d: %s",
+                    attempt,
+                    validation["errors"],
+                )
+
+            _log.error(
+                "All %d attempts failed for: %s", max_retries, description[:80]
             )
-
-        _log.error(
-            "All %d attempts failed for: %s", max_retries, description[:80]
-        )
-        return {
-            "success": False,
-            "step_path": None,
-            "script": final_script,
-            "validation": final_validation,
-            "attempts": max_retries,
-            "errors": all_errors,
-        }
+            return {
+                "success": False,
+                "step_path": None,
+                "script": final_script,
+                "validation": final_validation,
+                "attempts": max_retries,
+                "errors": all_errors,
+            }
+        finally:
+            # Clean up all temp STEP files on failure (no valid result returned)
+            # On success, the winning file is preserved and intermediates
+            # were already cleaned above.
+            # We only reach the finally after the for-loop exhaustion (failure)
+            # or an unexpected exception, so clean everything.
+            if not final_validation.get("valid", False):
+                for tmp_path in temp_step_paths:
+                    try:
+                        os.unlink(tmp_path)
+                    except OSError:
+                        pass

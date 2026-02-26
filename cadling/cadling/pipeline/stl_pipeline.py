@@ -163,15 +163,19 @@ class STLPipeline(BaseCADPipeline):
             max_vertex_idx = len(mesh.vertices) - 1
 
             for i, facet in enumerate(mesh.facets):
+                is_invalid = False
                 # Check index range
                 if any(idx < 0 or idx > max_vertex_idx for idx in facet):
-                    invalid_facets += 1
+                    is_invalid = True
                     _log.debug(f"Facet {i} has out-of-range vertex indices")
 
                 # Check for degenerate triangles (duplicate vertices)
                 if len(set(facet)) < 3:
-                    invalid_facets += 1
+                    is_invalid = True
                     _log.debug(f"Facet {i} is degenerate (duplicate vertices)")
+
+                if is_invalid:
+                    invalid_facets += 1
 
             if invalid_facets > 0:
                 _log.warning(f"Found {invalid_facets} invalid facets")

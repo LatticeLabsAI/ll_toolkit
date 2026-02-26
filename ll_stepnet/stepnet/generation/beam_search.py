@@ -322,7 +322,9 @@ class BeamSearchDecoder:
         # Initialize beam scores
         beam_scores = torch.zeros(batch_size * num_beams, device=device)
         # Only first beam is active initially
-        beam_scores[1::num_beams] = float("-inf")
+        beam_scores = beam_scores.view(batch_size, num_beams)
+        beam_scores[:, 1:] = float("-inf")
+        beam_scores = beam_scores.view(-1)
 
         finished = torch.zeros(batch_size * num_beams, dtype=torch.bool, device=device)
         all_scores = [] if return_all_scores else None

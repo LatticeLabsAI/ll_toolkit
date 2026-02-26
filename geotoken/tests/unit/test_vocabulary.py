@@ -244,7 +244,7 @@ class TestDecode:
             commands = vocab.decode([BOS_TOKEN_ID, cmd_type_token, misaligned_param, EOS_TOKEN_ID])
 
         # Should log warning about misalignment
-        assert "Decode misalignment" in caplog.text or len(commands) > 0
+        assert "Decode misalignment" in caplog.text
 
 
 class TestEncodeFlat:

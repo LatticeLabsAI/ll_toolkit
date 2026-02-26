@@ -216,7 +216,8 @@ class PDFBackend(DeclarativeCADBackend):
                 self._pdf_doc.page_count,
             )
             return True
-        except Exception as exc:
+        except (fitz.FileDataError, fitz.FileNotFoundError, fitz.EmptyFileError,
+                RuntimeError, ValueError, IOError, OSError) as exc:
             _log.warning("PDF validation failed for %s: %s", self.file.name, exc)
             self._pdf_doc = None
             return False

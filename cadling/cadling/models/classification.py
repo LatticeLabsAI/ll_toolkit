@@ -20,13 +20,22 @@ if TYPE_CHECKING:
 
 _log = logging.getLogger(__name__)
 
-import torch
-from stepnet import (
-    STEPForClassification,
-    STEPTokenizer,
-    STEPFeatureExtractor,
-    STEPTopologyBuilder,
-)
+try:
+    import torch
+    from stepnet import (
+        STEPForClassification,
+        STEPTokenizer,
+        STEPFeatureExtractor,
+        STEPTopologyBuilder,
+    )
+    _has_torch = True
+except ImportError:
+    torch = None
+    STEPForClassification = None
+    STEPTokenizer = None
+    STEPFeatureExtractor = None
+    STEPTopologyBuilder = None
+    _has_torch = False
 
 
 class CADPartClassifier(EnrichmentModel):
@@ -91,9 +100,15 @@ class CADPartClassifier(EnrichmentModel):
         self.output_dim = output_dim
 
         # Initialize tokenizer and extractors
-        self.tokenizer = STEPTokenizer(vocab_size=vocab_size)
-        self.feature_extractor = STEPFeatureExtractor()
-        self.topology_builder = STEPTopologyBuilder()
+        if _has_torch and STEPTokenizer is not None:
+            self.tokenizer = STEPTokenizer(vocab_size=vocab_size)
+            self.feature_extractor = STEPFeatureExtractor()
+            self.topology_builder = STEPTopologyBuilder()
+        else:
+            _log.warning("torch/stepnet not available; tokenizer and extractors disabled")
+            self.tokenizer = None
+            self.feature_extractor = None
+            self.topology_builder = None
 
         # Load model if artifacts_path provided
         if artifacts_path:

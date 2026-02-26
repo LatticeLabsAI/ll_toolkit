@@ -19,16 +19,9 @@ import pytest
 import numpy as np
 
 # ---------------------------------------------------------------------------
-# Path setup — allow imports from all three packages
+# torch must be imported early (OpenMP safety — see CLAUDE.md)
 # ---------------------------------------------------------------------------
-_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-_TOOLKIT = os.path.abspath(os.path.join(_ROOT, ".."))
-
-# Add all three package roots to sys.path
-for pkg in ["geotoken", "cadling", "ll_stepnet"]:
-    pkg_path = os.path.join(_TOOLKIT, pkg)
-    if pkg_path not in sys.path:
-        sys.path.insert(0, pkg_path)
+torch = pytest.importorskip("torch")
 
 
 # ===========================================================================
@@ -53,32 +46,34 @@ from geotoken import (
 )
 
 # --- cadling ---
-from cadling.datamodel.stl import MeshItem
-from cadling.datamodel.base_models import (
-    TopologyGraph,
-    CADItemLabel,
-)
-from cadling.datamodel.geometry_2d import (
-    Line2D,
-    Arc2D,
-    Circle2D,
-    SketchProfile,
-    Sketch2DItem,
-)
+try:
+    from cadling.datamodel.stl import MeshItem
+    from cadling.datamodel.base_models import (
+        TopologyGraph,
+        CADItemLabel,
+    )
+    from cadling.datamodel.geometry_2d import (
+        Line2D,
+        Arc2D,
+        Circle2D,
+        SketchProfile,
+        Sketch2DItem,
+    )
+except ImportError:
+    pytest.skip("cadling not installed", allow_module_level=True)
 
 # --- ll_stepnet ---
-sys.path.insert(0, os.path.join(_TOOLKIT, "ll_stepnet"))
-from stepnet.output_heads import (
-    CommandType as StepNetCommandType,
-    PARAMETER_MASKS,
-    CompositeHead,
-)
-from stepnet.data import GeoTokenDataset, GeoTokenCollator
-from stepnet.encoder import STEPGraphEncoder, STEPEncoder
-from stepnet.topology import STEPTopologyBuilder
-
-# Try to import torch (required for ll_stepnet)
-import torch
+try:
+    from stepnet.output_heads import (
+        CommandType as StepNetCommandType,
+        PARAMETER_MASKS,
+        CompositeHead,
+    )
+    from stepnet.data import GeoTokenDataset, GeoTokenCollator
+    from stepnet.encoder import STEPGraphEncoder, STEPEncoder
+    from stepnet.topology import STEPTopologyBuilder
+except ImportError:
+    pytest.skip("ll_stepnet not installed", allow_module_level=True)
 
 
 # ===========================================================================

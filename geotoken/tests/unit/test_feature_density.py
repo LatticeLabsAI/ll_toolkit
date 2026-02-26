@@ -113,7 +113,7 @@ class TestAnalyzePointCloud:
         # (low variance in density values)
         density_std = np.std(result.density)
         # Allow some variance but should be relatively uniform
-        assert density_std < 0.5
+        assert density_std < 0.15
 
     def test_analyze_point_cloud_variable_density(self):
         """Test analysis on points with variable density."""
@@ -134,15 +134,15 @@ class TestAnalyzePointCloud:
 
     def test_analyze_point_cloud_shapes(self):
         """Test that result arrays have correct shapes."""
+        np.random.seed(42)
         points = np.random.randn(100, 3)
         analyzer = FeatureDensityAnalyzer()
         result = analyzer.analyze_point_cloud(points)
 
         assert result.density.shape == (100,)
         assert result.edge_length_variance.shape == (100,)
-        assert result.face_area_variance.shape == (100,)
-        # Face area variance should be zeros for point cloud
-        assert np.all(result.face_area_variance == 0)
+        # Face area variance is None for point clouds (no faces)
+        assert result.face_area_variance is None
 
     def test_analyze_point_cloud_few_points(self):
         """Test analysis with fewer points than neighbors."""

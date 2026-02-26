@@ -1,8 +1,10 @@
 """Test fixtures for geotoken."""
 from __future__ import annotations
 
+import pytest  # noqa: I001 - must precede torch for OpenMP
+torch = pytest.importorskip("torch")  # OpenMP protection: load torch before numpy
+
 import numpy as np
-import pytest
 
 
 @pytest.fixture

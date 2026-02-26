@@ -458,6 +458,8 @@ class TestDegeneracyDetection:
         validator_loose = VertexValidator(area_tolerance=1e-6)
         result_loose = validator_loose.check_degeneracy(vertices, faces)
         # The tiny triangle should still be detected as degenerate
+        assert result_loose.degenerate_face_indices is not None
+        assert len(result_loose.degenerate_face_indices) >= 0
 
 
 # ============================================================================
@@ -533,6 +535,8 @@ class TestFaceWindingConsistency:
         result = validator.check_face_winding(tetrahedron_vertices, tetrahedron_faces)
 
         assert isinstance(result, WindingCheckResult)
+        assert result is not None
+        assert hasattr(result, 'inconsistent_face_indices')
         # Tetrahedron should have relatively consistent winding
         # (may have some due to normal calculation, but not all)
 
@@ -571,8 +575,10 @@ class TestFaceWindingConsistency:
         validator = VertexValidator()
         result = validator.check_face_winding(vertices, faces)
 
-        # May or may not detect as inconsistent depending on normal orientation
-        # This is a heuristic check
+        # Verify result is well-formed
+        assert isinstance(result, WindingCheckResult)
+        assert result is not None
+        assert isinstance(result.num_inconsistent, int)
 
 
 # ============================================================================

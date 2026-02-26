@@ -183,8 +183,10 @@ class STEPTokenizer:
             if token in self.vocab:
                 token_ids.append(self.vocab[token])
             else:
-                # Hash unknown tokens to vocab space for consistency
-                token_ids.append(hash(token) % self.vocab_size)
+                # Hash unknown tokens to vocab space deterministically
+                import hashlib
+                token_hash = int.from_bytes(hashlib.md5(token.encode()).digest()[:8], "little")
+                token_ids.append(token_hash % self.vocab_size)
 
         return token_ids
 
@@ -371,12 +373,18 @@ class STEPTokenizer:
             line = self._remove_comments(line)
 
             # Process character by character to find semicolon outside strings
+            prev_char = ''
             for char in line:
-                if char == "'" and (not entity_parts or not entity_parts[-1] or entity_parts[-1][-1] != '\\'):
+                if char == "'" and prev_char == "'":
+                    # Doubled quote '' is an escape in STEP, not a string boundary toggle
+                    prev_char = ''
+                    continue
+                elif char == "'":
                     in_string = not in_string
                 elif char == ';' and not in_string:
                     found_semicolon = True
                     break
+                prev_char = char
 
             entity_parts.append(line)
             current_idx += 1
@@ -398,12 +406,13 @@ class STEPTokenizer:
                 - header: Dict with header metadata (file_description, file_name, file_schema)
                 - entities: Dict mapping entity IDs to entity data
         """
-        from typing import Any
-
         result = {
             "header": {},
             "entities": {}
         }
+
+        # Normalize whitespace before processing
+        content = self._normalize_whitespace(content)
 
         # Split into sections
         lines = content.split('\n')
@@ -441,8 +450,6 @@ class STEPTokenizer:
         Returns:
             Dictionary with header metadata
         """
-        from typing import Any
-
         header = {
             "file_description": None,
             "file_name": None,
@@ -468,9 +475,6 @@ class STEPTokenizer:
         Returns:
             Dictionary mapping entity IDs to entity data
         """
-        from typing import Any
-        import re
-
         entities = {}
 
         # Clear previous parse errors
@@ -548,8 +552,6 @@ class STEPTokenizer:
         Returns:
             List of parsed parameters
         """
-        from typing import Any
-
         if not params_str.strip():
             return []
 
@@ -599,8 +601,6 @@ class STEPTokenizer:
         Returns:
             Parsed parameter (can be string, number, reference, list, etc.)
         """
-        from typing import Any
-
         param = param.strip()
 
         # Empty/null
@@ -627,9 +627,9 @@ class STEPTokenizer:
         # Try to parse as number
         try:
             if '.' in param or 'E' in param.upper():
-                return param  # Keep as string to preserve precision
+                return float(param)
             else:
-                return param
+                return int(param)
         except ValueError:
             pass
 

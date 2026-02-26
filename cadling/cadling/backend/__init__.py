@@ -18,8 +18,15 @@ from cadling.backend.abstract_backend import (
     DeclarativeCADBackend,
     RenderableCADBackend,
 )
-from cadling.backend.dxf_backend import DXFBackend
-from cadling.backend.pdf_backend import PDFBackend
+try:
+    from cadling.backend.dxf_backend import DXFBackend
+except ImportError:
+    DXFBackend = None
+
+try:
+    from cadling.backend.pdf_backend import PDFBackend
+except ImportError:
+    PDFBackend = None
 
 __all__ = [
     "AbstractCADBackend",

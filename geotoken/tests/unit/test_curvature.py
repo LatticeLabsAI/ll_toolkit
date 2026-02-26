@@ -15,7 +15,7 @@ class TestCurvatureAnalyzer:
         result = analyzer.analyze_mesh(vertices, faces)
 
         # Flat plane should have near-zero curvature (boundary effects aside)
-        assert result.mean_value < 10.0  # reasonable upper bound for boundary effects
+        assert result.mean_value < 6.0  # boundary effects on 4-vertex plane are significant
 
     def test_sphere_positive_curvature(self, sphere_mesh):
         vertices, faces = sphere_mesh
@@ -35,6 +35,7 @@ class TestCurvatureAnalyzer:
         assert result.combined_magnitude.shape == (len(vertices),)
 
     def test_point_cloud_analysis(self):
+        np.random.seed(42)
         points = np.random.rand(50, 3)
         analyzer = CurvatureAnalyzer()
         result = analyzer.analyze_point_cloud(points)

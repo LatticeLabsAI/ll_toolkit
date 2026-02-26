@@ -91,38 +91,48 @@ def compute_mesh_features(
         - If include_normals=False: [N, 4] (centroid + area)
     """
     n_faces = len(mesh.faces)
-    features_list = []
+    vertices = mesh.vertices
+    faces = mesh.faces
 
-    for face_idx in range(n_faces):
-        face = mesh.faces[face_idx]
-        vertices = mesh.vertices
+    # Vectorized centroid computation: mean of 3 face vertices
+    v0 = vertices[faces[:, 0]]  # [N, 3]
+    v1 = vertices[faces[:, 1]]  # [N, 3]
+    v2 = vertices[faces[:, 2]]  # [N, 3]
 
-        # Compute centroid (3 dims)
-        centroid = compute_face_centroid(vertices, face)
-        face_features = list(centroid)
+    centroids = (v0 + v1 + v2) / 3.0  # [N, 3]
 
-        # Compute normal (3 dims)
-        if include_normals:
-            normal = compute_face_normal_normalized(vertices, face)
-            face_features.extend(normal)
+    # Vectorized area computation via cross product
+    edge1 = v1 - v0
+    edge2 = v2 - v0
+    cross = np.cross(edge1, edge2)  # [N, 3]
+    areas = 0.5 * np.linalg.norm(cross, axis=1, keepdims=True)  # [N, 1]
 
-        # Compute area (1 dim)
-        area = compute_face_area(vertices, face)
-        face_features.append(area)
+    feature_parts = [centroids]
 
-        # Compute curvature (1 dim) - expensive!
-        if include_curvature:
-            # Average curvature of the three vertices
+    if include_normals:
+        # Vectorized normal computation: normalized cross product
+        norms = np.linalg.norm(cross, axis=1, keepdims=True)
+        # Avoid division by zero for degenerate triangles
+        safe_norms = np.where(norms > 1e-10, norms, 1.0)
+        normals = cross / safe_norms  # [N, 3]
+        feature_parts.append(normals)
+
+    feature_parts.append(areas)
+
+    if include_curvature:
+        # Curvature still requires per-vertex computation (mesh topology dependent)
+        curvature_list = []
+        for face_idx in range(n_faces):
+            face = faces[face_idx]
             curvatures = [
                 compute_vertex_curvature(mesh, vid, method="gaussian")
                 for vid in face
             ]
-            avg_curvature = np.mean(curvatures)
-            face_features.append(avg_curvature)
+            curvature_list.append(np.mean(curvatures))
+        curvature_array = np.array(curvature_list, dtype=np.float32).reshape(-1, 1)
+        feature_parts.append(curvature_array)
 
-        features_list.append(face_features)
-
-    return np.array(features_list, dtype=np.float32)
+    return np.concatenate(feature_parts, axis=1).astype(np.float32)
 
 
 def mesh_to_pyg_graph(
@@ -253,12 +263,12 @@ def mesh_to_pyg_graph(
     # Convert to torch tensor
     x = torch.from_numpy(node_features).float()
 
-    # Compute face centroids for positions
-    centroids = []
-    for face in mesh.faces:
-        centroid = compute_face_centroid(mesh.vertices, face)
-        centroids.append(centroid)
-    pos = torch.from_numpy(np.array(centroids, dtype=np.float32))
+    # Compute face centroids for positions (vectorized)
+    v0 = mesh.vertices[mesh.faces[:, 0]]
+    v1 = mesh.vertices[mesh.faces[:, 1]]
+    v2 = mesh.vertices[mesh.faces[:, 2]]
+    centroids = ((v0 + v1 + v2) / 3.0).astype(np.float32)
+    pos = torch.from_numpy(centroids)
 
     # Build adjacency graph
     adjacency = _build_face_adjacency_graph(mesh)

@@ -329,6 +329,7 @@ class STLMeshChunker(BaseCADChunker):
                 continue
 
             # Further segment by connectivity within curvature class
+            facet_group_set = set(facet_group)
             visited = set()
             adjacency = mesh_data["adjacency"]
 
@@ -346,7 +347,7 @@ class STLMeshChunker(BaseCADChunker):
                     region.append(current_idx)
 
                     for neighbor_idx in adjacency.get(current_idx, []):
-                        if neighbor_idx in visited or neighbor_idx not in facet_group:
+                        if neighbor_idx in visited or neighbor_idx not in facet_group_set:
                             continue
                         visited.add(neighbor_idx)
                         queue.append(neighbor_idx)
@@ -676,7 +677,21 @@ class STLMeshChunker(BaseCADChunker):
 
 
 # Convenience aliases
-RegionGrowingChunker = lambda **kwargs: STLMeshChunker(strategy="region_growing", **kwargs)
-WatershedChunker = lambda **kwargs: STLMeshChunker(strategy="watershed", **kwargs)
-CurvatureChunker = lambda **kwargs: STLMeshChunker(strategy="curvature", **kwargs)
-ConnectedComponentsChunker = lambda **kwargs: STLMeshChunker(strategy="connected_components", **kwargs)
+def RegionGrowingChunker(**kwargs) -> STLMeshChunker:
+    """Create a STLMeshChunker with region_growing strategy."""
+    return STLMeshChunker(strategy="region_growing", **kwargs)
+
+
+def WatershedChunker(**kwargs) -> STLMeshChunker:
+    """Create a STLMeshChunker with watershed strategy."""
+    return STLMeshChunker(strategy="watershed", **kwargs)
+
+
+def CurvatureChunker(**kwargs) -> STLMeshChunker:
+    """Create a STLMeshChunker with curvature strategy."""
+    return STLMeshChunker(strategy="curvature", **kwargs)
+
+
+def ConnectedComponentsChunker(**kwargs) -> STLMeshChunker:
+    """Create a STLMeshChunker with connected_components strategy."""
+    return STLMeshChunker(strategy="connected_components", **kwargs)

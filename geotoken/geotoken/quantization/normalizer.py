@@ -21,7 +21,7 @@ class NormalizationResult:
     """Result of normalization with transform parameters."""
     normalized_vertices: np.ndarray  # Normalized vertex positions
     center: np.ndarray               # Translation applied
-    scale: float                     # Uniform scale factor
+    scale: np.ndarray | float        # Scale factor(s): float if uniform, (3,) array if per-axis
     original_bbox_min: np.ndarray    # Original bounding box min
     original_bbox_max: np.ndarray    # Original bounding box max
 
@@ -31,10 +31,10 @@ class NormalizationResult:
         Returns:
             Dictionary with all normalization parameters.
         """
+        scale_val = self.scale.tolist() if isinstance(self.scale, np.ndarray) else self.scale
         return {
-            "normalized_vertices": self.normalized_vertices.tolist(),
             "center": self.center.tolist(),
-            "scale": self.scale,
+            "scale": scale_val,
             "original_bbox_min": self.original_bbox_min.tolist(),
             "original_bbox_max": self.original_bbox_max.tolist(),
         }
@@ -49,10 +49,12 @@ class NormalizationResult:
         Returns:
             NormalizationResult instance.
         """
+        scale_raw = data["scale"]
+        scale = np.array(scale_raw) if isinstance(scale_raw, list) else scale_raw
         return cls(
-            normalized_vertices=np.array(data["normalized_vertices"]),
+            normalized_vertices=np.array(data.get("normalized_vertices", np.empty((0, 3)))),
             center=np.array(data["center"]),
-            scale=data["scale"],
+            scale=scale,
             original_bbox_min=np.array(data["original_bbox_min"]),
             original_bbox_max=np.array(data["original_bbox_max"]),
         )
@@ -93,15 +95,21 @@ class RelationshipPreservingNormalizer:
         center = (bbox_min + bbox_max) / 2.0
         centered = vertices - center if self.config.center else vertices.copy()
 
-        # Uniform scale to fit in unit cube
+        # Scale to fit in unit cube
         extent = bbox_max - bbox_min
-        max_extent = np.max(extent)
+        target_range = self.config.target_range[1] - self.config.target_range[0]
 
-        if max_extent < 1e-12:
-            scale = 1.0
+        if self.config.preserve_aspect_ratio:
+            # Uniform scale: same factor for all axes
+            max_extent = np.max(extent)
+            if max_extent < 1e-12:
+                scale = 1.0
+            else:
+                scale = target_range / max_extent
         else:
-            target_range = self.config.target_range[1] - self.config.target_range[0]
-            scale = target_range / max_extent
+            # Non-uniform scale: independent factor per axis
+            safe_extent = np.where(extent < 1e-12, 1.0, extent)
+            scale = np.where(extent < 1e-12, 1.0, target_range / safe_extent)
 
         normalized = centered * scale
 
@@ -132,11 +140,22 @@ class RelationshipPreservingNormalizer:
         Returns:
             Denormalized vertex positions
         """
-        offset = (self.config.target_range[0] + self.config.target_range[1]) / 2.0
-        centered = normalized_vertices - offset if self.config.center else normalized_vertices.copy()
+        if self.config.center:
+            offset = (self.config.target_range[0] + self.config.target_range[1]) / 2.0
+            centered = normalized_vertices - offset
+        else:
+            centered = normalized_vertices.copy()
 
-        if abs(result.scale) < 1e-12:
-            return centered + result.center if self.config.center else centered
+        # Check for degenerate scale
+        scale_is_degenerate = (
+            np.all(np.abs(result.scale) < 1e-12)
+            if isinstance(result.scale, np.ndarray)
+            else abs(result.scale) < 1e-12
+        )
+        if scale_is_degenerate:
+            if self.config.center:
+                return centered + result.center
+            return centered
 
         unscaled = centered / result.scale
 

@@ -141,11 +141,13 @@ class VertexValidator:
         collision_tolerance: float = 1e-4,
         area_tolerance: float = 1e-10,
         manifold_check: bool = True,
+        winding_threshold: float = -0.9,
     ) -> None:
         self.coord_min, self.coord_max = coord_bounds
         self.collision_tol = collision_tolerance
         self.area_tol = area_tolerance
         self.do_manifold = manifold_check
+        self.winding_threshold = winding_threshold
 
     # ------------------------------------------------------------------
     # Main API
@@ -268,6 +270,38 @@ class VertexValidator:
             len(warnings),
         )
         return report
+
+    # ------------------------------------------------------------------
+    # Shared helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _build_edge_counts(faces: np.ndarray) -> dict[Tuple[int, int], int]:
+        """Build a mapping from undirected edges to their face counts.
+
+        Each edge is stored as ``(min_vertex, max_vertex)`` so that
+        edge direction is normalised.
+
+        Args:
+            faces: ``(F, 3)`` triangle indices.
+
+        Returns:
+            Dict mapping ``(v_i, v_j)`` edge tuples to the number of
+            faces that share that edge.
+        """
+        # Vectorized: build all edges, sort each pair, then count unique
+        all_edges = np.vstack([
+            faces[:, [0, 1]],
+            faces[:, [1, 2]],
+            faces[:, [2, 0]],
+        ])
+        all_edges = np.sort(all_edges, axis=1)
+        unique_edges, counts = np.unique(all_edges, axis=0, return_counts=True)
+        edge_counts: dict[Tuple[int, int], int] = {
+            (int(e[0]), int(e[1])): int(c)
+            for e, c in zip(unique_edges, counts)
+        }
+        return edge_counts
 
     # ------------------------------------------------------------------
     # Individual checks
@@ -437,13 +471,7 @@ class VertexValidator:
                 num_boundary=0,
             )
 
-        edge_counts: dict[Tuple[int, int], int] = {}
-
-        for face_idx in range(len(faces)):
-            v0, v1, v2 = int(faces[face_idx, 0]), int(faces[face_idx, 1]), int(faces[face_idx, 2])
-            for edge in [(v0, v1), (v1, v2), (v2, v0)]:
-                key = (min(edge), max(edge))
-                edge_counts[key] = edge_counts.get(key, 0) + 1
+        edge_counts = self._build_edge_counts(faces)
 
         non_manifold = [e for e, c in edge_counts.items() if c > 2]
         boundary = [e for e, c in edge_counts.items() if c == 1]
@@ -490,15 +518,24 @@ class VertexValidator:
         magnitudes = np.maximum(magnitudes, 1e-10)
         normals = normals / magnitudes
 
-        # Build edge → face mapping for adjacency
+        # Build edge → face mapping using vectorized edge construction
+        num_faces = len(faces)
+        all_edges = np.vstack([
+            faces[:, [0, 1]],
+            faces[:, [1, 2]],
+            faces[:, [2, 0]],
+        ])
+        all_edges_sorted = np.sort(all_edges, axis=1)
+        # Face index for each edge entry: [0..F-1, 0..F-1, 0..F-1]
+        face_indices = np.tile(np.arange(num_faces), 3)
+
+        # Group by unique edge using structured array for hashing
         edge_to_faces: dict[Tuple[int, int], list[int]] = {}
-        for fi in range(len(faces)):
-            v_a, v_b, v_c = int(faces[fi, 0]), int(faces[fi, 1]), int(faces[fi, 2])
-            for edge in [(v_a, v_b), (v_b, v_c), (v_c, v_a)]:
-                key = (min(edge), max(edge))
-                if key not in edge_to_faces:
-                    edge_to_faces[key] = []
-                edge_to_faces[key].append(fi)
+        for idx in range(len(all_edges_sorted)):
+            key = (int(all_edges_sorted[idx, 0]), int(all_edges_sorted[idx, 1]))
+            if key not in edge_to_faces:
+                edge_to_faces[key] = []
+            edge_to_faces[key].append(int(face_indices[idx]))
 
         # Check adjacent face normal consistency
         inconsistent_faces: set[int] = set()
@@ -508,7 +545,7 @@ class VertexValidator:
                 dot = np.dot(normals[fi], normals[fj])
                 # If normals point in nearly opposite directions through
                 # a shared edge, winding is likely inconsistent
-                if dot < -0.9:
+                if dot < self.winding_threshold:
                     inconsistent_faces.add(fi)
                     inconsistent_faces.add(fj)
 
@@ -518,43 +555,48 @@ class VertexValidator:
             inconsistent_face_indices=sorted(inconsistent_faces),
         )
 
-    def check_euler(self, faces: np.ndarray) -> EulerCheckResult:
+    def check_euler(
+        self,
+        faces: np.ndarray,
+        expected_euler: int = 2,
+    ) -> EulerCheckResult:
         """Verify Euler characteristic ``V - E + F``.
 
         For a closed genus-0 solid (sphere-like), Euler = 2.
+        For genus-*g* meshes, use ``expected_euler = 2 - 2*g``
+        (e.g., a torus has genus 1 so ``expected_euler=0``).
         Deviations indicate holes, handles, or topological issues.
 
         Args:
             faces: ``(F, 3)`` triangle indices.
+            expected_euler: Expected Euler characteristic. Defaults to 2
+                (genus-0 closed surface). For genus-*g* meshes, pass
+                ``2 - 2*g``.
 
         Returns:
             ``EulerCheckResult`` with computed values.
         """
         if faces.size == 0:
             return EulerCheckResult(
-                valid=True, V=0, E=0, F=0, euler=0, expected_euler=2
+                valid=True, V=0, E=0, F=0, euler=0,
+                expected_euler=expected_euler,
             )
 
         # Count unique vertices
         V = int(np.unique(faces).size)
         F = len(faces)
 
-        # Count unique edges
-        edges: set[Tuple[int, int]] = set()
-        for fi in range(F):
-            v0, v1, v2 = int(faces[fi, 0]), int(faces[fi, 1]), int(faces[fi, 2])
-            for edge in [(v0, v1), (v1, v2), (v2, v0)]:
-                edges.add((min(edge), max(edge)))
-        E = len(edges)
+        # Count unique edges using shared helper
+        edge_counts = self._build_edge_counts(faces)
+        E = len(edge_counts)
 
         euler = V - E + F
-        expected = 2  # genus-0
 
         return EulerCheckResult(
-            valid=(euler == expected),
+            valid=(euler == expected_euler),
             V=V, E=E, F=F,
             euler=euler,
-            expected_euler=expected,
+            expected_euler=expected_euler,
         )
 
 

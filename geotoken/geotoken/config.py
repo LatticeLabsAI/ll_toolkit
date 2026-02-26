@@ -3,7 +3,10 @@ from __future__ import annotations
 
 from enum import Enum
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Literal, Optional
+
+
+_PRECISION_BITS_MAP: dict[str, int] = {"draft": 6, "standard": 8, "precision": 10}
 
 
 class PrecisionTier(str, Enum):
@@ -21,7 +24,7 @@ class PrecisionTier(str, Enum):
 
     @property
     def bits(self) -> int:
-        return {"draft": 6, "standard": 8, "precision": 10}[self.value]
+        return _PRECISION_BITS_MAP[self.value]
 
     @property
     def levels(self) -> int:
@@ -39,8 +42,16 @@ class NormalizationConfig:
 
 @dataclass
 class AdaptiveBitAllocationConfig:
-    """Configuration for adaptive bit allocation."""
-    base_bits: int = 8                     # Minimum bits for flat regions
+    """Configuration for adaptive bit allocation.
+
+    Bit semantics:
+        min_bits: Absolute floor — no vertex ever gets fewer bits than this.
+        base_bits: Starting allocation for flat / low-complexity regions.
+        max_bits: Absolute ceiling — no vertex ever gets more bits than this.
+
+    The invariant ``min_bits <= base_bits <= max_bits`` must always hold.
+    """
+    base_bits: int = 8                     # Starting bits for flat regions
     max_additional_bits: int = 4           # Max extra bits for complex regions
     min_bits: int = 4                      # Absolute minimum
     max_bits: int = 16                     # Absolute maximum
@@ -48,6 +59,20 @@ class AdaptiveBitAllocationConfig:
     density_weight: float = 0.3            # Weight for feature density
     percentile_low: float = 10.0           # Below this percentile -> base_bits
     percentile_high: float = 90.0          # Above this percentile -> base + max_additional
+
+    def __post_init__(self) -> None:
+        """Validate that min_bits <= base_bits <= max_bits."""
+        if not (self.min_bits <= self.base_bits <= self.max_bits):
+            raise ValueError(
+                f"Bit allocation invariant violated: min_bits ({self.min_bits}) "
+                f"<= base_bits ({self.base_bits}) <= max_bits ({self.max_bits}) "
+                f"must hold."
+            )
+        if self.percentile_low >= self.percentile_high:
+            raise ValueError(
+                f"percentile_low ({self.percentile_low}) must be strictly less "
+                f"than percentile_high ({self.percentile_high})."
+            )
 
 
 @dataclass
@@ -88,7 +113,7 @@ class CommandTokenizationConfig:
     canonicalize_loops: bool = True
     include_constraints: bool = False
     pad_to_max_length: bool = True
-    source_format: str = "auto"  # "deepcad", "cadling", or "auto"
+    source_format: Literal["deepcad", "cadling", "auto"] = "auto"
 
 
 @dataclass
@@ -123,5 +148,13 @@ class GraphTokenizationConfig:
     uv_grid_summary_dim: int = 6
     node_feature_dim: int = 48
     edge_feature_dim: int = 16  # 12 for BrepGen compat, 16 for cadling extended
-    adjacency_encoding: str = "explicit"  # "explicit" or "implicit"
+    adjacency_encoding: Literal["implicit", "explicit"] = "explicit"
     pad_to_max: bool = True
+
+    def __post_init__(self) -> None:
+        """Validate configuration constraints."""
+        if self.max_nodes > 65535:
+            raise ValueError(
+                f"max_nodes must be <= 65535 (edge encoding uses 16-bit packing), "
+                f"got {self.max_nodes}"
+            )

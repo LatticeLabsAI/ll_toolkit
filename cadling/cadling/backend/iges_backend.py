@@ -138,6 +138,8 @@ class IGESBackend(DeclarativeCADBackend, RenderableCADBackend):
         required_sections = {'S', 'G', 'D', 'T'}
 
         for line in lines:
+            # Strip trailing \r to handle CRLF line endings
+            line = line.rstrip('\r')
             # IGES records are 80 chars; section marker is column 73 (index 72)
             if len(line) >= 73:
                 marker = line[72].strip()
@@ -188,13 +190,14 @@ class IGESBackend(DeclarativeCADBackend, RenderableCADBackend):
         # Add entities to document
         from cadling.datamodel.base_models import CADItem
 
-        for entity_type, entity_data in entities:
+        for entity_type, entity_data, param_pointer in entities:
             item = CADItem(
                 label=CADItemLabel(text=f"{entity_type}"),
                 text=entity_data,
                 item_type="iges_entity",
             )
             item.properties["entity_type"] = entity_type
+            item.properties["param_pointer"] = param_pointer
             doc.add_item(item)
 
         _log.info(f"Conversion complete: {len(doc.items)} items")
@@ -229,6 +232,8 @@ class IGESBackend(DeclarativeCADBackend, RenderableCADBackend):
         lines = self.iges_text.split("\n")
 
         for line in lines:
+            # Strip trailing \r to handle CRLF line endings
+            line = line.rstrip('\r')
             if len(line) < 73:
                 continue
 
@@ -250,11 +255,11 @@ class IGESBackend(DeclarativeCADBackend, RenderableCADBackend):
             f"P={len(self.parameter_data)}"
         )
 
-    def _parse_entities(self) -> List[tuple[str, str]]:
+    def _parse_entities(self) -> List[tuple[str, str, int]]:
         """Parse entities from directory entries and parameter data.
 
         Returns:
-            List of (entity_type, entity_data) tuples
+            List of (entity_type, entity_data, param_pointer) tuples
         """
         entities = []
 
@@ -298,12 +303,13 @@ class IGESBackend(DeclarativeCADBackend, RenderableCADBackend):
                 )
 
                 # Extract parameter data pointer (columns 9-16)
+                # Used for cross-referencing between directory entries and parameter data
                 param_pointer = int(line1[8:16].strip()) if line1[8:16].strip() else 0
 
                 # Combine directory entry data
                 entity_data = f"{line1}\n{self.directory_entries[i+1] if i+1 < len(self.directory_entries) else ''}"
 
-                entities.append((entity_type, entity_data))
+                entities.append((entity_type, entity_data, param_pointer))
 
             except (ValueError, IndexError) as e:
                 _log.debug(f"Failed to parse directory entry {i}: {e}")
@@ -368,6 +374,7 @@ class IGESBackend(DeclarativeCADBackend, RenderableCADBackend):
             "left",
             "isometric",
             "isometric2",
+            "isometric_back",
         ]
 
     def load_view(self, view_name: str) -> CADViewBackend:
@@ -413,41 +420,9 @@ class IGESViewBackend(CADViewBackend):
             )
 
         try:
-            from OCC.Display.WebGl.jupyter_renderer import JupyterRenderer
+            from cadling.backend.pythonocc_core_backend import render_shape_to_image
 
-            # Create offscreen renderer
-            renderer = JupyterRenderer(size=(resolution, resolution))
-            renderer.DisplayShape(shape, transparency=False, color=(0.7, 0.7, 0.7))
-
-            # Set camera view
-            view = renderer._display.View
-
-            # Set camera position based on view
-            if self.view_name == "front":
-                view.SetProj(0, -1, 0)
-            elif self.view_name == "back":
-                view.SetProj(0, 1, 0)
-            elif self.view_name == "top":
-                view.SetProj(0, 0, -1)
-            elif self.view_name == "bottom":
-                view.SetProj(0, 0, 1)
-            elif self.view_name == "right":
-                view.SetProj(1, 0, 0)
-            elif self.view_name == "left":
-                view.SetProj(-1, 0, 0)
-            elif self.view_name == "isometric":
-                view.SetProj(1, -1, 1)
-            elif self.view_name == "isometric2":
-                view.SetProj(-1, -1, 1)
-
-            view.FitAll()
-
-            # Render to image
-            renderer.Render()
-            img_data = renderer.GetImageData()
-
-            # Convert to PIL Image
-            img = Image.frombytes("RGB", (resolution, resolution), img_data)
+            img = render_shape_to_image(shape, self.view_name, resolution)
             return img
 
         except Exception as e:
@@ -460,14 +435,8 @@ class IGESViewBackend(CADViewBackend):
 
     def get_camera_parameters(self) -> dict:
         """Get camera parameters for the view."""
-        views = {
-            "front": {"position": (0, -10, 0), "up": (0, 0, 1)},
-            "back": {"position": (0, 10, 0), "up": (0, 0, 1)},
-            "top": {"position": (0, 0, 10), "up": (0, 1, 0)},
-            "bottom": {"position": (0, 0, -10), "up": (0, 1, 0)},
-            "right": {"position": (10, 0, 0), "up": (0, 0, 1)},
-            "left": {"position": (-10, 0, 0), "up": (0, 0, 1)},
-            "isometric": {"position": (7, -7, 7), "up": (0, 0, 1)},
-            "isometric2": {"position": (-7, -7, 7), "up": (0, 0, 1)},
-        }
-        return views.get(self.view_name, views["front"])
+        from cadling.backend.abstract_backend import DEFAULT_CAMERA_PARAMETERS
+
+        return DEFAULT_CAMERA_PARAMETERS.get(
+            self.view_name, DEFAULT_CAMERA_PARAMETERS["front"]
+        )

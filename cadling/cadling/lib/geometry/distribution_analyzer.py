@@ -98,6 +98,18 @@ class DihedralAngleAnalyzer:
                     'histogram_counts': []
                 }
 
+            # Build O(1) face identity lookup: hash -> index
+            # Uses IsSame-compatible hashing via OCC shape identity
+            face_hash_to_idx = {}
+            for idx, face in enumerate(faces):
+                try:
+                    face_hash = face.IsPartner(face) and hash(face.__hash__()) if hasattr(face, '__hash__') else None
+                    # Use the shape's own hash for identity lookup
+                    face_hash_to_idx[face.HashCode(2**31 - 1)] = idx
+                except (AttributeError, TypeError):
+                    # Fallback: use Python hash
+                    face_hash_to_idx[hash(face)] = idx
+
             # Compute normals for all faces
             face_normals = {}
             extractor = FaceGeometryExtractor()
@@ -116,13 +128,16 @@ class DihedralAngleAnalyzer:
                     adjacent_faces = list(topo.faces_from_edge(edge))
 
                     if len(adjacent_faces) == 2:
-                        # Find indices in our face list
+                        # Find indices using O(1) dict lookup instead of O(N) scan
                         face_indices = []
                         for adj_face in adjacent_faces:
-                            for idx, face in enumerate(faces):
-                                if face.IsSame(adj_face):
-                                    face_indices.append(idx)
-                                    break
+                            try:
+                                fhash = adj_face.HashCode(2**31 - 1)
+                            except (AttributeError, TypeError):
+                                fhash = hash(adj_face)
+                            idx = face_hash_to_idx.get(fhash)
+                            if idx is not None:
+                                face_indices.append(idx)
 
                         if len(face_indices) == 2:
                             idx1, idx2 = face_indices

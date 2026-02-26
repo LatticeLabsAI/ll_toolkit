@@ -23,7 +23,7 @@ class TestAdaptiveQuantizer:
 
         # Reconstruction should be close to original
         errors = np.linalg.norm(vertices - reconstructed, axis=1)
-        assert np.max(errors) < 0.5  # within half a unit
+        assert np.max(errors) < 0.05  # within 5% of a unit
 
     def test_sphere_variable_bits(self, sphere_mesh):
         vertices, faces = sphere_mesh
@@ -61,3 +61,5 @@ class TestAdaptiveQuantizer:
         q = result.quantized_vertices
         # At least check that the function runs without error
         assert q.shape == (3, 3)
+        # The two close vertices must remain distinct after quantization
+        assert not np.array_equal(q[0], q[1])

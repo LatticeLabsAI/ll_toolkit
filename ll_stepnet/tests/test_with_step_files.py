@@ -38,12 +38,13 @@ def log_print(message="", end="\n"):
 
 
 # STEP test files
+TEST_DIR = Path(__file__).resolve().parent.parent / "data" / "test_files"
 TEST_FILES = [
-    "data/test_files/4in_rod.step",
-    "data/test_files/Button.step",
-    "data/test_files/Pic adapter.step",
-    "data/test_files/Stock_Hinge.step",
-    "data/test_files/Butt pad.step"
+    str(TEST_DIR / "4in_rod.step"),
+    str(TEST_DIR / "Button.step"),
+    str(TEST_DIR / "Pic adapter.step"),
+    str(TEST_DIR / "Stock_Hinge.step"),
+    str(TEST_DIR / "Butt pad.step"),
 ]
 
 

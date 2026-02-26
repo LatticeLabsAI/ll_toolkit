@@ -262,6 +262,13 @@ class CADVocabulary:
                         params[param_idx] = val
                         i += 1
                     else:
+                        # Misaligned token — skip it and log warning
+                        _log.warning(
+                            "Skipping misaligned token at index %d (id=%d) "
+                            "while decoding param_idx=%d for type_idx=%d",
+                            i, ptid, param_idx, type_idx,
+                        )
+                        i += 1
                         break
 
                 commands.append(CommandToken(
@@ -276,12 +283,48 @@ class CADVocabulary:
         return commands
 
     def encode_flat(self, command_tokens: list[CommandToken]) -> list[int]:
-        """Flat encoding: one token per command (type) + one per parameter.
+        """Flat encoding: fixed-width per command.
 
-        Simpler encoding where each command gets exactly 1 + num_active_params
-        integer IDs.
+        Each command emits exactly 1 (command type ID) + num_active_params
+        parameter IDs, padded or truncated to a fixed width determined by
+        the command type's canonical mask.
+
+        Args:
+            command_tokens: List of CommandToken objects.
+
+        Returns:
+            List of integer token IDs (BOS + fixed-width commands + EOS).
         """
-        return self.encode(command_tokens)
+        ids: list[int] = [BOS_TOKEN_ID]
+
+        for token in command_tokens:
+            if token.command_type == CommandType.EOS:
+                break
+
+            type_idx = self._type_to_idx.get(token.command_type.value, 0)
+            ids.append(self._cmd_type_offset + type_idx)
+
+            # Canonical mask determines fixed width
+            canonical_mask = CommandToken.get_parameter_mask(token.command_type)
+            num_active = sum(canonical_mask)
+
+            # Collect active parameter IDs
+            param_ids: list[int] = []
+            for param_idx, active in enumerate(canonical_mask):
+                if active:
+                    val = token.parameters[param_idx] if param_idx < len(token.parameters) else 0
+                    param_ids.append(self._param_token_id(type_idx, param_idx, val))
+
+            # Pad or truncate to exactly num_active
+            if len(param_ids) < num_active:
+                for extra_idx in range(len(param_ids), num_active):
+                    param_ids.append(self._param_token_id(type_idx, extra_idx, 0))
+            param_ids = param_ids[:num_active]
+
+            ids.extend(param_ids)
+
+        ids.append(EOS_TOKEN_ID)
+        return ids
 
     # ------------------------------------------------------------------
     # Constraint encoding / decoding
@@ -539,16 +582,16 @@ class CADVocabulary:
         path.write_text(json.dumps(data, indent=2))
         _log.info("Saved vocabulary to %s (size=%d)", path, self.vocab_size)
 
-    def encode_to_tensor(
+    def encode_to_ids(
         self,
         command_tokens: list[CommandToken],
         seq_len: int = 60,
         pad_id: Optional[int] = None,
     ) -> list[int]:
-        """Encode command tokens to a fixed-length integer sequence for transformer input.
+        """Encode command tokens to a fixed-length integer ID sequence.
 
         This bridges the variable-length output of :meth:`encode` to the
-        fixed-length tensors that transformer models consume.  The sequence
+        fixed-length sequences that transformer models consume.  The sequence
         is padded (with ``pad_id``) or truncated to exactly ``seq_len``
         integer token IDs.
 
@@ -572,6 +615,36 @@ class CADVocabulary:
             ids = ids + [pad_id] * (seq_len - len(ids))
 
         return ids
+
+    def encode_to_tensor(
+        self,
+        command_tokens: list[CommandToken],
+        seq_len: int = 60,
+        pad_id: Optional[int] = None,
+    ):
+        """Encode command tokens to a fixed-length torch.Tensor.
+
+        Wrapper around :meth:`encode_to_ids` that returns an actual
+        ``torch.Tensor`` instead of a plain list.
+
+        Args:
+            command_tokens: List of CommandToken objects.
+            seq_len: Target sequence length (default 60 per DeepCAD).
+            pad_id: Padding token ID.  Defaults to :attr:`pad_token_id`.
+
+        Returns:
+            torch.Tensor of shape ``[seq_len]`` with dtype ``torch.long``.
+        """
+        try:
+            import torch
+        except ImportError:
+            raise ImportError(
+                "PyTorch is required for encode_to_tensor. "
+                "Install with: conda install pytorch -c conda-forge"
+            )
+
+        ids = self.encode_to_ids(command_tokens, seq_len=seq_len, pad_id=pad_id)
+        return torch.tensor(ids, dtype=torch.long)
 
     @classmethod
     def load(cls, path: str | Path) -> CADVocabulary:
@@ -633,7 +706,7 @@ def encode_to_tensor(
     if vocab is None:
         vocab = CADVocabulary()
 
-    ids = vocab.encode_to_tensor(command_tokens, seq_len=seq_len, pad_id=pad_id)
+    ids = vocab.encode_to_ids(command_tokens, seq_len=seq_len, pad_id=pad_id)
     return torch.tensor(ids, dtype=torch.long)
 
 
@@ -673,7 +746,7 @@ def batch_encode_to_tensor(
         vocab = CADVocabulary()
 
     batch_ids = [
-        vocab.encode_to_tensor(tokens, seq_len=seq_len, pad_id=pad_id)
+        vocab.encode_to_ids(tokens, seq_len=seq_len, pad_id=pad_id)
         for tokens in batch_command_tokens
     ]
     return torch.tensor(batch_ids, dtype=torch.long)

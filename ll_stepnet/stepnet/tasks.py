@@ -2,6 +2,7 @@
 Task-Specific Prediction Heads for STEPNet
 Defines what the model actually predicts.
 """
+from __future__ import annotations
 
 import torch
 import torch.nn as nn
@@ -30,12 +31,15 @@ class STEPForCaptioning(nn.Module):
         # Encoder
         self.encoder = STEPEncoder(vocab_size=vocab_size, output_dim=output_dim)
         
+        # Caption token embedding
+        self.caption_embedding = nn.Embedding(decoder_vocab_size, output_dim)
+
         # Caption decoder (transformer)
         self.caption_decoder = nn.TransformerDecoder(
             nn.TransformerDecoderLayer(d_model=output_dim, nhead=8, batch_first=True),
             num_layers=6
         )
-        
+
         # Output projection
         self.output_projection = nn.Linear(output_dim, decoder_vocab_size)
         
@@ -62,7 +66,7 @@ class STEPForCaptioning(nn.Module):
         
         if caption_ids is not None:
             # Training mode: teacher forcing
-            caption_embed = self.caption_decoder(caption_ids.unsqueeze(-1).float(), memory)
+            caption_embed = self.caption_decoder(self.caption_embedding(caption_ids), memory)
             logits = self.output_projection(caption_embed)
         else:
             # Inference mode: autoregressive generation
@@ -128,17 +132,8 @@ class STEPForCaptioning(nn.Module):
         )
 
         for _ in range(max_length - 1):
-            # Get current sequence embeddings
-            # Use a simple linear embedding for positions
-            seq_len = generated.size(1)
-            pos_embed = torch.zeros(
-                generated.size(0), seq_len, memory.size(-1), device=device
-            )
-            for i in range(seq_len):
-                pos_embed[:, i, :] = i / max_length
-
-            # Create input embedding (simplified - using position as proxy)
-            tgt = pos_embed + generated.unsqueeze(-1).float()
+            # Embed generated tokens
+            tgt = self.caption_embedding(generated)
 
             # Decode
             decoded = self.caption_decoder(tgt, memory)
@@ -354,7 +349,8 @@ class STEPForQA(nn.Module):
             num_layers=3
         )
         self.question_embedding = nn.Embedding(text_vocab_size, output_dim)
-        
+        self.answer_embedding = nn.Embedding(text_vocab_size, output_dim)
+
         # Answer decoder
         self.answer_decoder = nn.TransformerDecoder(
             nn.TransformerDecoderLayer(d_model=output_dim, nhead=8, batch_first=True),
@@ -395,7 +391,7 @@ class STEPForQA(nn.Module):
         
         # Decode answer
         if answer_token_ids is not None:
-            a_embed = self.question_embedding(answer_token_ids)
+            a_embed = self.answer_embedding(answer_token_ids)
             a_decoded = self.answer_decoder(a_embed, memory)
             logits = self.output_projection(a_decoded)
         else:
@@ -472,7 +468,7 @@ class STEPForQA(nn.Module):
 
         for _ in range(max_length - 1):
             # Get current answer embeddings
-            a_embed = self.question_embedding(generated)
+            a_embed = self.answer_embedding(generated)
 
             # Decode
             a_decoded = self.answer_decoder(a_embed, memory)

@@ -318,5 +318,6 @@ class VertexRefinementHead(nn.Module):
             # Apply with decreasing step size
             alpha = 1.0 / (i + 1.0)
             positions = positions + alpha * delta
+            positions = torch.clamp(positions, -1.0, 1.0)
 
         return positions

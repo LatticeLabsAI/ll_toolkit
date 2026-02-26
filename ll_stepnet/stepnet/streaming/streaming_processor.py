@@ -195,10 +195,12 @@ class PrefetchingIterator:
             self._error = e
         finally:
             # Put sentinel to signal end - this unblocks the main thread immediately
-            try:
-                self._queue.put(self._STOP_SENTINEL, timeout=1.0)
-            except queue.Full:
-                pass
+            while not self._exhausted.is_set():
+                try:
+                    self._queue.put(self._STOP_SENTINEL, timeout=1.0)
+                    break
+                except queue.Full:
+                    continue
             self._exhausted.set()
 
     def __iter__(self) -> "PrefetchingIterator":

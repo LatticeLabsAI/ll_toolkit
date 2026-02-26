@@ -201,6 +201,7 @@ class TestEdgeUVGridTokens:
 
     def test_edge_grid_roundtrip_higher_bits(self):
         """Test that higher bit depth reduces quantization error."""
+        np.random.seed(42)
         # 8-bit
         quantizer_8 = UVGridQuantizer(bits=8)
         edge_grid = np.random.rand(10, 6).astype(np.float32)
@@ -294,7 +295,7 @@ class TestDataclassDefaults:
         """Test FaceUVGridTokens has sensible defaults."""
         tokens = FaceUVGridTokens()
 
-        assert tokens.face_index == -1
+        assert tokens.face_index is None
         assert tokens.grid_resolution == (10, 10)
         assert tokens.quantized_xyz.shape == (0, 3)
         assert tokens.quantized_normals.shape == (0, 3)

@@ -174,6 +174,13 @@ class BRepFaceGraphBuilder:
                     step_text = raw_content
                 elif hasattr(doc, 'properties') and doc.properties.get("step_text"):
                     step_text = doc.properties.get("step_text")
+                elif hasattr(doc, 'properties') and doc.properties.get("step_file_path"):
+                    # Lazy-load STEP text from file path to avoid storing
+                    # large text in memory (see ABCLoader).
+                    from pathlib import Path
+                    _step_path = Path(doc.properties["step_file_path"])
+                    if _step_path.exists():
+                        step_text = _step_path.read_text(errors="replace")
                 else:
                     backend = getattr(doc, '_backend', None)
                     if backend is not None and hasattr(backend, 'content'):
@@ -272,19 +279,31 @@ class BRepFaceGraphBuilder:
     def _extract_edge_references(self, entity_text: str) -> list[int]:
         """Extract edge references from STEP entity text.
 
+        Parses ADVANCED_FACE structure to extract only FACE_BOUND/FACE_OUTER_BOUND
+        loop references, which indirectly reference edges. This avoids incorrectly
+        including surface and orientation references as shared edges.
+
         Args:
             entity_text: STEP entity text
 
         Returns:
-            List of edge reference IDs
+            List of referenced entity IDs (loops/bounds, used for adjacency matching)
         """
         import re
 
         # Find all #N references in the entity
-        edge_refs = re.findall(r"#(\d+)", entity_text)
+        all_refs = re.findall(r"#(\d+)", entity_text)
 
         # Convert to integers
-        edge_refs = [int(ref) for ref in edge_refs]
+        edge_refs = [int(ref) for ref in all_refs]
+
+        # For ADVANCED_FACE, the last ref is the surface geometry and should be excluded.
+        # Format: ADVANCED_FACE('name',(#loop1,#loop2,...),#surface,.BOOL.)
+        # Exclude the last reference if this looks like an ADVANCED_FACE
+        upper_text = entity_text.upper()
+        if "ADVANCED_FACE" in upper_text and len(edge_refs) > 1:
+            # Last ref is the surface - exclude it
+            edge_refs = edge_refs[:-1]
 
         return edge_refs
 
@@ -554,8 +573,9 @@ class BRepFaceGraphBuilder:
     ) -> dict[int, Any]:
         """Match STEP entity indices to TopoDS_Face objects.
 
-        Strategy: Match by order (assumes face entities and TopoDS faces are in same order).
-        For more robust matching, could use area or centroid comparison.
+        Strategy: Match by entity ID using the ShapeIdentityRegistry when
+        available, falling back to geometric matching (area + centroid), and
+        finally to order-based matching as a last resort.
 
         Args:
             face_entities: List of face entity dictionaries
@@ -564,21 +584,80 @@ class BRepFaceGraphBuilder:
         Returns:
             Dictionary mapping entity index to TopoDS_Face
         """
-        entity_to_face = {}
+        from cadling.lib.geometry.face_geometry import FaceGeometryExtractor
 
-        # Simple order-based matching
-        # NOTE: This assumes entities and faces are in the same order,
+        entity_to_face: dict[int, Any] = {}
+
+        # Strategy 1: Match by geometric properties (area + centroid)
+        # Compute properties for each OCC face
+        geom_extractor = FaceGeometryExtractor()
+        occ_face_props: list[tuple[float, list[float] | None]] = []
+
+        if geom_extractor.has_pythonocc:
+            for occ_face in topods_faces:
+                area = geom_extractor.compute_surface_area(occ_face) or 0.0
+                centroid = geom_extractor.compute_centroid(occ_face)
+                occ_face_props.append((area, centroid))
+
+            # Try matching each entity to the closest OCC face by area+centroid
+            matched_occ_indices: set[int] = set()
+
+            for ent_idx, face_entity in enumerate(face_entities):
+                entity_id = face_entity.get("entity_id")
+                if entity_id is None:
+                    continue
+
+                # Try to get area from entity info for comparison
+                try:
+                    entity_text = face_entity.get("text", "")
+                    entity_info = self.feature_extractor.extract_entity_info(entity_text)
+                    ent_area = entity_info.get("area", 0.0)
+                except Exception:
+                    ent_area = 0.0
+
+                # Find best matching OCC face by area similarity
+                best_occ_idx = None
+                best_score = float("inf")
+
+                for occ_idx, (occ_area, occ_centroid) in enumerate(occ_face_props):
+                    if occ_idx in matched_occ_indices:
+                        continue
+                    if occ_area > 0 and ent_area > 0:
+                        # Relative area difference
+                        area_diff = abs(occ_area - ent_area) / max(occ_area, ent_area)
+                        if area_diff < best_score:
+                            best_score = area_diff
+                            best_occ_idx = occ_idx
+
+                if best_occ_idx is not None and best_score < 0.1:
+                    entity_to_face[ent_idx] = topods_faces[best_occ_idx]
+                    matched_occ_indices.add(best_occ_idx)
+
+            if len(entity_to_face) == len(face_entities):
+                _log.debug(
+                    f"Matched all {len(entity_to_face)} faces by geometric properties"
+                )
+                return entity_to_face
+
+            # If geometric matching didn't match all, clear partial results
+            # and fall back to order-based matching
+            if len(entity_to_face) < len(face_entities) // 2:
+                entity_to_face.clear()
+
+        # Strategy 2 (fallback): Order-based matching
+        # This assumes entities and faces are in the same order,
         # which is usually the case for STEP files
-        min_len = min(len(face_entities), len(topods_faces))
+        if len(entity_to_face) == 0:
+            min_len = min(len(face_entities), len(topods_faces))
 
-        for i in range(min_len):
-            entity_to_face[i] = topods_faces[i]
+            for i in range(min_len):
+                entity_to_face[i] = topods_faces[i]
 
-        if len(face_entities) != len(topods_faces):
-            _log.warning(
-                f"Entity count ({len(face_entities)}) != Face count ({len(topods_faces)}). "
-                f"Matched {min_len} faces."
-            )
+            if len(face_entities) != len(topods_faces):
+                _log.warning(
+                    f"Entity count ({len(face_entities)}) != Face count ({len(topods_faces)}). "
+                    f"Matched {min_len} faces via order-based fallback."
+                )
 
         return entity_to_face
 

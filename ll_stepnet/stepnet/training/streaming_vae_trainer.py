@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Union
 
@@ -180,7 +181,7 @@ class StreamingVAETrainer:
                 progress = (step - self.warmup_steps) / max(
                     self.total_steps - self.warmup_steps, 1
                 )
-                return 0.5 * (1.0 + torch.cos(torch.tensor(progress * 3.14159)).item())
+                return 0.5 * (1.0 + torch.cos(torch.tensor(progress * math.pi)).item())
 
         return LambdaLR(self.optimizer, lr_lambda)
 
@@ -272,6 +273,12 @@ class StreamingVAETrainer:
         kl = -0.5 * torch.sum(1 + log_var - mu.pow(2) - log_var.exp(), dim=-1)
         return kl.mean()
 
+    def _unpack_model_output(self, output):
+        """Auto-detect dict vs tuple model output."""
+        if isinstance(output, dict):
+            return output.get('reconstructed') or output.get('command_logits'), output['mu'], output['log_var']
+        return output[0], output[1], output[2]
+
     def _prepare_batch(
         self, batch: Dict[str, Any]
     ) -> tuple:
@@ -325,7 +332,8 @@ class StreamingVAETrainer:
         input_ids, target_ids, attention_mask = self._prepare_batch(batch)
 
         # Forward pass
-        reconstructed, mu, log_var = self.model(input_ids)
+        output = self.model(input_ids)
+        reconstructed, mu, log_var = self._unpack_model_output(output)
 
         # Compute losses
         recon_loss = self._reconstruction_loss(reconstructed, target_ids)
@@ -382,7 +390,8 @@ class StreamingVAETrainer:
         for batch in val_iter:
             input_ids, target_ids, attention_mask = self._prepare_batch(batch)
 
-            reconstructed, mu, log_var = self.model(input_ids)
+            output = self.model(input_ids)
+            reconstructed, mu, log_var = self._unpack_model_output(output)
 
             recon_loss = self._reconstruction_loss(reconstructed, target_ids)
             kl_loss = self._kl_divergence(mu, log_var)
@@ -555,7 +564,7 @@ class StreamingVAETrainer:
             raise ValueError("No checkpoint_dir set; cannot load checkpoint.")
 
         load_path = self.checkpoint_dir / filename
-        checkpoint = torch.load(load_path, map_location=self.device)
+        checkpoint = torch.load(load_path, map_location=self.device, weights_only=True)
 
         self.model.load_state_dict(checkpoint["model_state_dict"])
         self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])

@@ -91,14 +91,11 @@ class QuantizationImpactAnalyzer:
         errors = errors_forward
 
         # Relationship preservation
-        preservation_rate = None
         if original_relationships and faces is not None:
             preservation_rate = self.relationship_detector.verify_relationships(
                 original_relationships, reconstructed, faces
             )
-        # If verification was not possible (None), default to 1.0
-        # to avoid penalizing cases where no relationships exist
-        if preservation_rate is None:
+        else:
             preservation_rate = 1.0
 
         # Feature loss

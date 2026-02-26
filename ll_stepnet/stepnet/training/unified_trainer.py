@@ -186,21 +186,35 @@ class STEPNetTrainer:
         if model_type == ModelType.VAE or model_type == ModelType.VQVAE:
             self._inner_trainer = VAETrainer(
                 model=self.model,
+                train_dataloader=self.train_loader,
+                val_dataloader=self.val_loader,
                 optimizer=self.optimizer,
-                device=self.device,
+                device=str(self.device),
                 checkpoint_dir=self.config.checkpoint_dir,
             )
         elif model_type == ModelType.GAN:
+            # GAN needs generator/discriminator — assume model exposes them
+            gen = getattr(self.model, "generator", self.model)
+            disc = getattr(self.model, "discriminator", self.model)
             self._inner_trainer = GANTrainer(
-                model=self.model,
-                device=self.device,
+                generator=gen,
+                discriminator=disc,
+                train_dataloader=self.train_loader,
+                device=str(self.device),
                 checkpoint_dir=self.config.checkpoint_dir,
             )
         elif model_type == ModelType.DIFFUSION:
+            # Diffusion needs a noise scheduler — check model
+            scheduler = getattr(self.model, "scheduler", None)
+            if scheduler is None:
+                from ..diffusion import DDPMScheduler
+                scheduler = DDPMScheduler()
             self._inner_trainer = DiffusionTrainer(
                 model=self.model,
-                optimizer=self.optimizer,
-                device=self.device,
+                scheduler=scheduler,
+                train_dataloader=self.train_loader,
+                val_dataloader=self.val_loader,
+                device=str(self.device),
                 checkpoint_dir=self.config.checkpoint_dir,
             )
         else:
@@ -341,11 +355,7 @@ class STEPNetTrainer:
             Dictionary of epoch metrics.
         """
         self.model.train()
-        metrics = self._inner_trainer.train_epoch(
-            self.train_loader,
-            epoch=epoch,
-            log_freq=self.config.log_freq,
-        )
+        metrics = self._inner_trainer.train_epoch()
         return metrics
 
     def _validate(self, epoch: int) -> Dict[str, float]:
@@ -359,7 +369,7 @@ class STEPNetTrainer:
         """
         self.model.eval()
         with torch.no_grad():
-            metrics = self._inner_trainer.validate(self.val_loader)
+            metrics = self._inner_trainer.validate()
         return metrics
 
     def _save_checkpoint(self, epoch: int) -> None:
@@ -372,7 +382,7 @@ class STEPNetTrainer:
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
         checkpoint_path = checkpoint_dir / f"checkpoint_epoch_{epoch:04d}.pt"
-        self._inner_trainer.save_checkpoint(str(checkpoint_path), epoch)
+        self._inner_trainer.save_checkpoint(str(checkpoint_path))
         _log.info("Saved checkpoint: %s", checkpoint_path)
 
     def load_checkpoint(self, path: str) -> int:
@@ -384,9 +394,9 @@ class STEPNetTrainer:
         Returns:
             Epoch number from checkpoint.
         """
-        epoch = self._inner_trainer.load_checkpoint(path)
-        _log.info("Loaded checkpoint from epoch %d", epoch)
-        return epoch
+        self._inner_trainer.load_checkpoint(path)
+        _log.info("Loaded checkpoint from %s", path)
+        return 0
 
     def finish(self) -> None:
         """Clean up resources."""

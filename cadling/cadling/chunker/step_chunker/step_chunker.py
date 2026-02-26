@@ -223,11 +223,10 @@ class STEPChunker(BaseCADChunker):
                     )
                     chunk_count += 1
 
-                    # Start new batch with overlap
-                    overlap_items = current_batch[-1:]  # Keep last item for context
-                    current_batch = overlap_items
+                    # Start new batch with token-count-aware overlap
+                    current_batch = self._get_overlap_items(current_batch)
                     current_tokens = sum(
-                        entity_token_cache[item.entity_id] for item in overlap_items
+                        entity_token_cache[item.entity_id] for item in current_batch
                     )
 
                 current_batch.append(entity)
@@ -323,22 +322,6 @@ class STEPChunker(BaseCADChunker):
 
         return components
 
-    def _item_to_text(self, item) -> str:
-        """Convert item to text.
-
-        Args:
-            item: CAD item
-
-        Returns:
-            Text representation
-        """
-        if isinstance(item, STEPEntityItem):
-            parts = [f"#{item.entity_id} {item.entity_type}"]
-            if item.text:
-                parts.append(item.text)
-            return "\n".join(parts)
-        return item.text or item.label.text
-
     def _create_chunk_from_entities(
         self,
         entities: list[STEPEntityItem],
@@ -408,5 +391,11 @@ class STEPChunker(BaseCADChunker):
 
 
 # Convenience aliases
-EntityGroupChunker = lambda **kwargs: STEPChunker(strategy="entity_type", **kwargs)
-TopologyChunker = lambda **kwargs: STEPChunker(strategy="topology", **kwargs)
+def EntityGroupChunker(**kwargs) -> STEPChunker:
+    """Create a STEPChunker with entity_type strategy."""
+    return STEPChunker(strategy="entity_type", **kwargs)
+
+
+def TopologyChunker(**kwargs) -> STEPChunker:
+    """Create a STEPChunker with topology strategy."""
+    return STEPChunker(strategy="topology", **kwargs)

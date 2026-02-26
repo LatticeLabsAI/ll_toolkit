@@ -267,29 +267,39 @@ class GenerationMetrics:
         if len(gen_features) == 0 or len(ref_features) == 0:
             return float("inf")
 
-        # Create histograms with shared bins
-        all_features = np.concatenate([gen_features, ref_features])
-        bin_edges = np.linspace(
-            all_features.min(), all_features.max(), num_bins + 1
-        )
+        # Features are N×D (7D descriptors). Compute JSD per dimension and average.
+        gen_features = np.atleast_2d(gen_features)
+        ref_features = np.atleast_2d(ref_features)
+        n_dims = gen_features.shape[1] if gen_features.ndim > 1 else 1
 
-        gen_hist, _ = np.histogram(gen_features, bins=bin_edges, density=True)
-        ref_hist, _ = np.histogram(ref_features, bins=bin_edges, density=True)
-
-        # Add small epsilon to avoid log(0)
         eps = 1e-10
-        gen_hist = gen_hist + eps
-        ref_hist = ref_hist + eps
+        jsd_per_dim = []
+        for d in range(n_dims):
+            gen_d = gen_features[:, d] if n_dims > 1 else gen_features.ravel()
+            ref_d = ref_features[:, d] if n_dims > 1 else ref_features.ravel()
 
-        # Normalize to probability distributions
-        gen_prob = gen_hist / gen_hist.sum()
-        ref_prob = ref_hist / ref_hist.sum()
+            all_d = np.concatenate([gen_d, ref_d])
+            if all_d.min() == all_d.max():
+                # All values identical along this dimension — JSD is 0
+                jsd_per_dim.append(0.0)
+                continue
+            bin_edges = np.linspace(all_d.min(), all_d.max(), num_bins + 1)
 
-        # JSD = 0.5 * KL(P || M) + 0.5 * KL(Q || M) where M = 0.5*(P+Q)
-        m_prob = 0.5 * (gen_prob + ref_prob)
-        kl_pm = np.sum(gen_prob * np.log(gen_prob / m_prob))
-        kl_qm = np.sum(ref_prob * np.log(ref_prob / m_prob))
-        jsd = 0.5 * kl_pm + 0.5 * kl_qm
+            gen_hist, _ = np.histogram(gen_d, bins=bin_edges, density=True)
+            ref_hist, _ = np.histogram(ref_d, bins=bin_edges, density=True)
+
+            gen_hist = gen_hist + eps
+            ref_hist = ref_hist + eps
+
+            gen_prob = gen_hist / gen_hist.sum()
+            ref_prob = ref_hist / ref_hist.sum()
+
+            m_prob = 0.5 * (gen_prob + ref_prob)
+            kl_pm = np.sum(gen_prob * np.log(gen_prob / m_prob))
+            kl_qm = np.sum(ref_prob * np.log(ref_prob / m_prob))
+            jsd_per_dim.append(0.5 * kl_pm + 0.5 * kl_qm)
+
+        jsd = float(np.mean(jsd_per_dim))
 
         _log.info("JSD: %.6f", jsd)
         return float(jsd)
@@ -317,9 +327,11 @@ class GenerationMetrics:
             shapes: List of shapes.
 
         Returns:
-            1D numpy array of scalar features, one per shape.  Each scalar
-            is the L2 norm of the 7-dim descriptor, providing a single
-            value that captures more shape variation than centroid-norm alone.
+            2D numpy array of shape (N, 7) where N is the number of
+            successfully sampled shapes.  Each row is a 7-dimensional
+            descriptor.  Returns an empty array if no shapes could be
+            sampled.  The caller (``jensen_shannon_divergence``) computes
+            JSD independently per dimension and averages the results.
         """
         features = []
         for shape in shapes:
@@ -343,8 +355,8 @@ class GenerationMetrics:
                     dists.mean(),                    # 6. mean spread
                     dists.std(),                     # 7. spread uniformity
                 ])
-                # Collapse to scalar for histogram-based JSD
-                features.append(np.linalg.norm(descriptor))
+                # Use full 7D descriptor for richer distribution comparison
+                features.append(descriptor)
         return np.array(features) if features else np.array([])
 
     def novelty(

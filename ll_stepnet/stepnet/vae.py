@@ -167,6 +167,7 @@ class STEPVAE(nn.Module):
 
         mu = self.mu_head(pooled)
         log_var = self.log_var_head(pooled)
+        log_var = torch.clamp(log_var, -30, 20)
 
         return mu, log_var
 
@@ -183,7 +184,7 @@ class STEPVAE(nn.Module):
             Sampled latent z of shape [batch_size, latent_dim].
         """
         if self.training:
-            std = torch.exp(0.5 * log_var)
+            std = torch.exp(0.5 * torch.clamp(log_var, -30, 20))
             eps = torch.randn_like(std)
             return mu + eps * std
         return mu
@@ -238,13 +239,17 @@ class STEPVAE(nn.Module):
         # Process through decoder layers with optional per-layer conditioning
         if conditioner is not None and conditioning_inputs is not None:
             # Apply conditioning with block_index for skip logic (Text2CAD)
+            # Use z_proj as memory for cross-attention on the latent
+            z_memory = z_proj.unsqueeze(1).expand(batch_size, seq_len, -1)
             hidden = self._decode_with_conditioning(
-                hidden, causal_mask, conditioner, conditioning_inputs
+                hidden, causal_mask, conditioner, conditioning_inputs,
+                z_memory=z_memory,
             )
         else:
-            # Standard decoder forward (self-attention only)
+            # Standard decoder forward with z-based memory for cross-attention
+            z_memory = z_proj.unsqueeze(1).expand(batch_size, seq_len, -1)
             hidden = self.decoder.transformer(
-                hidden, memory=hidden, tgt_mask=causal_mask
+                hidden, memory=z_memory, tgt_mask=causal_mask
             )
 
         hidden = self.decoder.layer_norm(hidden)
@@ -256,6 +261,7 @@ class STEPVAE(nn.Module):
         causal_mask: torch.Tensor,
         conditioner: nn.Module,
         conditioning_inputs: Dict,
+        z_memory: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """Decode with per-layer conditioning injection.
 
@@ -269,14 +275,18 @@ class STEPVAE(nn.Module):
             conditioner: Conditioner module.
             conditioning_inputs: Dict with text_input_ids, text_attention_mask,
                 and/or pixel_values.
+            z_memory: Projected latent z for cross-attention [B, S, D].
 
         Returns:
             Updated hidden states [B, S, D].
         """
+        # Use z_memory for cross-attention if provided, otherwise fall back to hidden
+        memory = z_memory if z_memory is not None else hidden
+
         # Access individual decoder layers
         for block_index, layer in enumerate(self.decoder.transformer.layers):
-            # Standard decoder layer forward (self-attn + cross-attn + FFN)
-            hidden = layer(hidden, memory=hidden, tgt_mask=causal_mask)
+            # Standard decoder layer forward (self-attn + cross-attn on z + FFN)
+            hidden = layer(hidden, memory=memory, tgt_mask=causal_mask)
 
             # Apply conditioner with block_index for skip logic
             # The conditioner will skip cross-attention if block_index < skip_blocks
@@ -321,6 +331,9 @@ class STEPVAE(nn.Module):
         # Output heads
         command_logits = self.command_head(hidden)  # [B, S, C]
         param_logits = [head(hidden) for head in self.param_heads]  # 16 x [B, S, P]
+
+        # Clamp log_var to prevent Inf from .exp() and NaN-poisoned KL loss
+        log_var = torch.clamp(log_var, min=-30, max=20)
 
         # KL divergence: -0.5 * sum(1 + log_var - mu^2 - exp(log_var))
         kl_loss = -0.5 * torch.mean(

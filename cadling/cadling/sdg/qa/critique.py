@@ -242,8 +242,7 @@ class CADJudge:
 
         try:
             response = self.agent.ask(prompt, max_tokens=512)
-            critique = parse_critique_response(response)
-            critique.dimension = "level_consistency"
+            critique = parse_critique_response(response, dimension="level_consistency")
             return critique
         except Exception as e:
             _log.warning(f"Failed level consistency critique: {e}")
@@ -315,8 +314,8 @@ Generate ONLY the improved answer, nothing else."""
             improved_answer = postprocess_answer(improved_answer)
 
             if improved_answer and improved_answer != qac.answer:
-                qac.answer = improved_answer
                 qac.metadata["original_answer"] = qac.answer
+                qac.answer = improved_answer
                 return qac
 
         except Exception as e:
@@ -358,8 +357,7 @@ Generate ONLY the improved answer, nothing else."""
             )
 
             response = self.agent.ask(prompt, max_tokens=512)
-            critique = parse_critique_response(response)
-            critique.dimension = dim
+            critique = parse_critique_response(response, dimension=dim)
             critiques[dim] = critique
 
         return critiques

@@ -16,6 +16,7 @@ Classes:
 
 from __future__ import annotations
 
+import math
 from typing import List, Optional, Tuple
 
 from pydantic import BaseModel, Field, field_validator
@@ -219,7 +220,11 @@ class PointCloud(BaseModel):
     colors: Optional[List[List[float]]] = None
     normals: Optional[List[List[float]]] = None
     intensities: Optional[List[float]] = None
-    num_points: int = 0
+
+    @property
+    def num_points(self) -> int:
+        """Number of points derived from points list."""
+        return len(self.points)
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -267,7 +272,7 @@ class PointCloud(BaseModel):
         voxel_dict = {}
         for i, point in enumerate(self.points):
             # Compute voxel coordinates
-            voxel_coords = tuple(int(p / voxel_size) for p in point)
+            voxel_coords = tuple(math.floor(p / voxel_size) for p in point)
 
             if voxel_coords not in voxel_dict:
                 voxel_dict[voxel_coords] = {
@@ -318,5 +323,4 @@ class PointCloud(BaseModel):
             points=downsampled_points,
             colors=downsampled_colors,
             normals=downsampled_normals,
-            num_points=len(downsampled_points),
         )

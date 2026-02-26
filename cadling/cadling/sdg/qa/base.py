@@ -148,10 +148,7 @@ class LlmOptions(BaseModel):
     max_tokens: int = Field(default=512, ge=1, le=100000)
     timeout: int = Field(default=60, ge=1)
 
-    class Config:
-        """Pydantic config."""
-
-        use_enum_values = True
+    model_config = ConfigDict(use_enum_values=True)
 
 
 class CADSampleOptions(BaseModel):
@@ -179,10 +176,7 @@ class CADSampleOptions(BaseModel):
     seed: int = Field(default=0)
     include_topology: bool = True
 
-    class Config:
-        """Pydantic config."""
-
-        use_enum_values = True
+    model_config = ConfigDict(use_enum_values=True)
 
 
 class CADGenerateOptions(LlmOptions):
@@ -382,13 +376,7 @@ class Critique(BaseModel):
     rating: Optional[int] = Field(default=None, ge=1, le=5)
     suggestions: Optional[str] = None
 
-    @field_validator("rating")
-    @classmethod
-    def validate_rating(cls, v: Optional[int]) -> Optional[int]:
-        """Validate rating is in valid range."""
-        if v is not None and (v < 1 or v > 5):
-            raise ValueError("rating must be between 1 and 5")
-        return v
+    # rating range validated by Field(ge=1, le=5) above
 
 
 class CADGenQAC(BaseModel):

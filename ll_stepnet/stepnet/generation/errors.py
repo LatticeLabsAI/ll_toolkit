@@ -38,6 +38,9 @@ class CADGenerationError(Exception):
     def __post_init__(self) -> None:
         super().__init__(self.message)
 
+    def __reduce__(self):
+        return (self.__class__, (self.message, self.recoverable, self.context, self.original_exception))
+
     def __str__(self) -> str:
         parts = [self.message]
         if self.context:

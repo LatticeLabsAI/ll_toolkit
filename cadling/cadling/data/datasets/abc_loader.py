@@ -51,6 +51,7 @@ class ABCLoader(BaseCADDataset):
         self.max_faces = max_faces
         self.min_faces = min_faces
         self._file_paths: list[Path] = []
+        self._cache_max_size = 1000
         self._cached_samples: dict[int, dict[str, Any]] = {}
 
         super().__init__(root_dir, split, transform, download, hub_id, streaming)
@@ -78,6 +79,10 @@ class ABCLoader(BaseCADDataset):
         else:
             sample = self._load_step_file(self._file_paths[idx])
             if sample is not None:
+                # Evict oldest entries if cache is full
+                if len(self._cached_samples) >= self._cache_max_size:
+                    oldest_key = next(iter(self._cached_samples))
+                    del self._cached_samples[oldest_key]
                 self._cached_samples[idx] = sample
 
         if sample is None:
@@ -149,10 +154,18 @@ class ABCLoader(BaseCADDataset):
 
             with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
                 tmp_path = tmp.name
-                urllib.request.urlretrieve(chunk_url, tmp_path)
+                with urllib.request.urlopen(chunk_url, timeout=60) as resp:
+                    with open(tmp_path, "wb") as out:
+                        out.write(resp.read())
 
             with zipfile.ZipFile(tmp_path, "r") as zf:
-                zf.extractall(str(self.root_dir / self.split))
+                dest = str(self.root_dir / self.split)
+                for info in zf.infolist():
+                    member_path = os.path.normpath(os.path.join(dest, info.filename))
+                    if not member_path.startswith(os.path.realpath(dest)):
+                        _log.warning("Skipping unsafe zip member: %s", info.filename)
+                        continue
+                    zf.extract(info, dest)
             os.unlink(tmp_path)
 
             if self._verify_integrity():
@@ -219,7 +232,10 @@ class ABCLoader(BaseCADDataset):
             from cadling.datamodel.base_models import CADlingDocument
 
             doc = CADlingDocument()
-            doc.properties = {"step_text": path.read_text(errors="replace")}
+            # Store only the file path instead of the full STEP text to avoid
+            # keeping 1-10 MB per sample in memory.  The graph builder reads
+            # from the path lazily when needed.
+            doc.properties = {"step_file_path": str(path)}
 
             graph_data = builder.build_face_graph(doc)
 

@@ -70,12 +70,8 @@ class BRepBackend(DeclarativeCADBackend, RenderableCADBackend):
             self.has_pythonocc = True
             _log.debug("pythonocc-core available for BRep processing")
         except ImportError:
-            _log.error(
+            _log.warning(
                 "pythonocc-core not available. BRep backend requires pythonocc-core. "
-                "Install with: conda install pythonocc-core"
-            )
-            raise RuntimeError(
-                "BRep backend requires pythonocc-core. "
                 "Install with: conda install pythonocc-core"
             )
 
@@ -306,7 +302,10 @@ class BRepBackend(DeclarativeCADBackend, RenderableCADBackend):
         def get_or_create_id(shape) -> int:
             """Get or create unique ID for a shape."""
             nonlocal node_id_counter
-            shape_hash = shape.HashCode(2147483647)
+            try:
+                shape_hash = shape.HashCode(2147483647)
+            except Exception:
+                shape_hash = hash(shape)
             if shape_hash not in shape_to_id:
                 shape_to_id[shape_hash] = node_id_counter
                 adjacency_list[node_id_counter] = []
@@ -460,6 +459,7 @@ class BRepBackend(DeclarativeCADBackend, RenderableCADBackend):
             "left",
             "isometric",
             "isometric2",
+            "isometric_back",
         ]
 
     def load_view(self, view_name: str) -> CADViewBackend:
@@ -488,81 +488,16 @@ class BRepViewBackend(CADViewBackend):
 
     def render(self, resolution: int = 1024) -> Image.Image:
         """Render this view to an image using pythonocc-core offscreen rendering."""
+        from cadling.backend.pythonocc_core_backend import render_shape_to_image
+
         try:
-            from OCC.Display.OCCViewer import Viewer3d
-            from OCC.Core.V3d import V3d_DirectionalLight
-            from OCC.Core.gp import gp_Dir
-            from OCC.Core.Quantity import Quantity_Color, Quantity_TOC_RGB
-            from OCC.Core.Graphic3d import Graphic3d_TOSM_FRAGMENT
-            import tempfile
-
-            # Load shape
             shape = self.brep_backend._load_shape()
-
             _log.info(f"Rendering BRep {self.view_name} view at {resolution}x{resolution}")
-
-            # Create offscreen viewer (no window)
-            display = Viewer3d()
-            display.Create()
-
-            # Set viewer size
-            display.SetSize(resolution, resolution)
-
-            # Set background color (white)
-            bg_color = Quantity_Color(1.0, 1.0, 1.0, Quantity_TOC_RGB)
-            display.View.SetBackgroundColor(bg_color)
-
-            # Display the shape
-            display.DisplayShape(shape, update=True)
-
-            # Set view orientation
-            self._set_view_orientation(display.View, self.view_name)
-
-            # Fit the view to show entire shape
-            display.FitAll()
-
-            # Add directional lighting
-            self._add_lighting(display)
-
-            # Set high-quality shading (Phong shading)
-            display.View.SetShadingModel(Graphic3d_TOSM_FRAGMENT)
-
-            # Enable antialiasing
-            try:
-                display.EnableAntiAliasing()
-            except Exception as e:
-                _log.debug(f"Antialiasing not available: {e}")
-
-            # Render to temporary file then load as PIL Image
-            with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_file:
-                tmp_path = tmp_file.name
-
-            try:
-                # Dump view to file
-                display.View.Dump(tmp_path)
-
-                # Load image with PIL
-                img = Image.open(tmp_path)
-
-                # Convert to RGB if needed
-                if img.mode != 'RGB':
-                    img = img.convert('RGB')
-
-                _log.info(f"Successfully rendered {self.view_name} view")
-
-                return img
-
-            finally:
-                # Clean up temporary file
-                import os
-                try:
-                    os.unlink(tmp_path)
-                except OSError:
-                    pass  # File cleanup failed, continue
-
+            img = render_shape_to_image(shape, self.view_name, resolution)
+            _log.info(f"Successfully rendered {self.view_name} view")
+            return img
         except Exception as e:
             _log.error(f"Failed to render view {self.view_name}: {e}")
-            # Return error image
             img = Image.new("RGB", (resolution, resolution), color=(255, 200, 200))
             from PIL import ImageDraw
             draw = ImageDraw.Draw(img)
@@ -596,7 +531,7 @@ class BRepViewBackend(CADViewBackend):
             view.SetProj(1, 0, 0)
         elif view_name == "isometric":
             view.SetProj(1, -1, 1)
-        elif view_name == "isometric_back":
+        elif view_name in ("isometric_back", "isometric2"):
             view.SetProj(-1, 1, 1)
         else:
             # Default to front
@@ -636,63 +571,8 @@ class BRepViewBackend(CADViewBackend):
 
     def get_camera_parameters(self) -> dict:
         """Get camera parameters for this view."""
-        view_params = {
-            "front": {
-                "position": [0, 0, 100],
-                "direction": [0, 0, -1],
-                "up": [0, 1, 0],
-                "fov": 45.0,
-            },
-            "back": {
-                "position": [0, 0, -100],
-                "direction": [0, 0, 1],
-                "up": [0, 1, 0],
-                "fov": 45.0,
-            },
-            "top": {
-                "position": [0, 100, 0],
-                "direction": [0, -1, 0],
-                "up": [0, 0, -1],
-                "fov": 45.0,
-            },
-            "bottom": {
-                "position": [0, -100, 0],
-                "direction": [0, 1, 0],
-                "up": [0, 0, 1],
-                "fov": 45.0,
-            },
-            "right": {
-                "position": [100, 0, 0],
-                "direction": [-1, 0, 0],
-                "up": [0, 1, 0],
-                "fov": 45.0,
-            },
-            "left": {
-                "position": [-100, 0, 0],
-                "direction": [1, 0, 0],
-                "up": [0, 1, 0],
-                "fov": 45.0,
-            },
-            "isometric": {
-                "position": [100, 100, 100],
-                "direction": [-1, -1, -1],
-                "up": [0, 1, 0],
-                "fov": 45.0,
-            },
-            "isometric2": {
-                "position": [-100, 100, 100],
-                "direction": [1, -1, -1],
-                "up": [0, 1, 0],
-                "fov": 45.0,
-            },
-        }
+        from cadling.backend.abstract_backend import DEFAULT_CAMERA_PARAMETERS
 
-        return view_params.get(
-            self.view_name,
-            {
-                "position": [100, 100, 100],
-                "direction": [-1, -1, -1],
-                "up": [0, 1, 0],
-                "fov": 45.0,
-            },
+        return DEFAULT_CAMERA_PARAMETERS.get(
+            self.view_name, DEFAULT_CAMERA_PARAMETERS["front"]
         )

@@ -32,9 +32,9 @@ class FeatureQuantizationParams:
         scale: Pre-computed per-dimension scale factor.
     """
     dim: int
-    min_vals: np.ndarray
-    max_vals: np.ndarray
-    scale: np.ndarray  # (max_vals - min_vals) per dimension
+    min_vals: np.ndarray = field(repr=False)
+    max_vals: np.ndarray = field(repr=False)
+    scale: np.ndarray = field(repr=False)  # (max_vals - min_vals) per dimension
 
 
 class FeatureVectorQuantizer:
@@ -69,6 +69,15 @@ class FeatureVectorQuantizer:
         Learns per-dimension (or global) min/max values that will be
         used to map features to the quantization range.
 
+        Note:
+            This method caches the returned params in ``self._params``
+            for convenience (so that subsequent ``quantize()`` calls can
+            omit the *params* argument).  However, because the cached
+            state is overwritten on every call, callers that need
+            thread-safety or interleaved fits should use the **returned**
+            ``FeatureQuantizationParams`` object directly instead of
+            relying on the cached instance state.
+
         Args:
             features: Feature array of shape (N, D) where N is number
                 of samples and D is feature dimensionality.
@@ -79,6 +88,14 @@ class FeatureVectorQuantizer:
         Raises:
             ValueError: If features array is not 2D.
         """
+        if self._params is not None:
+            _log.warning(
+                "FeatureVectorQuantizer.fit() is overwriting previously "
+                "fitted params (dim=%d). Use the returned params object "
+                "for thread-safe / multi-fit workflows.",
+                self._params.dim,
+            )
+
         if features.ndim != 2:
             raise ValueError(f"Expected 2D features, got shape {features.shape}")
 

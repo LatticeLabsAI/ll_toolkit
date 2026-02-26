@@ -71,6 +71,9 @@ class ShapeIdentityRegistry:
         self._face_indices: Dict[str, int] = {}
         self._edge_indices: Dict[str, int] = {}
         self._vertex_indices: Dict[str, int] = {}
+        # Inverse mappings: index -> id for O(1) lookup by index
+        self._face_by_index: Dict[int, str] = {}
+        self._edge_by_index: Dict[int, str] = {}
 
     def get_id(self, shape: Any) -> str:
         """Get stable ID for a shape.
@@ -102,8 +105,10 @@ class ShapeIdentityRegistry:
         face_id = self.get_id(face)
 
         if face_id not in self._faces:
+            idx = len(self._face_indices)
             self._faces[face_id] = face
-            self._face_indices[face_id] = len(self._face_indices)
+            self._face_indices[face_id] = idx
+            self._face_by_index[idx] = face_id
 
         return face_id
 
@@ -119,8 +124,10 @@ class ShapeIdentityRegistry:
         edge_id = self.get_id(edge)
 
         if edge_id not in self._edges:
+            idx = len(self._edge_indices)
             self._edges[edge_id] = edge
-            self._edge_indices[edge_id] = len(self._edge_indices)
+            self._edge_indices[edge_id] = idx
+            self._edge_by_index[idx] = edge_id
 
         return edge_id
 
@@ -287,19 +294,23 @@ class ShapeIdentityRegistry:
     def get_face_by_index(self, index: int) -> Optional[Tuple[str, Any]]:
         """Get face by sequential index.
 
+        Uses inverse mapping for O(1) lookup.
+
         Args:
             index: Sequential index
 
         Returns:
             Tuple of (face_id, face) or None if not found
         """
-        for face_id, idx in self._face_indices.items():
-            if idx == index:
-                return (face_id, self._faces[face_id])
+        face_id = self._face_by_index.get(index)
+        if face_id is not None:
+            return (face_id, self._faces[face_id])
         return None
 
     def get_edge_by_index(self, index: int) -> Optional[Tuple[str, Any]]:
         """Get edge by sequential index.
+
+        Uses inverse mapping for O(1) lookup.
 
         Args:
             index: Sequential index
@@ -307,9 +318,9 @@ class ShapeIdentityRegistry:
         Returns:
             Tuple of (edge_id, edge) or None if not found
         """
-        for edge_id, idx in self._edge_indices.items():
-            if idx == index:
-                return (edge_id, self._edges[edge_id])
+        edge_id = self._edge_by_index.get(index)
+        if edge_id is not None:
+            return (edge_id, self._edges[edge_id])
         return None
 
     def faces(self) -> Iterator[Tuple[str, Any]]:
@@ -359,6 +370,8 @@ class ShapeIdentityRegistry:
         self._face_indices.clear()
         self._edge_indices.clear()
         self._vertex_indices.clear()
+        self._face_by_index.clear()
+        self._edge_by_index.clear()
 
     def to_dict(self) -> Dict[str, Any]:
         """Export registry state to dictionary.

@@ -2,7 +2,9 @@
 STEP Tokenizer Module
 Converts STEP text to token IDs following standard tokenizer design.
 """
+from __future__ import annotations
 
+import hashlib
 import re
 from typing import List, Dict
 
@@ -14,11 +16,14 @@ class STEPTokenizer:
     No feature extraction or graph building.
     """
 
-    def __init__(self, vocab_size: int = 50000):
+    def __init__(self, vocab_size: int = 50000, config=None):
         """
         Args:
             vocab_size: Maximum vocabulary size
+            config: Optional STEPTokenizerConfig instance
         """
+        if config is not None:
+            vocab_size = config.vocab_size
         self.vocab_size = vocab_size
 
         # Special tokens
@@ -116,7 +121,7 @@ class STEPTokenizer:
                 token_ids.append(self.vocab[token])
             else:
                 # Hash unknown tokens to vocab space
-                token_ids.append(hash(token) % self.vocab_size)
+                token_ids.append(int(hashlib.md5(token.encode()).hexdigest(), 16) % self.vocab_size)
 
         return token_ids
 

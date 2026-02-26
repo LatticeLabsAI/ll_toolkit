@@ -64,6 +64,7 @@ class TestTokenize:
         ]
         result = tokenizer.tokenize(commands)
         assert len(result.command_tokens) > 0
+        assert result.command_tokens[0].command_type == CommandType.LINE
 
     def test_tokenize_with_dict_params(self):
         """Test tokenizing with dict-style params."""
@@ -279,6 +280,7 @@ class TestPadOrTruncate:
         truncated = tokenizer.pad_or_truncate(tokens)
         # Should cut after first EXTRUDE (index 3), then pad to 5
         assert truncated[3].command_type == CommandType.EXTRUDE
+        assert truncated[4].command_type == CommandType.EOS
 
 
 class TestAnalyzeRoundtripQuality:

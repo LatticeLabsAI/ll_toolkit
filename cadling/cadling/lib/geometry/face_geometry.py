@@ -13,6 +13,20 @@ import numpy as np
 
 _log = logging.getLogger(__name__)
 
+try:
+    from OCC.Core.BRep import BRep_Tool
+    from OCC.Core.BRepBndLib import brepbndlib
+    from OCC.Core.BRepGProp import brepgprop
+    from OCC.Core.BRepTools import breptools
+    from OCC.Core.Bnd import Bnd_Box
+    from OCC.Core.GeomLProp import GeomLProp_SLProps
+    from OCC.Core.GProp import GProp_GProps
+    from OCC.Core.gp import gp_Dir
+
+    HAS_OCC = True
+except ImportError:
+    HAS_OCC = False
+
 
 class FaceGeometryExtractor:
     """Extract geometric features from pythonocc TopoDS_Face objects.
@@ -37,20 +51,10 @@ class FaceGeometryExtractor:
 
     def __init__(self):
         """Initialize face geometry extractor."""
-        try:
-            from OCC.Core.BRepTools import breptools
-            from OCC.Core.BRepGProp import brepgprop
-            from OCC.Core.GProp import GProp_GProps
-            from OCC.Core.GeomLProp import GeomLProp_SLProps
-            from OCC.Core.BRep import BRep_Tool
-            from OCC.Core.Bnd import Bnd_Box
-            from OCC.Core.BRepBndLib import brepbndlib
-
-            self.has_pythonocc = True
+        self.has_pythonocc = HAS_OCC
+        if HAS_OCC:
             _log.debug("FaceGeometryExtractor initialized with pythonocc-core")
-
-        except ImportError:
-            self.has_pythonocc = False
+        else:
             _log.warning(
                 "pythonocc-core not available. "
                 "FaceGeometryExtractor will return None for all features."
@@ -111,10 +115,6 @@ class FaceGeometryExtractor:
             return None
 
         try:
-            from OCC.Core.BRepTools import breptools
-            from OCC.Core.BRep import BRep_Tool
-            from OCC.Core.GeomLProp import GeomLProp_SLProps
-
             # Get UV bounds
             u_min, u_max, v_min, v_max = breptools.UVBounds(face)
 
@@ -157,11 +157,6 @@ class FaceGeometryExtractor:
             return None
 
         try:
-            from OCC.Core.BRepTools import breptools
-            from OCC.Core.BRep import BRep_Tool
-            from OCC.Core.GeomLProp import GeomLProp_SLProps
-            from OCC.Core.gp import gp_Dir
-
             # Get UV bounds
             u_min, u_max, v_min, v_max = breptools.UVBounds(face)
 
@@ -199,9 +194,6 @@ class FaceGeometryExtractor:
             return None
 
         try:
-            from OCC.Core.BRepGProp import brepgprop
-            from OCC.Core.GProp import GProp_GProps
-
             # Compute surface properties
             props = GProp_GProps()
             brepgprop.SurfaceProperties(face, props)
@@ -228,9 +220,6 @@ class FaceGeometryExtractor:
             return None
 
         try:
-            from OCC.Core.Bnd import Bnd_Box
-            from OCC.Core.BRepBndLib import brepbndlib
-
             # Create bounding box
             bbox = Bnd_Box()
             brepbndlib.Add(face, bbox)
@@ -262,9 +251,6 @@ class FaceGeometryExtractor:
             return None
 
         try:
-            from OCC.Core.BRepGProp import brepgprop
-            from OCC.Core.GProp import GProp_GProps
-
             # Compute surface properties
             props = GProp_GProps()
             brepgprop.SurfaceProperties(face, props)

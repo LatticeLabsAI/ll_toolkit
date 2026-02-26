@@ -18,9 +18,9 @@ _log = logging.getLogger(__name__)
 @dataclass
 class FeatureDensityResult:
     """Per-vertex feature density results."""
-    density: np.ndarray              # Density score per vertex (N,)
-    edge_length_variance: np.ndarray # Local edge length variance (N,)
-    face_area_variance: np.ndarray   # Local face area variance (N,)
+    density: np.ndarray = field(default_factory=lambda: np.array([]))              # Density score per vertex (N,)
+    edge_length_variance: np.ndarray = field(default_factory=lambda: np.array([]))  # Local edge length variance (N,)
+    face_area_variance: Optional[np.ndarray] = field(default=None)   # Local face area variance (N,), None for point clouds
     min_value: float = 0.0
     max_value: float = 0.0
     mean_value: float = 0.0
@@ -55,39 +55,55 @@ class FeatureDensityAnalyzer:
             FeatureDensityResult with per-vertex density scores
         """
         n_verts = len(vertices)
+        _log.debug("Analyzing feature density for mesh with %d vertices", n_verts)
 
-        # Build vertex-to-face adjacency
+        n_faces = len(faces)
+
+        # Compute face areas vectorized
+        if n_faces > 0:
+            v0 = vertices[faces[:, 0]]
+            v1 = vertices[faces[:, 1]]
+            v2 = vertices[faces[:, 2]]
+            face_areas = 0.5 * np.linalg.norm(np.cross(v1 - v0, v2 - v0), axis=1)
+        else:
+            face_areas = np.zeros(0)
+
+        # Build vertex-to-face adjacency using vectorized approach
         vert_faces = [[] for _ in range(n_verts)]
-        for fi, face in enumerate(faces):
-            for vi in face:
-                vert_faces[vi].append(fi)
+        if n_faces > 0:
+            face_indices = np.arange(n_faces)
+            for col in range(3):
+                for fi, vi in zip(face_indices, faces[:, col]):
+                    vert_faces[vi].append(fi)
 
-        # Build vertex-to-vertex adjacency (edges)
-        vert_neighbors = [set() for _ in range(n_verts)]
-        for face in faces:
-            i, j, k = face
-            vert_neighbors[i].update([j, k])
-            vert_neighbors[j].update([i, k])
-            vert_neighbors[k].update([i, j])
-
-        # Compute face areas
-        face_areas = np.zeros(len(faces))
-        for fi, face in enumerate(faces):
-            v0, v1, v2 = vertices[face[0]], vertices[face[1]], vertices[face[2]]
-            face_areas[fi] = 0.5 * np.linalg.norm(np.cross(v1 - v0, v2 - v0))
-
-        # Per-vertex edge length variance and face area variance
+        # Build edge list vectorized and compute per-vertex edge length variance
         edge_length_var = np.zeros(n_verts)
         face_area_var = np.zeros(n_verts)
+
+        if n_faces > 0:
+            # Build all edges from faces: 3 edges per face
+            edges = np.vstack([
+                faces[:, [0, 1]],
+                faces[:, [1, 2]],
+                faces[:, [0, 2]],
+            ])  # (3F, 2)
+
+            # Build vertex neighbor sets from edge array (vectorized)
+            from scipy.sparse import csr_matrix
+            data = np.ones(len(edges) * 2, dtype=np.int8)
+            row = np.concatenate([edges[:, 0], edges[:, 1]])
+            col = np.concatenate([edges[:, 1], edges[:, 0]])
+            adj = csr_matrix((data, (row, col)), shape=(n_verts, n_verts))
+            vert_neighbors = [set(adj[i].indices) for i in range(n_verts)]
+        else:
+            vert_neighbors = [set() for _ in range(n_verts)]
 
         for vi in range(n_verts):
             # Edge lengths to neighbors
             neighbors = list(vert_neighbors[vi])
             if len(neighbors) > 1:
-                edge_lengths = np.array([
-                    np.linalg.norm(vertices[ni] - vertices[vi])
-                    for ni in neighbors
-                ])
+                neighbor_verts = vertices[neighbors]
+                edge_lengths = np.linalg.norm(neighbor_verts - vertices[vi], axis=1)
                 edge_length_var[vi] = np.var(edge_lengths)
 
             # Face areas around vertex
@@ -106,7 +122,7 @@ class FeatureDensityAnalyzer:
         # Combined density: weighted average
         density = 0.5 * edge_length_var_norm + 0.5 * face_area_var_norm
 
-        return FeatureDensityResult(
+        result = FeatureDensityResult(
             density=density,
             edge_length_variance=edge_length_var,
             face_area_variance=face_area_var,
@@ -114,6 +130,11 @@ class FeatureDensityAnalyzer:
             max_value=float(np.max(density)) if n_verts > 0 else 0.0,
             mean_value=float(np.mean(density)) if n_verts > 0 else 0.0,
         )
+        _log.debug(
+            "Feature density analysis complete: min=%.4f, max=%.4f, mean=%.4f",
+            result.min_value, result.max_value, result.mean_value,
+        )
+        return result
 
     def analyze_point_cloud(self, points: np.ndarray) -> FeatureDensityResult:
         """Estimate feature density for point cloud using k-NN.
@@ -128,12 +149,13 @@ class FeatureDensityAnalyzer:
             FeatureDensityResult with per-point density scores
         """
         n_points = len(points)
+        _log.debug("Analyzing feature density for point cloud with %d points", n_points)
 
         if n_points == 0:
             return FeatureDensityResult(
                 density=np.zeros(0),
                 edge_length_variance=np.zeros(0),
-                face_area_variance=np.zeros(0),
+                face_area_variance=None,
                 min_value=0.0,
                 max_value=0.0,
                 mean_value=0.0,
@@ -175,7 +197,7 @@ class FeatureDensityAnalyzer:
         return FeatureDensityResult(
             density=combined,
             edge_length_variance=edge_length_var,
-            face_area_variance=np.zeros(n_points),  # No faces for point clouds
+            face_area_variance=None,  # No faces for point clouds
             min_value=float(np.min(combined)),
             max_value=float(np.max(combined)),
             mean_value=float(np.mean(combined)),

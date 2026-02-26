@@ -389,7 +389,7 @@ class VAETrainer:
         return metrics
 
     @torch.no_grad()
-    def visualize_latent_space(self, epoch: int) -> None:
+    def visualize_latent_space(self, epoch: int, max_samples: int = 1000) -> None:
         """Encode validation set and visualize latent space in 2D.
 
         Uses t-SNE (or UMAP if available) to reduce latent representations to
@@ -397,6 +397,7 @@ class VAETrainer:
 
         Args:
             epoch: Current epoch number, used for the filename.
+            max_samples: Maximum number of samples to process (default 1000).
         """
         if self.val_dataloader is None:
             _log.warning("No validation dataloader; skipping latent visualization.")
@@ -409,8 +410,11 @@ class VAETrainer:
         self.model.eval()
         all_mu = []
         all_labels = []
+        sample_count = 0
 
         for batch in self.val_dataloader:
+            if sample_count >= max_samples:
+                break
             token_ids = batch["token_ids"].to(self.device)
 
             # Encode to get latent means
@@ -425,6 +429,7 @@ class VAETrainer:
                     _, mu, _ = output
 
             all_mu.append(mu.cpu())
+            sample_count += mu.shape[0]
             if "labels" in batch:
                 all_labels.append(batch["labels"])
 
@@ -596,7 +601,7 @@ class VAETrainer:
             raise ValueError("No checkpoint_dir set; cannot load checkpoint.")
 
         load_path = self.checkpoint_dir / filename
-        checkpoint = torch.load(load_path, map_location=self.device)
+        checkpoint = torch.load(load_path, map_location=self.device, weights_only=True)
 
         self.model.load_state_dict(checkpoint["model_state_dict"])
         self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])

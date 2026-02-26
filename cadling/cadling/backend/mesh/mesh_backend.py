@@ -191,12 +191,21 @@ class MeshBackend(DeclarativeCADBackend, RenderableCADBackend):
         mesh = self._trimesh_mesh
 
         # Build document
+        # Detect actual format from file extension
+        ext = self.file.suffix.lower() if hasattr(self.file, 'suffix') else ''
+        detected_format = InputFormat.STL  # Default fallback
+        # Map mesh extensions to closest InputFormat
+        _ext_map = {'.stl': InputFormat.STL, '.obj': InputFormat.STL,
+                    '.ply': InputFormat.STL, '.off': InputFormat.STL,
+                    '.glb': InputFormat.STL, '.gltf': InputFormat.STL}
+        detected_format = _ext_map.get(ext, InputFormat.STL)
+
         doc = STLDocument(
             name=self.file.name,
-            format=InputFormat.STL,  # Using STL format for mesh documents
+            format=detected_format,
             origin=CADDocumentOrigin(
                 filename=self.file.name,
-                format=InputFormat.STL,
+                format=detected_format,
                 binary_hash=self.document_hash,
             ),
             hash=self.document_hash,
@@ -478,7 +487,8 @@ class MeshViewBackend(CADViewBackend):
             max_render_faces = 5000
             faces = mesh.faces
             if len(faces) > max_render_faces:
-                indices = np.random.choice(len(faces), max_render_faces, replace=False)
+                rng = np.random.default_rng(seed=42)
+                indices = rng.choice(len(faces), max_render_faces, replace=False)
                 faces = faces[indices]
 
             # Build polygon collection

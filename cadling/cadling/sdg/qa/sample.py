@@ -64,6 +64,7 @@ class CADPassageSampler:
             options: Sampling configuration options
         """
         self.options = options
+        self.rng = random.Random(options.seed)
         self.chunker = self._init_chunker()
 
         _log.info(
@@ -133,8 +134,7 @@ class CADPassageSampler:
 
         # Random sample if we have more chunks than max_passages
         if len(all_chunks) > self.options.max_passages:
-            random.seed(self.options.seed)
-            all_chunks = random.sample(all_chunks, self.options.max_passages)
+            all_chunks = self.rng.sample(all_chunks, self.options.max_passages)
             _log.info(f"Sampled {len(all_chunks)} passages from total pool")
 
         # Save to file
@@ -292,7 +292,6 @@ class CADPassageSampler:
 
         # Sample if needed
         if len(valid_chunks) > self.options.max_passages:
-            random.seed(self.options.seed)
-            valid_chunks = random.sample(valid_chunks, self.options.max_passages)
+            valid_chunks = self.rng.sample(valid_chunks, self.options.max_passages)
 
         yield from valid_chunks

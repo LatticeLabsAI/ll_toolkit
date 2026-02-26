@@ -122,47 +122,6 @@ class CADHybridChunker(BaseCADChunker):
 
         _log.info(f"Generated {chunk_count} chunks from document '{doc.name}'")
 
-    def _item_to_text(self, item: CADItem) -> str:
-        """Convert CAD item to text representation.
-
-        Args:
-            item: CAD item
-
-        Returns:
-            Text representation
-        """
-        parts = []
-
-        # Add label
-        parts.append(f"[{item.label.text}]")
-
-        # Add item text if available
-        if item.text:
-            parts.append(item.text)
-
-        # Add properties
-        if item.properties:
-            prop_lines = []
-            for key, value in item.properties.items():
-                # Skip embeddings (too large)
-                if key == "embedding":
-                    continue
-                prop_lines.append(f"{key}: {value}")
-
-            if prop_lines:
-                parts.append("Properties: " + ", ".join(prop_lines))
-
-        # Add bounding box info
-        if item.bbox:
-            center = item.bbox.center
-            size = item.bbox.size
-            parts.append(
-                f"BBox: center=({center[0]:.2f}, {center[1]:.2f}, {center[2]:.2f}), "
-                f"size=({size[0]:.2f}, {size[1]:.2f}, {size[2]:.2f})"
-            )
-
-        return "\n".join(parts)
-
     def _create_chunk(
         self,
         items: list[CADItem],
@@ -408,27 +367,4 @@ class CADHybridChunker(BaseCADChunker):
 
         return None, None
 
-    def _get_overlap_items(self, items: list[CADItem]) -> list[CADItem]:
-        """Get items for overlap with next chunk.
-
-        Args:
-            items: Current chunk items
-
-        Returns:
-            Items to include in next chunk for overlap
-        """
-        if not items or self.overlap_tokens <= 0:
-            return []
-
-        # Calculate how many items to include for overlap
-        overlap_items = []
-        overlap_tokens_count = 0
-
-        for item in reversed(items):
-            item_tokens = self._count_tokens(self._item_to_text(item))
-            if overlap_tokens_count + item_tokens > self.overlap_tokens:
-                break
-            overlap_items.insert(0, item)
-            overlap_tokens_count += item_tokens
-
-        return overlap_items
+    # _get_overlap_items is inherited from BaseCADChunker

@@ -19,9 +19,9 @@ _log = logging.getLogger(__name__)
 @dataclass
 class CurvatureResult:
     """Per-vertex curvature analysis results."""
-    mean_curvature: np.ndarray          # H per vertex (N,)
-    gaussian_curvature: np.ndarray      # K per vertex (N,)
-    combined_magnitude: np.ndarray      # sqrt(H^2 + |K|) per vertex (N,)
+    mean_curvature: np.ndarray = field(default_factory=lambda: np.array([]))          # H per vertex (N,)
+    gaussian_curvature: np.ndarray = field(default_factory=lambda: np.array([]))      # K per vertex (N,)
+    combined_magnitude: np.ndarray = field(default_factory=lambda: np.array([]))      # sqrt(H^2 + |K|) per vertex (N,)
     min_value: float = 0.0
     max_value: float = 0.0
     mean_value: float = 0.0
@@ -85,11 +85,18 @@ class CurvatureAnalyzer:
         vertex_areas = np.zeros(n_verts)
         laplacian = np.zeros((n_verts, 3))
 
-        for face in faces:
-            i, j, k = face
-            vi, vj, vk = vertices[i], vertices[j], vertices[k]
+        if len(faces) > 0:
+            # Extract all face vertex indices
+            fi = faces[:, 0]
+            fj = faces[:, 1]
+            fk = faces[:, 2]
 
-            # Edge vectors
+            # Gather vertex positions for all faces at once: (F, 3)
+            vi = vertices[fi]
+            vj = vertices[fj]
+            vk = vertices[fk]
+
+            # Edge vectors (F, 3)
             eij = vj - vi
             eik = vk - vi
             ejk = vk - vj
@@ -97,52 +104,75 @@ class CurvatureAnalyzer:
             eki = -eik
             ekj = -ejk
 
-            # Face area (for mixed area computation)
-            face_area = 0.5 * np.linalg.norm(np.cross(eij, eik))
-            if face_area < 1e-12:
-                continue
+            # Face areas (F,)
+            cross_face = np.cross(eij, eik)
+            face_area = 0.5 * np.linalg.norm(cross_face, axis=1)
 
-            # Cotangent weights for Laplace-Beltrami
-            # cot(angle at i) = dot(eij, eik) / ||eij x eik||
-            cross_i = np.cross(eij, eik)
+            # Mask out degenerate faces
+            valid = face_area >= 1e-12
+
+            # Cross products at each vertex (F, 3)
+            cross_i = cross_face  # eij x eik
             cross_j = np.cross(eji, ejk)
             cross_k = np.cross(eki, ekj)
 
-            norm_i = np.linalg.norm(cross_i)
-            norm_j = np.linalg.norm(cross_j)
-            norm_k = np.linalg.norm(cross_k)
+            # Norms of cross products (F,)
+            norm_i = np.linalg.norm(cross_i, axis=1)
+            norm_j = np.linalg.norm(cross_j, axis=1)
+            norm_k = np.linalg.norm(cross_k, axis=1)
 
-            cot_i = np.dot(eij, eik) / max(norm_i, 1e-12)
-            cot_j = np.dot(eji, ejk) / max(norm_j, 1e-12)
-            cot_k = np.dot(eki, ekj) / max(norm_k, 1e-12)
+            # Cotangent weights (F,)
+            cot_i = np.sum(eij * eik, axis=1) / np.maximum(norm_i, 1e-12)
+            cot_j = np.sum(eji * ejk, axis=1) / np.maximum(norm_j, 1e-12)
+            cot_k = np.sum(eki * ekj, axis=1) / np.maximum(norm_k, 1e-12)
 
-            # Accumulate Laplacian (cotangent-weighted)
-            laplacian[i] += cot_k * (vj - vi) + cot_j * (vk - vi)
-            laplacian[j] += cot_i * (vk - vj) + cot_k * (vi - vj)
-            laplacian[k] += cot_j * (vi - vk) + cot_i * (vj - vk)
+            # Zero out contributions from degenerate faces
+            cot_i[~valid] = 0.0
+            cot_j[~valid] = 0.0
+            cot_k[~valid] = 0.0
+            face_area_valid = face_area.copy()
+            face_area_valid[~valid] = 0.0
 
-            # Mixed area (Voronoi area per vertex)
-            vertex_areas[i] += face_area / 3.0
-            vertex_areas[j] += face_area / 3.0
-            vertex_areas[k] += face_area / 3.0
+            # Laplacian contributions (F, 3) for each vertex of each face
+            lap_i = cot_k[:, None] * (vj - vi) + cot_j[:, None] * (vk - vi)
+            lap_j = cot_i[:, None] * (vk - vj) + cot_k[:, None] * (vi - vj)
+            lap_k = cot_j[:, None] * (vi - vk) + cot_i[:, None] * (vj - vk)
+
+            # Accumulate Laplacian per vertex using np.add.at
+            np.add.at(laplacian, fi, lap_i)
+            np.add.at(laplacian, fj, lap_j)
+            np.add.at(laplacian, fk, lap_k)
+
+            # Accumulate vertex areas
+            area_third = face_area_valid / 3.0
+            np.add.at(vertex_areas, fi, area_third)
+            np.add.at(vertex_areas, fj, area_third)
+            np.add.at(vertex_areas, fk, area_third)
 
             # Angle defect for Gaussian curvature
-            angle_i = np.arccos(np.clip(
-                np.dot(eij, eik) / (np.linalg.norm(eij) * np.linalg.norm(eik) + 1e-12),
-                -1.0, 1.0
-            ))
-            angle_j = np.arccos(np.clip(
-                np.dot(eji, ejk) / (np.linalg.norm(eji) * np.linalg.norm(ejk) + 1e-12),
-                -1.0, 1.0
-            ))
-            angle_k = np.arccos(np.clip(
-                np.dot(eki, ekj) / (np.linalg.norm(eki) * np.linalg.norm(ekj) + 1e-12),
-                -1.0, 1.0
-            ))
+            norm_eij = np.linalg.norm(eij, axis=1)
+            norm_eik = np.linalg.norm(eik, axis=1)
+            norm_eji = norm_eij  # same length
+            norm_ejk = np.linalg.norm(ejk, axis=1)
+            norm_eki = norm_eik  # same length
+            norm_ekj = norm_ejk  # same length
 
-            gaussian_curvature[i] -= angle_i
-            gaussian_curvature[j] -= angle_j
-            gaussian_curvature[k] -= angle_k
+            cos_i = np.sum(eij * eik, axis=1) / (norm_eij * norm_eik + 1e-12)
+            cos_j = np.sum(eji * ejk, axis=1) / (norm_eji * norm_ejk + 1e-12)
+            cos_k = np.sum(eki * ekj, axis=1) / (norm_eki * norm_ekj + 1e-12)
+
+            angle_i = np.arccos(np.clip(cos_i, -1.0, 1.0))
+            angle_j = np.arccos(np.clip(cos_j, -1.0, 1.0))
+            angle_k = np.arccos(np.clip(cos_k, -1.0, 1.0))
+
+            # Zero out degenerate face angles
+            angle_i[~valid] = 0.0
+            angle_j[~valid] = 0.0
+            angle_k[~valid] = 0.0
+
+            np.subtract.at(gaussian_curvature, fi, angle_i)
+            np.subtract.at(gaussian_curvature, fj, angle_j)
+            np.subtract.at(gaussian_curvature, fk, angle_k)
 
         # Normalize by area
         safe_areas = np.maximum(vertex_areas, 1e-12)
@@ -153,6 +183,11 @@ class CurvatureAnalyzer:
 
         # Gaussian curvature = angle_defect / area
         gaussian_curvature = gaussian_curvature / safe_areas
+
+        # Isolated vertices (no faces) have zero area and invalid curvature — zero them out
+        isolated = vertex_areas == 0.0
+        mean_curvature[isolated] = 0.0
+        gaussian_curvature[isolated] = 0.0
 
         # Combined magnitude
         combined = np.sqrt(mean_curvature**2 + np.abs(gaussian_curvature))
@@ -212,26 +247,27 @@ class CurvatureAnalyzer:
         k = min(self.n_neighbors + 1, n_points)
         distances, indices = tree.query(points, k=k)
 
-        for i in range(n_points):
-            # Skip self (first neighbor)
-            neighbor_idx = indices[i, 1:] if k > 1 else []
+        if k > 1:
+            # Build (N, k-1, 3) neighbor coordinate array (skip self at index 0)
+            neighbor_coords = points[indices[:, 1:]]  # (N, k-1, 3)
+            centered = neighbor_coords - points[:, np.newaxis, :]  # (N, k-1, 3)
 
-            if len(neighbor_idx) < 3:
-                continue
+            # Build (N, 3, 3) covariance matrix stack
+            # cov[i] = centered[i].T @ centered[i] / (k-1)
+            n_neighbors_actual = centered.shape[1]
+            cov_stack = np.einsum('nki,nkj->nij', centered, centered) / n_neighbors_actual
 
-            neighbors = points[neighbor_idx]
-            centered = neighbors - points[i]
+            # Compute eigenvalues for all points at once: (N, 3)
+            all_eigenvalues = np.linalg.eigvalsh(cov_stack)
+            all_eigenvalues = np.sort(all_eigenvalues, axis=1)
 
-            # PCA on local neighborhood
-            cov = centered.T @ centered / len(centered)
-            eigenvalues = np.linalg.eigvalsh(cov)
-            eigenvalues = np.sort(eigenvalues)
-
-            # Curvature from eigenvalue ratios
-            total = np.sum(eigenvalues) + 1e-12
-            # Smallest eigenvalue ratio indicates surface variation
-            mean_curvature[i] = eigenvalues[0] / total
-            gaussian_curvature[i] = (eigenvalues[0] * eigenvalues[1]) / (total**2)
+            # Mask: only update points that had >= 3 neighbors
+            valid = n_neighbors_actual >= 3
+            if valid:
+                total = np.sum(all_eigenvalues, axis=1) + 1e-12
+                # Smallest eigenvalue ratio indicates surface variation
+                mean_curvature[:] = all_eigenvalues[:, 0] / total
+                gaussian_curvature[:] = (all_eigenvalues[:, 0] * all_eigenvalues[:, 1]) / (total**2)
 
         combined = np.sqrt(mean_curvature**2 + np.abs(gaussian_curvature))
 

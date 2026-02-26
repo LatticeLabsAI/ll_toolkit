@@ -7,7 +7,7 @@ indices are remapped so the mesh remains consistent.
 Three clustering strategies are provided:
 
 - ``"kdtree"``: KDTree ``query_ball_point`` grouping (fastest, recommended).
-- ``"hierarchical"``: Ward-linkage agglomerative clustering via scipy.
+- ``"hierarchical"``: Complete-linkage agglomerative clustering via scipy.
 - ``"dbscan"``: DBSCAN density-based clustering via scipy.
 
 All strategies are accessible through a single ``VertexClusterer`` class.
@@ -38,6 +38,7 @@ class ClusteringResult:
     num_clusters: int  # K
     num_merged: int  # N - K (vertices removed by merging)
     method: str = ""
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -193,10 +194,17 @@ class VertexClusterer:
         vertices: np.ndarray,
         weights: Optional[np.ndarray],
     ) -> ClusteringResult:
-        """Cluster using Ward-linkage agglomerative clustering."""
+        """Cluster using complete-linkage agglomerative clustering.
+
+        Note:
+            Complete linkage uses the maximum distance between points
+            in two clusters as the merge criterion, so the
+            ``merge_distance`` threshold passed to ``fcluster`` directly
+            corresponds to the maximum Euclidean diameter of any cluster.
+        """
         from scipy.cluster.hierarchy import fcluster, linkage
 
-        Z = linkage(vertices, method="ward")
+        Z = linkage(vertices, method="complete")
         raw_labels = fcluster(Z, t=self.merge_distance, criterion="distance")
 
         # fcluster labels are 1-indexed; shift to 0-indexed
@@ -249,6 +257,39 @@ class VertexClusterer:
         Returns:
             ``ClusteringResult`` with centers and merge map.
         """
+        if len(labels) == 0:
+            return ClusteringResult(
+                labels=labels,
+                centers=np.empty((0, 3), dtype=np.float32),
+                merge_map={},
+                num_clusters=0,
+                num_merged=0,
+                method=method,
+            )
+
+        # Handle DBSCAN noise points (label == -1): assign each noise
+        # point to the nearest valid cluster center via KDTree query.
+        # If no valid clusters exist, assign all points to cluster 0.
+        noise_mask = labels == -1
+        if noise_mask.any():
+            valid_mask = ~noise_mask
+            if valid_mask.any():
+                from scipy.spatial import KDTree
+
+                # Compute centers of valid clusters first
+                valid_labels = labels[valid_mask]
+                unique_valid = np.unique(valid_labels)
+                temp_centers = np.array(
+                    [vertices[labels == c].mean(axis=0) for c in unique_valid]
+                )
+                tree = KDTree(temp_centers)
+                noise_positions = vertices[noise_mask]
+                _, nearest_idx = tree.query(noise_positions)
+                labels[noise_mask] = unique_valid[nearest_idx]
+            else:
+                # All points are noise — assign everything to cluster 0
+                labels[:] = 0
+
         num_clusters = int(labels.max()) + 1
         centers = np.zeros((num_clusters, 3), dtype=np.float32)
 
@@ -328,7 +369,14 @@ class VertexMerger:
 
         # Remap face indices through the merge map
         merge_map = clustering.merge_map
-        remapped = np.vectorize(merge_map.get)(faces)
+        unique_indices = np.unique(faces)
+        missing = [int(idx) for idx in unique_indices if int(idx) not in merge_map]
+        if missing:
+            raise ValueError(
+                f"Face indices {missing} not found in merge_map. "
+                f"merge_map covers indices 0..{max(merge_map.keys()) if merge_map else 'N/A'}."
+            )
+        remapped = np.vectorize(merge_map.__getitem__)(faces)
 
         # Remove degenerate faces (two or more identical vertex indices)
         clean_faces = VertexMerger.remove_degenerate_faces(remapped)

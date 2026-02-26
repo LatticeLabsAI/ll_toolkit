@@ -14,18 +14,21 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-)
-
 _log = logging.getLogger(__name__)
+
+
+def _configure_logging():
+    """Configure logging for CLI use."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    )
 
 
 def convert_command(args):
     """Convert CAD file to CADlingDocument."""
     from cadling.backend.document_converter import DocumentConverter
+    from cadling.datamodel.base_models import ConversionStatus
     from cadling.datamodel.pipeline_options import PipelineOptions
 
     input_path = Path(args.input)
@@ -45,17 +48,17 @@ def convert_command(args):
 
         converter = DocumentConverter()
 
-        # Convert
-        result = converter.convert(input_path)
+        # Convert with pipeline options
+        result = converter.convert(input_path, pipeline_options=options)
 
         # Check status
-        if result.status.value == "failure":
-            _log.error(f"Conversion failed")
+        if result.status == ConversionStatus.FAILURE:
+            _log.error("Conversion failed")
             for error in result.errors:
                 _log.error(f"  {error.component}: {error.error_message}")
             return 1
 
-        if result.status.value == "partial":
+        if result.status == ConversionStatus.PARTIAL:
             _log.warning(f"Conversion completed with warnings")
             for error in result.errors:
                 _log.warning(f"  {error.component}: {error.error_message}")
@@ -196,14 +199,25 @@ def chunk_command(args):
 
 
 def export_command(args):
-    """Export CAD document to various formats."""
+    """Export CAD document to various formats.
+
+    Maps the export command's positional output argument to the convert
+    command's optional --output flag, then delegates to convert_command.
+    """
     _log.info(f"Export command: {args.input} -> {args.output}")
-    # Redirect to convert command
+
+    # Ensure the convert command flags exist with defaults if not set
+    if not hasattr(args, "no_topology"):
+        args.no_topology = False
+    if not hasattr(args, "device"):
+        args.device = "cpu"
+
     return convert_command(args)
 
 
 def main():
     """Main CLI entry point."""
+    _configure_logging()
     parser = argparse.ArgumentParser(
         description="cadling - CAD document processing toolkit",
         formatter_class=argparse.RawDescriptionHelpFormatter,

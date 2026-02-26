@@ -514,7 +514,7 @@ def postprocess_answer(answer: str) -> str:
     return answer
 
 
-def parse_critique_response(response: str) -> Critique:
+def parse_critique_response(response: str, dimension: str = "") -> Critique:
     """Parse LLM critique response into Critique object.
 
     Expected format:
@@ -524,13 +524,16 @@ def parse_critique_response(response: str) -> Critique:
 
     Args:
         response: Raw LLM response
+        dimension: Critique dimension (e.g., "level_consistency", "accuracy").
+            Required to properly tag the returned Critique.
 
     Returns:
-        Critique object
+        Critique object with the specified dimension
     """
     rating = None
     evaluation = None
     suggestions = None
+    current_field = None
 
     lines = response.strip().split("\n")
 
@@ -538,6 +541,7 @@ def parse_critique_response(response: str) -> Critique:
         line = line.strip()
 
         if line.upper().startswith("RATING:"):
+            current_field = "rating"
             try:
                 rating_str = line.split(":", 1)[1].strip()
                 # Extract first number found
@@ -550,14 +554,24 @@ def parse_critique_response(response: str) -> Critique:
 
         elif line.upper().startswith("EVALUATION:"):
             evaluation = line.split(":", 1)[1].strip() if ":" in line else None
+            current_field = "evaluation"
 
         elif line.upper().startswith("SUGGESTIONS:"):
             suggestions = line.split(":", 1)[1].strip() if ":" in line else None
             if suggestions and suggestions.lower() in ("none", "n/a", "-"):
                 suggestions = None
+            current_field = "suggestions"
+
+        elif current_field is not None and line:
+            # Continuation line for the current multi-line field
+            if current_field == "evaluation":
+                evaluation = (evaluation or "") + "\n" + line
+            elif current_field == "suggestions":
+                if suggestions is not None:
+                    suggestions = suggestions + "\n" + line
 
     return Critique(
-        dimension="",  # Set by caller
+        dimension=dimension,
         rating=rating,
         evaluation=evaluation,
         suggestions=suggestions,

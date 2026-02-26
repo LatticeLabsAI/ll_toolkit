@@ -173,14 +173,14 @@ class TestVertexClustererHierarchical:
 
     def test_hierarchical_groups_close_vertices(self, simple_clustered_vertices):
         """Verify hierarchical clustering groups close vertices."""
-        clusterer = VertexClusterer(merge_distance=1e-3, method="hierarchical")
+        # Complete linkage uses max pairwise distance; the fixture's cluster 0
+        # spans ~0.00139, so the threshold must exceed that.
+        clusterer = VertexClusterer(merge_distance=1.5e-3, method="hierarchical")
         result = clusterer.cluster(simple_clustered_vertices)
 
         # Vertices 0, 1, 2 should be grouped (all very close)
         labels_0_1_2 = result.labels[[0, 1, 2]]
-        assert len(np.unique(labels_0_1_2)) == 1 or (
-            np.std(simple_clustered_vertices[:3], axis=0).max() < 1e-3
-        )
+        assert len(np.unique(labels_0_1_2)) == 1
 
     def test_hierarchical_produces_valid_clustering(self, simple_clustered_vertices):
         """Test that hierarchical clustering produces valid output."""

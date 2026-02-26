@@ -10,6 +10,7 @@ from __future__ import annotations
 import copy
 import json
 import logging
+import math
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Union
 
@@ -203,7 +204,7 @@ class StreamingDiffusionTrainer:
                 progress = (step - self.warmup_steps) / max(
                     self.total_steps - self.warmup_steps, 1
                 )
-                return 0.5 * (1.0 + torch.cos(torch.tensor(progress * 3.14159)).item())
+                return 0.5 * (1.0 + torch.cos(torch.tensor(progress * math.pi)).item())
 
         return LambdaLR(self.optimizer, lr_lambda)
 
@@ -295,12 +296,17 @@ class StreamingDiffusionTrainer:
         if hasattr(self.scheduler, "add_noise"):
             return self.scheduler.add_noise(clean, noise, timesteps)
 
-        # Fallback: simple linear interpolation noise schedule
-        alpha_t = 1.0 - timesteps.float() / self._num_timesteps
-        while alpha_t.dim() < clean.dim():
-            alpha_t = alpha_t.unsqueeze(-1)
+        # Fallback: cosine noise schedule (matches non-streaming DiffusionTrainer)
+        t = timesteps.float() / self._num_timesteps
+        # Cosine schedule: alpha_bar(t) = cos((t + s) / (1 + s) * pi/2)^2
+        s = 0.008  # small offset to prevent singularity at t=0
+        alpha_bar = torch.cos((t + s) / (1.0 + s) * math.pi / 2.0) ** 2
+        alpha_bar = alpha_bar / torch.cos(torch.tensor(s / (1.0 + s) * math.pi / 2.0)) ** 2
+        alpha_bar = alpha_bar.clamp(min=1e-5, max=1.0)
+        while alpha_bar.dim() < clean.dim():
+            alpha_bar = alpha_bar.unsqueeze(-1)
 
-        noisy = alpha_t * clean + (1.0 - alpha_t) * noise
+        noisy = alpha_bar.sqrt() * clean + (1.0 - alpha_bar).sqrt() * noise
         return noisy
 
     def _prepare_batch(
@@ -640,7 +646,7 @@ class StreamingDiffusionTrainer:
             raise ValueError("No checkpoint_dir set; cannot load checkpoint.")
 
         load_path = self.checkpoint_dir / filename
-        checkpoint = torch.load(load_path, map_location=self.device)
+        checkpoint = torch.load(load_path, map_location=self.device, weights_only=True)
 
         self.model.load_state_dict(checkpoint["model_state_dict"])
         self.ema_model.load_state_dict(checkpoint["ema_model_state_dict"])

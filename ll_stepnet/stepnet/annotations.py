@@ -131,8 +131,9 @@ class STEPAnnotatedOutput:
             parts.append(branch.format())
         if self.reserialized_text:
             parts.append(self.reserialized_text)
-        self.annotated_text = "\n".join(parts)
-        return self.annotated_text
+        result = "\n".join(parts)
+        self.annotated_text = result
+        return result
 
 
 class STEPStructuralAnnotator:

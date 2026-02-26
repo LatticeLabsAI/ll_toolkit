@@ -17,12 +17,6 @@ import typer
 
 from cadling.sdg.cli.qa import qa_app
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-)
-
 _log = logging.getLogger(__name__)
 
 # Main CLI application
@@ -65,6 +59,10 @@ def main_callback(
 
 def main():
     """Main entry point."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    )
     app()
 
 

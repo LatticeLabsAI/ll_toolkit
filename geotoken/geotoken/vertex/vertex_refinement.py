@@ -113,6 +113,7 @@ class CoarseToFineRefiner:
         target_points: Optional[np.ndarray] = None,
         face_indices: Optional[np.ndarray] = None,
         constraints: Optional[List[Dict[str, Any]]] = None,
+        output_dtype: Optional[np.dtype] = None,
     ) -> RefinementResult:
         """Iteratively refine vertex positions.
 
@@ -122,6 +123,13 @@ class CoarseToFineRefiner:
         3. Update positions by ``learning_rate * gradient``.
         4. Apply hard constraints (fixed vertices, etc.).
         5. Check convergence.
+
+        .. note::
+
+            Refinement is performed internally in float64 for numerical
+            stability.  The returned vertices are cast to ``output_dtype``
+            (default ``np.float32``), which may reduce precision.  Pass
+            ``output_dtype=np.float64`` to preserve full precision.
 
         Args:
             coarse_vertices: Initial predictions ``(N, 3)`` float.
@@ -135,9 +143,15 @@ class CoarseToFineRefiner:
                 - ``{"type": "planar", "vertex_indices": [int, ...], "normal": [nx, ny, nz], "d": float}``
                 - ``{"type": "symmetric", "pairs": [(i, j), ...], "axis": int}``
 
+            output_dtype: NumPy dtype for the returned vertex array.
+                Defaults to ``np.float32``.  Use ``np.float64`` to avoid
+                precision loss from the internal float64 computation.
+
         Returns:
             ``RefinementResult`` with refined vertices and convergence info.
         """
+        if output_dtype is None:
+            output_dtype = np.float32
         vertices = coarse_vertices.astype(np.float64).copy()
         error_history: List[float] = []
 
@@ -206,7 +220,7 @@ class CoarseToFineRefiner:
                     iteration + 1, error_change,
                 )
                 return RefinementResult(
-                    refined_vertices=vertices.astype(np.float32),
+                    refined_vertices=vertices.astype(output_dtype),
                     iterations=iteration + 1,
                     converged=True,
                     initial_error=initial_error,
@@ -219,7 +233,7 @@ class CoarseToFineRefiner:
             self.max_iterations, error_history[-1],
         )
         return RefinementResult(
-            refined_vertices=vertices.astype(np.float32),
+            refined_vertices=vertices.astype(output_dtype),
             iterations=self.max_iterations,
             converged=False,
             initial_error=initial_error,
@@ -437,11 +451,12 @@ class CoarseToFineRefiner:
 
                 for i, j in pairs:
                     if 0 <= i < len(vertices) and 0 <= j < len(vertices):
-                        avg = (vertices[i].copy() + vertices[j].copy()) / 2.0
+                        avg = (vertices[i] + vertices[j]) / 2.0
                         vertices[i] = avg.copy()
                         vertices[j] = avg.copy()
                         # Mirror on the specified axis
-                        vertices[j][axis] = -vertices[j][axis]
+                        vertices[i][axis] = abs(avg[axis])
+                        vertices[j][axis] = -abs(avg[axis])
 
             else:
                 _log.warning("Unknown constraint type '%s', skipping", ctype)
@@ -466,18 +481,20 @@ class CoarseToFineRefiner:
         Returns:
             Dict mapping vertex index → list of neighbor indices.
         """
-        adjacency: Dict[int, List[int]] = {
-            i: [] for i in range(len(vertices))
+        adjacency_sets: Dict[int, set] = {
+            i: set() for i in range(len(vertices))
         }
 
         for fi in range(len(faces)):
             v0, v1, v2 = int(faces[fi, 0]), int(faces[fi, 1]), int(faces[fi, 2])
             for a, b in [(v0, v1), (v1, v2), (v2, v0)]:
-                if b not in adjacency[a]:
-                    adjacency[a].append(b)
-                if a not in adjacency[b]:
-                    adjacency[b].append(a)
+                adjacency_sets[a].add(b)
+                adjacency_sets[b].add(a)
 
+        # Convert to lists for downstream compatibility
+        adjacency: Dict[int, List[int]] = {
+            k: list(v) for k, v in adjacency_sets.items()
+        }
         return adjacency
 
 

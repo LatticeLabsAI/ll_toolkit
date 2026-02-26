@@ -343,14 +343,14 @@ class STEPNetIntegration:
             param: Parameter string
 
         Returns:
-            Parsed value (int, float, str, or list)
+            Parsed value (int, float, str, list, or tagged ref dict)
         """
         param = param.strip()
 
-        # Reference: #N
+        # Reference: #N - return tagged dict to distinguish from plain integers
         if param.startswith("#"):
             try:
-                return int(param[1:])
+                return {"_ref": int(param[1:])}
             except ValueError:
                 return param
 
@@ -392,16 +392,16 @@ class STEPNetIntegration:
         """
         tokens = []
 
-        if isinstance(param, int):
-            if param >= 0:  # Entity reference
-                # Map reference to token ID
-                ref_token_id = self._ref_base_id + (param % 10000)
-                tokens.append(ref_token_id)
-            else:
-                # Negative int - quantize
-                bucket = self._quantize_number(float(param))
-                token = f"[NUM_{bucket}]"
-                tokens.append(self._alt_token_to_id.get(token, 1))
+        if isinstance(param, dict) and "_ref" in param:
+            # Entity reference (originally prefixed with # in STEP text)
+            ref_token_id = self._ref_base_id + (param["_ref"] % 10000)
+            tokens.append(ref_token_id)
+
+        elif isinstance(param, int):
+            # Plain integer value (e.g., B-spline degree) - quantize as number
+            bucket = self._quantize_number(float(param))
+            token = f"[NUM_{bucket}]"
+            tokens.append(self._alt_token_to_id.get(token, 1))
 
         elif isinstance(param, float):
             bucket = self._quantize_number(param)
@@ -547,12 +547,18 @@ class STEPNetIntegration:
         try:
             cadling_extractor = CadlingFeatureExtractor()
 
-            # Parse entities from text
-            entities = self._parse_step_entities(entity_text)
+            # Parse single entity directly instead of running full _parse_step_entities
+            entity_match = re.search(
+                r"#(\d+)\s*=\s*[A-Z_][A-Z0-9_]*\s*\(([^;]*)\)\s*;",
+                entity_text,
+                re.DOTALL,
+            )
 
-            if entities:
-                entity_data = entities[0]
-                all_entities = {entity_data["id"]: {"type": entity_type, "params": entity_data["params"]}}
+            if entity_match:
+                entity_id = int(entity_match.group(1))
+                params = self._parse_step_params(entity_match.group(2))
+                entity_data = {"id": entity_id, "type": entity_type, "params": params}
+                all_entities = {entity_id: {"type": entity_type, "params": params}}
 
                 extracted = cadling_extractor.extract_entity_features(
                     entity_data["id"],
@@ -1086,7 +1092,9 @@ class STEPNetIntegration:
 
         # Extract from params
         for param in entity.get("params", []):
-            if isinstance(param, int):
+            if isinstance(param, dict) and "_ref" in param:
+                refs.append(param["_ref"])
+            elif isinstance(param, int):
                 refs.append(param)
             elif isinstance(param, str):
                 matches = ref_pattern.findall(param)
@@ -1102,7 +1110,9 @@ class STEPNetIntegration:
         ref_pattern = re.compile(r"#(\d+)")
 
         for item in param_list:
-            if isinstance(item, int):
+            if isinstance(item, dict) and "_ref" in item:
+                refs.append(item["_ref"])
+            elif isinstance(item, int):
                 refs.append(item)
             elif isinstance(item, str):
                 matches = ref_pattern.findall(item)

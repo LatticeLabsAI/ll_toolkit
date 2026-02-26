@@ -17,7 +17,7 @@ import numpy as np
 
 try:
     from OCC.Core.TopoDS import TopoDS_Face, TopoDS_Edge
-    from OCC.Core.BRepTools import BRepTools
+    from OCC.Core.BRepTools import breptools
     from OCC.Core.BRep import BRep_Tool
     from OCC.Core.TopAbs import TopAbs_FORWARD, TopAbs_REVERSED
     from OCC.Core.GeomAbs import (
@@ -149,9 +149,9 @@ def extract_enhanced_node_features(
 
         # 8. UV parametric range (4)
         try:
-            u_min, u_max, v_min, v_max = BRepTools.breptools_UVBounds(occ_face)
+            u_min, u_max, v_min, v_max = breptools.UVBounds(occ_face)
             uv_range = [u_min, u_max, v_min, v_max]
-        except:
+        except Exception:
             uv_range = [0.0, 1.0, 0.0, 1.0]
         features.append(np.array(uv_range, dtype=np.float32))
 
@@ -161,7 +161,7 @@ def extract_enhanced_node_features(
             topo = TopologyExplorer(occ_face)
             num_edges = len(list(topo.edges()))
             trimming_complexity = float(num_edges)
-        except:
+        except Exception:
             trimming_complexity = 0.0
         features.append(np.array([trimming_complexity], dtype=np.float32))
 
@@ -226,7 +226,7 @@ def extract_enhanced_node_features(
                 dv_normals = np.diff(normals, axis=1)  # [10, 9, 3]
                 curvature_u = np.mean(np.linalg.norm(du_normals, axis=2))
                 curvature_v = np.mean(np.linalg.norm(dv_normals, axis=2))
-            except:
+            except Exception:
                 curvature_u, curvature_v = 0.0, 0.0
 
             uv_stats = np.concatenate([
@@ -313,7 +313,7 @@ def extract_enhanced_edge_features(
             edge_length = props.Mass()
             if not np.isfinite(edge_length):
                 edge_length = 0.0
-        except:
+        except Exception:
             edge_length = 0.0
         features.append(np.array([edge_length], dtype=np.float32))
 
@@ -322,7 +322,7 @@ def extract_enhanced_edge_features(
             curve, u_min, u_max = BRep_Tool.Curve(occ_edge)
             u_mid = (u_min + u_max) / 2.0
             has_curve = curve is not None
-        except:
+        except Exception:
             has_curve = False
             u_mid = 0.0
 
@@ -339,7 +339,7 @@ def extract_enhanced_edge_features(
                     )
                 else:
                     dihedral = np.pi / 2.0  # Default to 90 degrees
-            except:
+            except Exception:
                 dihedral = np.pi / 2.0
         else:
             dihedral = np.pi / 2.0  # Default to 90 degrees
@@ -383,7 +383,7 @@ def extract_enhanced_edge_features(
                 else:
                     edge_curvature = 0.0
 
-            except:
+            except Exception:
                 midpoint = [0.0, 0.0, 0.0]
                 tangent_vec = [1.0, 0.0, 0.0]
                 edge_curvature = 0.0
@@ -399,7 +399,7 @@ def extract_enhanced_edge_features(
         # 8. Is degenerate flag (1)
         try:
             is_degenerate = 1.0 if BRep_Tool.Degenerated(occ_edge) else 0.0
-        except:
+        except Exception:
             is_degenerate = 0.0
         features.append(np.array([is_degenerate], dtype=np.float32))
 

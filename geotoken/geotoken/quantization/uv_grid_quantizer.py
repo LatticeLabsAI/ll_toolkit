@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Optional
 
 import numpy as np
 
@@ -66,7 +66,7 @@ class UVGridTokens:
         bits: Bit-width per coordinate dimension.
     """
 
-    face_index: int = -1
+    face_index: Optional[int] = None
     grid_resolution: tuple[int, int] = (5, 5)
     uv_samples: np.ndarray = field(
         default_factory=lambda: np.empty((0, 2), dtype=np.float32)
@@ -79,6 +79,7 @@ class UVGridTokens:
     )
     params: FeatureQuantizationParams | None = None
     bits: int = 8
+    is_approximated: bool = False
 
 
 @dataclass
@@ -104,7 +105,7 @@ class FaceUVGridTokens:
         bits: Bit-width per coordinate dimension.
     """
 
-    face_index: int = -1
+    face_index: Optional[int] = None
     grid_resolution: tuple[int, int] = (10, 10)
     quantized_xyz: np.ndarray = field(
         default_factory=lambda: np.empty((0, 3), dtype=np.int32)
@@ -118,6 +119,7 @@ class FaceUVGridTokens:
     params_xyz: FeatureQuantizationParams | None = None
     params_normals: FeatureQuantizationParams | None = None
     bits: int = 8
+    is_approximated: bool = False
 
 
 @dataclass
@@ -152,6 +154,7 @@ class EdgeUVGridTokens:
     params_xyz: FeatureQuantizationParams | None = None
     params_tangents: FeatureQuantizationParams | None = None
     bits: int = 8
+    is_approximated: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -192,8 +195,18 @@ class UVGridQuantizer:
         self.grid_resolution = grid_resolution
         self.bits = bits
 
-        # Internal per-sample quantizer (3-D: x, y, z)
-        self._quantizer = FeatureVectorQuantizer(bits=bits)
+        # Separate per-channel quantizers to avoid shared state corruption
+        self._xyz_quantizer = FeatureVectorQuantizer(bits=bits)
+        self._normals_quantizer = FeatureVectorQuantizer(bits=bits)
+        self._tangents_quantizer = FeatureVectorQuantizer(bits=bits)
+
+        # Backward-compatible alias
+        self._quantizer = self._xyz_quantizer
+
+        # Global normalization params (set via fit_global)
+        self._global_xyz_params: FeatureQuantizationParams | None = None
+        self._global_normals_params: FeatureQuantizationParams | None = None
+        self._global_tangents_params: FeatureQuantizationParams | None = None
 
         _log.debug(
             "UVGridQuantizer init: resolution=%s, bits=%d",
@@ -205,11 +218,60 @@ class UVGridQuantizer:
     # Public API
     # ------------------------------------------------------------------
 
+    def fit_global(
+        self,
+        all_xyz_samples: np.ndarray,
+        all_normals_samples: np.ndarray | None = None,
+        all_tangents_samples: np.ndarray | None = None,
+    ) -> None:
+        """Fit global normalization params on combined data from all faces/edges.
+
+        When global params are set, ``quantize_surface_samples``,
+        ``quantize_face_uv_grid``, and ``quantize_edge_uv_grid`` will use
+        them instead of per-face fitting.  This ensures cross-face token
+        comparability — the same XYZ coordinate always maps to the same
+        token regardless of which face it belongs to.
+
+        Args:
+            all_xyz_samples: Combined XYZ points from all faces/edges,
+                shape ``(N, 3)`` float32.
+            all_normals_samples: Optional combined normals from all faces,
+                shape ``(M, 3)`` float32.
+            all_tangents_samples: Optional combined tangents from all edges,
+                shape ``(K, 3)`` float32.
+        """
+        all_xyz_samples = np.asarray(all_xyz_samples, dtype=np.float32)
+        if all_xyz_samples.ndim != 2 or all_xyz_samples.shape[1] != 3:
+            raise ValueError(
+                f"all_xyz_samples must be (N, 3), got {all_xyz_samples.shape}"
+            )
+
+        self._global_xyz_params = self._xyz_quantizer.fit(all_xyz_samples)
+        _log.info(
+            "Fit global XYZ params on %d samples", len(all_xyz_samples),
+        )
+
+        if all_normals_samples is not None:
+            all_normals_samples = np.asarray(all_normals_samples, dtype=np.float32)
+            self._global_normals_params = self._normals_quantizer.fit(all_normals_samples)
+            _log.info(
+                "Fit global normals params on %d samples",
+                len(all_normals_samples),
+            )
+
+        if all_tangents_samples is not None:
+            all_tangents_samples = np.asarray(all_tangents_samples, dtype=np.float32)
+            self._global_tangents_params = self._tangents_quantizer.fit(all_tangents_samples)
+            _log.info(
+                "Fit global tangents params on %d samples",
+                len(all_tangents_samples),
+            )
+
     def quantize_surface_samples(
         self,
         uv_samples: np.ndarray,
         xyz_samples: np.ndarray,
-        face_index: int = -1,
+        face_index: Optional[int] = None,
     ) -> UVGridTokens:
         """Quantize ``(u, v) → (x, y, z)`` mappings from a single surface.
 
@@ -246,9 +308,12 @@ class UVGridQuantizer:
                 f"vs xyz={xyz_samples.shape[0]}"
             )
 
-        # Fit normalization on this surface's xyz data, then quantize
-        params = self._quantizer.fit(xyz_samples)
-        quantized = self._quantizer.quantize(xyz_samples, params)
+        # Use global params if available; otherwise fit per-surface
+        if self._global_xyz_params is not None:
+            params = self._global_xyz_params
+        else:
+            params = self._xyz_quantizer.fit(xyz_samples)
+        quantized = self._xyz_quantizer.quantize(xyz_samples, params).astype(np.int32)
 
         return UVGridTokens(
             face_index=face_index,
@@ -333,6 +398,7 @@ class UVGridQuantizer:
                 tokens = self.quantize_surface_samples(
                     uv_grid, xyz_approx, face_index=face_idx,
                 )
+                tokens.is_approximated = True
                 results[face_idx] = tokens
             except Exception as exc:
                 _log.debug(
@@ -363,7 +429,7 @@ class UVGridQuantizer:
         if tokens.params is None:
             raise ValueError("Cannot dequantize: missing params")
 
-        return self._quantizer.dequantize(
+        return self._xyz_quantizer.dequantize(
             tokens.quantized_grid, tokens.params,
         )
 
@@ -389,7 +455,7 @@ class UVGridQuantizer:
     def quantize_face_uv_grid(
         self,
         uv_grid: np.ndarray,
-        face_index: int = -1,
+        face_index: Optional[int] = None,
     ) -> FaceUVGridTokens:
         """Quantize full [num_u, num_v, 7] face UV-grid.
 
@@ -428,13 +494,19 @@ class UVGridQuantizer:
         normals = uv_grid[..., 3:6].reshape(n_samples, 3)
         trim_mask = uv_grid[..., 6].reshape(n_samples).astype(bool)
 
-        # Quantize XYZ
-        params_xyz = self._quantizer.fit(xyz)
-        quantized_xyz = self._quantizer.quantize(xyz, params_xyz)
+        # Quantize XYZ (use global params if available)
+        if self._global_xyz_params is not None:
+            params_xyz = self._global_xyz_params
+        else:
+            params_xyz = self._xyz_quantizer.fit(xyz)
+        quantized_xyz = self._xyz_quantizer.quantize(xyz, params_xyz).astype(np.int32)
 
-        # Quantize normals independently
-        params_normals = self._quantizer.fit(normals)
-        quantized_normals = self._quantizer.quantize(normals, params_normals)
+        # Quantize normals independently (use global params if available)
+        if self._global_normals_params is not None:
+            params_normals = self._global_normals_params
+        else:
+            params_normals = self._normals_quantizer.fit(normals)
+        quantized_normals = self._normals_quantizer.quantize(normals, params_normals).astype(np.int32)
 
         _log.debug(
             "Quantized face %d UV-grid: %dx%d samples",
@@ -491,13 +563,19 @@ class UVGridQuantizer:
         xyz = uv_grid[:, :3]
         tangents = uv_grid[:, 3:6]
 
-        # Quantize XYZ
-        params_xyz = self._quantizer.fit(xyz)
-        quantized_xyz = self._quantizer.quantize(xyz, params_xyz)
+        # Quantize XYZ (use global params if available)
+        if self._global_xyz_params is not None:
+            params_xyz = self._global_xyz_params
+        else:
+            params_xyz = self._xyz_quantizer.fit(xyz)
+        quantized_xyz = self._xyz_quantizer.quantize(xyz, params_xyz).astype(np.int32)
 
-        # Quantize tangents independently
-        params_tangents = self._quantizer.fit(tangents)
-        quantized_tangents = self._quantizer.quantize(tangents, params_tangents)
+        # Quantize tangents independently (use global params if available)
+        if self._global_tangents_params is not None:
+            params_tangents = self._global_tangents_params
+        else:
+            params_tangents = self._tangents_quantizer.fit(tangents)
+        quantized_tangents = self._tangents_quantizer.quantize(tangents, params_tangents).astype(np.int32)
 
         _log.debug(
             "Quantized edge %d UV-grid: %d samples",
@@ -538,8 +616,8 @@ class UVGridQuantizer:
         n_samples = num_u * num_v
 
         # Dequantize XYZ and normals
-        xyz = self._quantizer.dequantize(tokens.quantized_xyz, tokens.params_xyz)
-        normals = self._quantizer.dequantize(
+        xyz = self._xyz_quantizer.dequantize(tokens.quantized_xyz, tokens.params_xyz)
+        normals = self._normals_quantizer.dequantize(
             tokens.quantized_normals, tokens.params_normals
         )
 
@@ -569,8 +647,8 @@ class UVGridQuantizer:
             raise ValueError("Cannot dequantize: missing params")
 
         # Dequantize XYZ and tangents
-        xyz = self._quantizer.dequantize(tokens.quantized_xyz, tokens.params_xyz)
-        tangents = self._quantizer.dequantize(
+        xyz = self._xyz_quantizer.dequantize(tokens.quantized_xyz, tokens.params_xyz)
+        tangents = self._tangents_quantizer.dequantize(
             tokens.quantized_tangents, tokens.params_tangents
         )
 

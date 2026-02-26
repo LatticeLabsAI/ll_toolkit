@@ -48,6 +48,20 @@ class FeatureLossMetric:
         # Round reconstructed coords to detect exact matches
         # Scale to integer grid for hashing
         scale = 1.0 / max(quantization_epsilon, 1e-15)
+
+        # Guard against integer overflow: clamp scale so that
+        # scale * max(abs(values)) stays within int64 range
+        max_abs_val = np.max(np.abs(reconstructed)) if len(reconstructed) > 0 else 0.0
+        int64_max = np.iinfo(np.int64).max
+        if max_abs_val > 0 and scale * max_abs_val > int64_max * 0.9:
+            safe_scale = (int64_max * 0.9) / max_abs_val
+            _log.warning(
+                "Spatial hash scale %.3e would overflow int64 "
+                "(max_abs_val=%.3e); clamping to %.3e",
+                scale, max_abs_val, safe_scale,
+            )
+            scale = safe_scale
+
         int_coords = np.round(reconstructed * scale).astype(np.int64)
 
         # Build hash: quantized coords → list of original vertex indices

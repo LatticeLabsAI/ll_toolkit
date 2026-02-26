@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional
+from typing import Literal, Optional
 
 import numpy as np
 
@@ -232,7 +232,7 @@ class GraphStructureToken:
             "edge"        - Edge marker (value encodes src << 16 | tgt)
         value: Associated integer value.
     """
-    token_type: str
+    token_type: Literal["graph_start", "graph_end", "node_start", "node_end", "adjacency", "edge"]
     value: int = 0
 
 
@@ -280,7 +280,8 @@ class TokenSequence:
     @property
     def total_tokens(self) -> int:
         return (len(self.coordinate_tokens) + len(self.geometry_tokens)
-                + len(self.command_tokens) + len(self.graph_node_tokens)
+                + len(self.command_tokens) + len(self.constraint_tokens)
+                + len(self.boolean_op_tokens) + len(self.graph_node_tokens)
                 + len(self.graph_edge_tokens) + len(self.graph_structure_tokens))
 
     def to_array(self) -> np.ndarray:

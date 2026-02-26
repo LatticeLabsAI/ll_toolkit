@@ -536,78 +536,18 @@ class DFSChunker(BaseCADChunker):
             doc_name=doc.name,
         )
 
-    def _item_to_text(self, item: Any) -> str:
-        """Convert a CAD item/entity to text representation.
-
-        Attempts multiple attribute patterns to produce a meaningful
-        text representation of the entity.
-
-        Args:
-            item: CAD item or entity to convert.
-
-        Returns:
-            Text representation of the item.
-        """
-        from cadling.datamodel.step import STEPEntityItem
-
-        # Handle STEPEntityItem specifically (matches STEPChunker pattern)
-        if isinstance(item, STEPEntityItem):
-            parts = [f"#{item.entity_id} {item.entity_type}"]
-            if item.text:
-                parts.append(item.text)
-            return "\n".join(parts)
-
-        # Try raw_line attribute
-        if hasattr(item, "raw_line") and item.raw_line:
-            return str(item.raw_line)
-
-        # Build from entity_id and type
-        parts: list[str] = []
-        entity_id = getattr(item, "entity_id", getattr(item, "id", None))
-        entity_type = getattr(item, "type", getattr(item, "entity_type", None))
-
-        if entity_id is not None:
-            parts.append(f"#{entity_id}")
-        if entity_type is not None:
-            parts.append(f"={entity_type}")
-
-        # Add parameters if available
-        params = getattr(item, "parameters", getattr(item, "params", None))
-        if params:
-            if isinstance(params, dict):
-                param_str = ",".join(f"{k}={v}" for k, v in params.items())
-            elif isinstance(params, (list, tuple)):
-                param_str = ",".join(str(p) for p in params)
-            else:
-                param_str = str(params)
-            parts.append(f"({param_str})")
-
-        if parts:
-            return "".join(parts) + ";"
-
-        # Try CADItem standard attributes (label + text)
-        if hasattr(item, "label") and item.label is not None:
-            label_parts = [f"[{item.label.text}]"]
-            if hasattr(item, "text") and item.text:
-                label_parts.append(item.text)
-            return "\n".join(label_parts)
-
-        # Fallback to string representation
-        return str(item)
-
     def _estimate_tokens(self, text: str) -> int:
-        """Estimate token count for text.
+        """Estimate token count for text using the base class tokenizer.
 
-        Uses a simple character-based heuristic. STEP text averages
-        roughly 4 characters per token.
+        Delegates to ``_count_tokens`` from ``BaseCADChunker`` for
+        consistency with other chunkers. This method exists as a named
+        alias used during rough partitioning in ``_partition_into_chunks``;
+        final chunk text is always validated via ``_count_tokens``.
 
         Args:
             text: Text to estimate token count for.
 
         Returns:
-            Estimated token count.
+            Token count.
         """
-        if not text:
-            return 0
-        # Rough estimate: ~4 chars per token for STEP text
-        return max(1, len(text) // 4)
+        return self._count_tokens(text)

@@ -2,14 +2,21 @@
 Training utilities for STEP models.
 Handles training loops, evaluation, and checkpointing.
 """
+from __future__ import annotations
 
-import torch
-import torch.nn as nn
-from torch.optim import AdamW
-from torch.utils.data import DataLoader
+try:
+    import torch
+    import torch.nn as nn
+    from torch.optim import AdamW
+    from torch.utils.data import DataLoader
+    from tqdm import tqdm
+
+    _has_torch = True
+except ImportError:
+    _has_torch = False
+
 from pathlib import Path
 from typing import Optional, Dict, Callable
-from tqdm import tqdm
 import json
 
 
@@ -259,7 +266,7 @@ class STEPTrainer:
     def load_checkpoint(self, filename: str):
         """Load model checkpoint."""
         load_path = self.checkpoint_dir / filename
-        checkpoint = torch.load(load_path, map_location=self.device)
+        checkpoint = torch.load(load_path, map_location=self.device, weights_only=True)
 
         self.model.load_state_dict(checkpoint['model_state_dict'])
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])

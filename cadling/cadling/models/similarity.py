@@ -23,13 +23,22 @@ if TYPE_CHECKING:
 
 _log = logging.getLogger(__name__)
 
-import torch
-from stepnet import (
-    STEPForSimilarity,
-    STEPTokenizer,
-    STEPFeatureExtractor,
-    STEPTopologyBuilder,
-)
+try:
+    import torch
+    from stepnet import (
+        STEPForSimilarity,
+        STEPTokenizer,
+        STEPFeatureExtractor,
+        STEPTopologyBuilder,
+    )
+    _has_torch = True
+except ImportError:
+    torch = None
+    STEPForSimilarity = None
+    STEPTokenizer = None
+    STEPFeatureExtractor = None
+    STEPTopologyBuilder = None
+    _has_torch = False
 
 
 class CADSimilarityEmbedder(EnrichmentModel):

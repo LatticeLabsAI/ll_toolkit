@@ -500,13 +500,16 @@ class StructuredDiffusion(nn.Module):
             denoiser = self.denoisers[stage_name]
             denoiser.eval()
 
+            # Reset PNDM buffer before each stage to prevent stale
+            # noise predictions from prior stages leaking through
+            self.scheduler.reset_pndm()
+
             # Start from pure noise
             x = torch.randn(
                 batch_size, self._latent_dim, device=device
             )
 
             if use_pndm:
-                self.scheduler.reset_pndm()
                 timesteps = self.scheduler.pndm_timesteps.to(device)
             else:
                 timesteps = torch.arange(

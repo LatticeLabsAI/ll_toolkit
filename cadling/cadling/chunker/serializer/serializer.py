@@ -61,7 +61,7 @@ class ChunkSerializer(ABC):
         """
         output_path = Path(output_path)
         serialized = self.serialize(chunks)
-        output_path.write_text(serialized)
+        output_path.write_text(serialized, encoding="utf-8")
         _log.info(f"Saved {len(chunks)} chunks to {output_path}")
 
 

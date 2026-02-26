@@ -180,30 +180,7 @@ class GeometryAnalysisModel(EnrichmentModel):
         result["analysis_method"] = "item_properties"
         return result
 
-    def _get_step_text(self, doc: CADlingDocument, item: CADItem) -> Optional[str]:
-        """Get STEP text from document or item.
-
-        Args:
-            doc: Document containing the item
-            item: Item to get text for
-
-        Returns:
-            STEP text or None
-        """
-        # Try item text
-        if hasattr(item, 'text') and item.text:
-            return item.text
-
-        # Try document raw content
-        if hasattr(doc, 'raw_content') and doc.raw_content:
-            return doc.raw_content
-
-        # Try backend content
-        if hasattr(doc, '_backend') and doc._backend:
-            if hasattr(doc._backend, 'content'):
-                return doc._backend.content
-
-        return None
+    # _get_step_text is inherited from EnrichmentModel base class
 
     def _analyze_from_step_text(self, step_text: str) -> Optional[dict]:
         """Analyze geometry from STEP text parsing.
@@ -300,7 +277,7 @@ class GeometryAnalysisModel(EnrichmentModel):
         if "bounding_box_volume" in results and results["bounding_box_volume"] > 0:
             # Use empirical fill factor based on entity counts
             fill_factor = 0.6 if shell_count > 0 else 0.4
-            results["volume"] = results["bounding_box_volume"] * fill_factor
+            results["volume_estimate"] = results["bounding_box_volume"] * fill_factor
             results["volume_estimation_method"] = "bounding_box_fill_factor"
 
         # Surface area estimation (rough)
@@ -373,91 +350,8 @@ class GeometryAnalysisModel(EnrichmentModel):
 
         return results
 
-    def _get_shape_for_item(
-        self, doc: CADlingDocument, item: CADItem
-    ) -> Optional[any]:
-        """Get shape object for analysis.
-
-        Args:
-            doc: Document containing the item
-            item: Item to get shape for
-
-        Returns:
-            Shape object (OCC shape or trimesh), or None
-        """
-        # Check if item has shape stored
-        if hasattr(item, "_shape") and item._shape is not None:
-            return item._shape
-
-        # Try to load from backend based on format
-        format_str = str(doc.format).lower()
-
-        if format_str in ["step", "iges", "brep"] and self.has_pythonocc:
-            # Load via pythonocc backend
-            return self._load_occ_shape(doc)
-        elif format_str == "stl" and self.has_trimesh:
-            # Load via trimesh
-            return self._load_trimesh(doc)
-
-        return None
-
-    def _get_backend_resource(self, doc: CADlingDocument, resource_name: str):
-        """Get a resource from the document's backend using multiple attribute patterns.
-
-        Tries the following patterns in order:
-        1. backend.{resource_name} (e.g., backend.shape)
-        2. backend._{resource_name} (e.g., backend._shape)
-        3. backend.load_{resource_name}() (e.g., backend.load_shape())
-        4. backend.get_{resource_name}() (e.g., backend.get_shape())
-
-        Args:
-            doc: Document with backend
-            resource_name: Base name of the resource (e.g., "shape", "mesh")
-
-        Returns:
-            The resource if found, None otherwise
-        """
-        if not hasattr(doc, '_backend') or doc._backend is None:
-            _log.debug(f"No backend available for {resource_name} loading")
-            return None
-
-        backend = doc._backend
-
-        # Define attribute patterns to try (in order of likelihood)
-        attr_patterns = [
-            (resource_name, False),           # backend.shape
-            (f"_{resource_name}", False),     # backend._shape
-            (f"load_{resource_name}", True),  # backend.load_shape()
-            (f"get_{resource_name}", True),   # backend.get_shape()
-        ]
-
-        try:
-            for attr_name, is_method in attr_patterns:
-                if hasattr(backend, attr_name):
-                    attr = getattr(backend, attr_name)
-                    if is_method:
-                        # It's a method, call it
-                        if callable(attr):
-                            result = attr()
-                            if result is not None:
-                                _log.debug(f"Loaded {resource_name} from backend.{attr_name}()")
-                                return result
-                    else:
-                        # It's an attribute, return directly if not None
-                        if attr is not None:
-                            _log.debug(f"Loaded {resource_name} from backend.{attr_name}")
-                            return attr
-
-            # No pattern matched
-            _log.debug(
-                f"Backend {type(backend).__name__} does not provide {resource_name} "
-                f"(tried: {', '.join(p[0] for p in attr_patterns)})"
-            )
-            return None
-
-        except Exception as e:
-            _log.error(f"Failed to load {resource_name} from backend: {e}")
-            return None
+    # _get_shape_for_item is inherited from EnrichmentModel base class
+    # _get_backend_resource is inherited from EnrichmentModel base class
 
     def _load_occ_shape(self, doc: CADlingDocument):
         """Load shape via pythonocc backend.

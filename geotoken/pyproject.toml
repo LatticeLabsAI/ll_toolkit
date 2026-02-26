@@ -24,6 +24,7 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+addopts = "--cov=geotoken --cov-report=term-missing --cov-fail-under=75"
 markers = [
     "requires_trimesh: requires trimesh library",
 ]

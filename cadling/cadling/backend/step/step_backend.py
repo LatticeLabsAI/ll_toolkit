@@ -279,13 +279,15 @@ class STEPBackend(DeclarativeCADBackend, RenderableCADBackend):
         merged_features = {}
         basic_features = self.feature_extractor.extract_features(parse_result["entities"])
 
+        # Build O(1) lookup for ll_stepnet features
+        ll_features_by_id = {
+            f.get("entity_id"): f for f in ll_features_list if f.get("entity_id") is not None
+        }
+
         for entity_id in parse_result["entities"]:
             merged_features[entity_id] = basic_features.get(entity_id, {})
             # Add ll_stepnet features if available
-            ll_entity_features = next(
-                (f for f in ll_features_list if f.get("entity_id") == entity_id),
-                None
-            )
+            ll_entity_features = ll_features_by_id.get(entity_id)
             if ll_entity_features:
                 merged_features[entity_id].update(ll_entity_features)
 
@@ -357,9 +359,11 @@ class STEPBackend(DeclarativeCADBackend, RenderableCADBackend):
                     tmp.write(content.encode("utf-8"))
                     tmp_path = tmp.name
 
-                status = reader.ReadFile(tmp_path)
-                import os
-                os.unlink(tmp_path)
+                try:
+                    status = reader.ReadFile(tmp_path)
+                finally:
+                    import os
+                    os.unlink(tmp_path)
             else:
                 status = reader.ReadFile(str(self.path_or_stream))
 
@@ -504,6 +508,7 @@ class STEPBackend(DeclarativeCADBackend, RenderableCADBackend):
             "left",  # YZ plane, looking along +X
             "isometric",  # Isometric view (1,1,1)
             "isometric2",  # Alternate isometric (-1,1,1)
+            "isometric_back",  # Alias for isometric2
         ]
 
     def load_view(self, view_name: str) -> CADViewBackend:
@@ -534,53 +539,41 @@ class STEPViewBackend(CADViewBackend):
         self._shape = None
 
     def _load_shape(self):
-        """Load STEP shape using pythonocc-core."""
+        """Load STEP shape, reusing parent backend's cached shape when available.
+
+        This avoids redundantly re-parsing the STEP file. The parent
+        STEPBackend already loads the OCC shape via ``_load_occ_shape()``
+        during ``convert()``, so we reuse that cached result.  If the
+        parent has not yet loaded the shape we delegate to its loader
+        rather than creating a second STEPControl_Reader.
+        """
         if self._shape is not None:
             return self._shape
 
-        try:
-            from OCC.Core.STEPControl import STEPControl_Reader
-            from OCC.Core.IFSelect import IFSelect_RetDone
-
-            reader = STEPControl_Reader()
-
-            # Read STEP file
-            if isinstance(self.step_backend.path_or_stream, BytesIO):
-                # Write to temp file for pythonocc
-                import tempfile
-
-                with tempfile.NamedTemporaryFile(
-                    suffix=".step", delete=False
-                ) as tmp:
-                    content = self.step_backend._read_file_content()
-                    tmp.write(content.encode("utf-8"))
-                    tmp_path = tmp.name
-
-                status = reader.ReadFile(tmp_path)
-                import os
-
-                os.unlink(tmp_path)
-            else:
-                status = reader.ReadFile(str(self.step_backend.path_or_stream))
-
-            if status != IFSelect_RetDone:
-                raise RuntimeError("Failed to read STEP file")
-
-            # Transfer shapes
-            reader.TransferRoots()
-            self._shape = reader.OneShape()
-
-            _log.debug(f"Loaded STEP shape for view {self.view_name}")
+        # Try to reuse the parent backend's already-parsed shape
+        parent_shape = self.step_backend._occ_shape
+        if parent_shape is not None:
+            self._shape = parent_shape
+            _log.debug(
+                "Reused parent STEPBackend cached shape for view %s",
+                self.view_name,
+            )
             return self._shape
 
-        except ImportError as e:
-            raise RuntimeError(
-                f"pythonocc-core not available: {e}. "
-                "Install with: conda install pythonocc-core"
+        # Parent hasn't loaded yet -- ask it to load (single parse)
+        parent_shape = self.step_backend._load_occ_shape()
+        if parent_shape is not None:
+            self._shape = parent_shape
+            _log.debug(
+                "Loaded STEP shape via parent backend for view %s",
+                self.view_name,
             )
-        except Exception as e:
-            _log.error(f"Failed to load STEP shape: {e}")
-            raise
+            return self._shape
+
+        raise RuntimeError(
+            "Failed to load STEP shape for rendering. "
+            "Ensure pythonocc-core is installed and the STEP file is valid."
+        )
 
     def render(self, resolution: int = 1024) -> Image.Image:
         """Render this view to an image with proper offscreen rendering.
@@ -595,83 +588,14 @@ class STEPViewBackend(CADViewBackend):
             RuntimeError: If rendering fails (NO MORE PLACEHOLDER IMAGES!)
         """
         try:
-            from OCC.Display.OCCViewer import Viewer3d
-            from OCC.Core.BRepBndLib import brepbndlib
-            from OCC.Core.Bnd import Bnd_Box
-            from OCC.Core.V3d import V3d_XposYnegZpos, V3d_Zneg, V3d_Yneg, V3d_Ypos, V3d_Xneg, V3d_Xpos
-            from PIL import Image as PILImage
+            from cadling.backend.pythonocc_core_backend import render_shape_to_image
 
-            # Load shape
             shape = self._load_shape()
 
             if shape is None:
                 raise RuntimeError("STEP shape is None, cannot render")
 
-            # Calculate bounding box for camera positioning
-            bbox = Bnd_Box()
-            brepbndlib.Add(shape, bbox)
-
-            # Create offscreen viewer
-            viewer = Viewer3d()
-
-            # Display shape
-            viewer.DisplayShape(shape, update=True)
-
-            # Set view direction based on view_name
-            view_obj = viewer.View
-
-            # Map view names to OCC view directions
-            if self.view_name == "front":
-                view_obj.SetProj(V3d_Zneg)  # Looking along -Z
-            elif self.view_name == "back":
-                view_obj.SetProj(V3d_Xneg)  # Opposite of front
-            elif self.view_name == "top":
-                view_obj.SetProj(V3d_Yneg)  # Looking along -Y
-            elif self.view_name == "bottom":
-                view_obj.SetProj(V3d_Ypos)  # Looking along +Y
-            elif self.view_name == "right":
-                view_obj.SetProj(V3d_Xneg)  # Looking along -X
-            elif self.view_name == "left":
-                view_obj.SetProj(V3d_Xpos)  # Looking along +X
-            elif self.view_name == "isometric":
-                view_obj.SetProj(V3d_XposYnegZpos)  # Isometric (1,1,1)
-            elif self.view_name == "isometric2":
-                # Custom isometric view (-1,1,1)
-                view_obj.SetProj(-1, 1, 1)
-            else:
-                # Default to isometric
-                view_obj.SetProj(V3d_XposYnegZpos)
-
-            # Fit all to view
-            viewer.FitAll()
-
-            # Render to image buffer using View.Dump for offscreen rendering
-            import tempfile
-            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-                tmp_path = tmp.name
-
-            viewer.View.Dump(tmp_path)
-
-            # Read the dumped image
-            image = PILImage.open(tmp_path)
-
-            # Resize if needed
-            if image.size != (resolution, resolution):
-                # Use LANCZOS for high-quality resampling
-                try:
-                    from PIL.Image import Resampling
-                    image = image.resize((resolution, resolution), Resampling.LANCZOS)
-                except ImportError:
-                    # Fallback for older Pillow versions
-                    from PIL import Image as PILImage_old
-                    image = image.resize((resolution, resolution), PILImage_old.LANCZOS)
-
-            # Clean up temp file
-            import os
-            try:
-                os.unlink(tmp_path)
-            except OSError as e:
-                _log.debug(f"Failed to clean up temporary file {tmp_path}: {e}")
+            image = render_shape_to_image(shape, self.view_name, resolution)
 
             _log.debug(f"Successfully rendered STEP view '{self.view_name}' at {resolution}x{resolution}")
             return image
@@ -682,7 +606,6 @@ class STEPViewBackend(CADViewBackend):
                 "Install with: conda install -c conda-forge pythonocc-core"
             ) from e
         except Exception as e:
-            # NO MORE LIES! If rendering fails, FAIL LOUDLY!
             _log.error(f"STEP rendering failed for view {self.view_name}: {e}")
             raise RuntimeError(
                 f"STEP rendering failed for view {self.view_name}: {e}. "
@@ -691,64 +614,8 @@ class STEPViewBackend(CADViewBackend):
 
     def get_camera_parameters(self) -> dict:
         """Get camera parameters for this view."""
-        # Define camera parameters for each standard view
-        view_params = {
-            "front": {
-                "position": [0, 0, 100],
-                "direction": [0, 0, -1],
-                "up": [0, 1, 0],
-                "fov": 45.0,
-            },
-            "back": {
-                "position": [0, 0, -100],
-                "direction": [0, 0, 1],
-                "up": [0, 1, 0],
-                "fov": 45.0,
-            },
-            "top": {
-                "position": [0, 100, 0],
-                "direction": [0, -1, 0],
-                "up": [0, 0, -1],
-                "fov": 45.0,
-            },
-            "bottom": {
-                "position": [0, -100, 0],
-                "direction": [0, 1, 0],
-                "up": [0, 0, 1],
-                "fov": 45.0,
-            },
-            "right": {
-                "position": [100, 0, 0],
-                "direction": [-1, 0, 0],
-                "up": [0, 1, 0],
-                "fov": 45.0,
-            },
-            "left": {
-                "position": [-100, 0, 0],
-                "direction": [1, 0, 0],
-                "up": [0, 1, 0],
-                "fov": 45.0,
-            },
-            "isometric": {
-                "position": [100, 100, 100],
-                "direction": [-1, -1, -1],
-                "up": [0, 1, 0],
-                "fov": 45.0,
-            },
-            "isometric2": {
-                "position": [-100, 100, 100],
-                "direction": [1, -1, -1],
-                "up": [0, 1, 0],
-                "fov": 45.0,
-            },
-        }
+        from cadling.backend.abstract_backend import DEFAULT_CAMERA_PARAMETERS
 
-        return view_params.get(
-            self.view_name,
-            {
-                "position": [100, 100, 100],
-                "direction": [-1, -1, -1],
-                "up": [0, 1, 0],
-                "fov": 45.0,
-            },
+        return DEFAULT_CAMERA_PARAMETERS.get(
+            self.view_name, DEFAULT_CAMERA_PARAMETERS["front"]
         )
