@@ -323,6 +323,11 @@ class GANTrainer:
             metrics["gp_loss"],
         )
 
+        # Track best wasserstein distance (lower = generator closer to real)
+        epoch_wd = metrics["wasserstein_dist"]
+        if epoch_wd < self.best_wasserstein_dist:
+            self.best_wasserstein_dist = epoch_wd
+
         return metrics
 
     @torch.no_grad()
@@ -342,7 +347,11 @@ class GANTrainer:
         self.discriminator.eval()
 
         # Collect real latents from validation data (limit for efficiency)
-        val_loader = getattr(self, 'val_dataloader', None) or self.train_dataloader
+        val_loader = getattr(self, 'val_dataloader', None)
+        if val_loader is None:
+            _log.warning("No val_dataloader set; skipping GAN validation.")
+            return {}
+
         all_real = []
         for batch in val_loader:
             if isinstance(batch, torch.Tensor):

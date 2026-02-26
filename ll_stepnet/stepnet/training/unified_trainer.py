@@ -203,6 +203,10 @@ class STEPNetTrainer:
                 device=str(self.device),
                 checkpoint_dir=self.config.checkpoint_dir,
             )
+            # GANTrainer doesn't accept val_dataloader in __init__; set it
+            # as an attribute so validate() can find it via getattr().
+            if self.val_loader is not None:
+                self._inner_trainer.val_dataloader = self.val_loader
         elif model_type == ModelType.DIFFUSION:
             # Diffusion needs a noise scheduler — check model
             scheduler = getattr(self.model, "scheduler", None)
@@ -320,7 +324,9 @@ class STEPNetTrainer:
         for epoch in range(self.config.epochs):
             # Training epoch
             train_metrics = self._train_epoch(epoch)
-            history["train_loss"].append(train_metrics.get("loss", 0.0))
+            # VAETrainer returns 'total_loss'; GAN/Diffusion return 'loss'
+            train_loss = train_metrics.get("loss", train_metrics.get("total_loss", 0.0))
+            history["train_loss"].append(train_loss)
 
             # Validation
             if self.val_loader is not None and (epoch + 1) % self.config.eval_freq == 0:
@@ -336,8 +342,8 @@ class STEPNetTrainer:
                 self.logger.log(
                     {
                         "epoch": epoch,
-                        "train_loss": train_metrics.get("loss", 0.0),
-                        **{f"train_{k}": v for k, v in train_metrics.items() if k != "loss"},
+                        "train_loss": train_loss,
+                        **{f"train_{k}": v for k, v in train_metrics.items() if k not in ("loss", "total_loss")},
                     },
                     step=epoch,
                 )

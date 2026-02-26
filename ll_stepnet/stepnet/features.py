@@ -2,6 +2,7 @@
 STEP Feature Extraction Module
 Extracts geometric properties from STEP entities.
 """
+from __future__ import annotations
 
 import re
 from typing import List, Dict, Tuple

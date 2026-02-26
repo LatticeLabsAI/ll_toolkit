@@ -132,7 +132,7 @@ class STEPAnnotatedOutput:
         if self.reserialized_text:
             parts.append(self.reserialized_text)
         result = "\n".join(parts)
-        self.annotated_text = result
+        # Do not mutate instance state — return a pure result
         return result
 
 

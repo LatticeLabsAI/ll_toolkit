@@ -12,6 +12,8 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
+from stepnet.training.streaming_utils import build_dataset_from_config
+
 _log = logging.getLogger(__name__)
 
 try:
@@ -223,10 +225,7 @@ class StreamingGANTrainer:
     def _build_dataset_from_config(dataset_config) -> Any:
         """Build a streaming dataset from a StreamingCadlingConfig.
 
-        Lazy-imports ``cadling.data.streaming.CADStreamingDataset`` and
-        ``cadling.data.streaming.CADStreamingConfig`` to construct a
-        streaming data pipeline from the provided ll_stepnet
-        ``StreamingCadlingConfig``.
+        Delegates to :func:`streaming_utils.build_dataset_from_config`.
 
         Args:
             dataset_config: A ``StreamingCadlingConfig`` instance.
@@ -234,34 +233,7 @@ class StreamingGANTrainer:
         Returns:
             A ``CADStreamingDataset`` ready for iteration.
         """
-        try:
-            from cadling.data.streaming import (
-                CADStreamingDataset,
-                CADStreamingConfig,
-            )
-        except ImportError as exc:
-            raise ImportError(
-                "cadling is required for dataset_config support. "
-                "Install via: pip install cadling"
-            ) from exc
-
-        cadling_cfg = CADStreamingConfig(
-            dataset_id=dataset_config.dataset_id,
-            split=dataset_config.split,
-            streaming=dataset_config.streaming,
-            batch_size=dataset_config.batch_size,
-            shuffle=dataset_config.shuffle,
-            shuffle_buffer_size=dataset_config.shuffle_buffer_size,
-            max_samples=dataset_config.max_samples,
-        )
-        ds = CADStreamingDataset(cadling_cfg)
-
-        _log.info(
-            "Built CADStreamingDataset from config: dataset_id=%s, split=%s",
-            dataset_config.dataset_id,
-            dataset_config.split,
-        )
-        return ds
+        return build_dataset_from_config(dataset_config)
 
     def _prepare_batch(
         self, batch: Dict[str, Any]

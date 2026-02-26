@@ -6,7 +6,9 @@ from __future__ import annotations
 
 import hashlib
 import re
-from typing import List, Dict
+from typing import List, Dict, Optional
+
+from .config import STEPTokenizerConfig
 
 
 class STEPTokenizer:
@@ -16,15 +18,17 @@ class STEPTokenizer:
     No feature extraction or graph building.
     """
 
-    def __init__(self, vocab_size: int = 50000, config=None):
+    def __init__(self, vocab_size: int = 50000, config: Optional[STEPTokenizerConfig] = None):
         """
         Args:
             vocab_size: Maximum vocabulary size
-            config: Optional STEPTokenizerConfig instance
+            config: Optional STEPTokenizerConfig instance. When provided,
+                its values override the vocab_size and max_length parameters.
         """
         if config is not None:
             vocab_size = config.vocab_size
         self.vocab_size = vocab_size
+        self.max_length = config.max_length if config is not None else 2048
 
         # Special tokens
         self.PAD_ID = 0

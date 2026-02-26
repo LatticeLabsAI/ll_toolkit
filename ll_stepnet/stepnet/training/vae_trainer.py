@@ -389,7 +389,7 @@ class VAETrainer:
         return metrics
 
     @torch.no_grad()
-    def visualize_latent_space(self, epoch: int, max_samples: int = 1000) -> None:
+    def visualize_latent_space(self, epoch: int, max_samples: int = 5000) -> None:
         """Encode validation set and visualize latent space in 2D.
 
         Uses t-SNE (or UMAP if available) to reduce latent representations to
@@ -433,12 +433,27 @@ class VAETrainer:
             if "labels" in batch:
                 all_labels.append(batch["labels"])
 
-        all_mu_cat = torch.cat(all_mu, dim=0).numpy()
+        all_mu_cat = torch.cat(all_mu, dim=0)
 
         if all_labels:
-            all_labels_cat = torch.cat(all_labels, dim=0).numpy()
+            all_labels_cat = torch.cat(all_labels, dim=0)
         else:
             all_labels_cat = None
+
+        # Subsample if we collected more than max_samples
+        if len(all_mu_cat) > max_samples:
+            import numpy as np
+
+            indices = np.random.RandomState(42).choice(
+                len(all_mu_cat), max_samples, replace=False
+            )
+            all_mu_cat = all_mu_cat[indices]
+            if all_labels_cat is not None:
+                all_labels_cat = all_labels_cat[indices]
+
+        all_mu_cat = all_mu_cat.numpy()
+        if all_labels_cat is not None:
+            all_labels_cat = all_labels_cat.numpy()
 
         # Lazy import for dimensionality reduction and plotting
         try:
@@ -536,6 +551,13 @@ class VAETrainer:
                 self.history["param_mse"].append(
                     val_metrics.get("param_mse", 0.0)
                 )
+            else:
+                # Append NaN placeholders to keep history lists aligned
+                self.history["val_loss"].append(float("nan"))
+                self.history["val_recon_loss"].append(float("nan"))
+                self.history["val_kl_loss"].append(float("nan"))
+                self.history["command_accuracy"].append(float("nan"))
+                self.history["param_mse"].append(float("nan"))
 
                 print(
                     f"Val Loss = {val_metrics['val_loss']:.4f}, "

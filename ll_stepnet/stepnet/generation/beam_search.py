@@ -104,7 +104,16 @@ class BeamSearchDecoder:
             return self._sampling_decode(
                 model_step_fn, memory, vocab_size, embedding_fn, initial_tokens
             )
-        else:  # BEAM_SEARCH or DIVERSE_BEAM
+        elif strategy == DecodingStrategy.DIVERSE_BEAM:
+            return self._diverse_beam_search_decode(
+                model_step_fn,
+                memory,
+                vocab_size,
+                embedding_fn,
+                initial_tokens,
+                return_all_scores,
+            )
+        else:  # BEAM_SEARCH
             return self._beam_search_decode(
                 model_step_fn,
                 memory,
@@ -420,6 +429,222 @@ class BeamSearchDecoder:
         batch_indices = torch.arange(batch_size, device=device)
         best_sequences = generated[batch_indices, best_beam_idx]
 
+        best_scores = beam_scores[batch_indices, best_beam_idx]
+
+        return GenerationOutput(
+            sequences=best_sequences,
+            scores=best_scores,
+            all_scores=all_scores,
+        )
+
+    def _diverse_beam_search_decode(
+        self,
+        model_step_fn: Callable,
+        memory: torch.Tensor,
+        vocab_size: int,
+        embedding_fn: Optional[Callable],
+        initial_tokens: Optional[torch.Tensor],
+        return_all_scores: bool = False,
+    ) -> GenerationOutput:
+        """Diverse beam search with group-based diversity penalty.
+
+        Splits beams into ``num_beam_groups`` groups. Each group runs
+        its own beam search, but when scoring candidates for group *g*
+        a penalty is applied for tokens already selected by groups
+        ``0 .. g-1`` in the current step, encouraging diverse outputs.
+
+        Args:
+            model_step_fn: Callable taking (embeddings, memory) → logits.
+            memory: Encoder memory ``[batch_size, mem_len, dim]``.
+            vocab_size: Output vocabulary size.
+            embedding_fn: Optional token → embedding function.
+            initial_tokens: Optional initial tokens ``[batch_size, init_len]``.
+            return_all_scores: Whether to return per-step scores.
+
+        Returns:
+            :class:`GenerationOutput` with generated sequences and scores.
+        """
+        batch_size = memory.size(0)
+        device = memory.device
+        config = self.config
+        num_beams = config.num_beams
+        num_groups = config.num_beam_groups
+        diversity_penalty = config.diversity_penalty
+        beams_per_group = num_beams // num_groups
+
+        # Initialize sequences per beam
+        if initial_tokens is not None:
+            generated = initial_tokens.repeat_interleave(num_beams, dim=0)
+        else:
+            generated = torch.full(
+                (batch_size * num_beams, 1),
+                config.bos_token_id,
+                dtype=torch.long,
+                device=device,
+            )
+
+        # Expand memory for all beams
+        memory_expanded = memory.repeat_interleave(num_beams, dim=0)
+
+        # Initialize beam scores — only first beam per group is active
+        beam_scores = torch.zeros(batch_size, num_beams, device=device)
+        beam_scores[:, :] = float("-inf")
+        for g in range(num_groups):
+            beam_scores[:, g * beams_per_group] = 0.0
+        beam_scores = beam_scores.view(-1)
+
+        finished = torch.zeros(batch_size * num_beams, dtype=torch.bool, device=device)
+        all_scores: Optional[List[torch.Tensor]] = [] if return_all_scores else None
+
+        ngram_history: Dict[int, set] = {i: set() for i in range(batch_size * num_beams)}
+
+        for step in range(config.max_length - generated.size(1)):
+            # Get embeddings
+            if embedding_fn is not None:
+                tgt = embedding_fn(generated)
+            else:
+                tgt = F.one_hot(generated, vocab_size).float()
+
+            # Model step for all beams at once
+            logits = model_step_fn(tgt, memory_expanded)  # [batch*beams, vocab]
+
+            # Apply temperature
+            if config.temperature != 1.0:
+                logits = logits / config.temperature
+
+            # Apply repetition penalty
+            if config.repetition_penalty != 1.0:
+                logits = self._apply_repetition_penalty(logits, generated)
+
+            # Block n-grams
+            if config.no_repeat_ngram_size > 0:
+                logits = self._block_ngrams(
+                    logits, generated, ngram_history, config.no_repeat_ngram_size
+                )
+
+            # Block EOS if min_length not reached
+            if step < config.min_length - 1:
+                logits[:, config.eos_token_id] = float("-inf")
+
+            log_probs = F.log_softmax(logits, dim=-1)
+
+            # Reshape to [batch, num_beams, vocab]
+            log_probs = log_probs.view(batch_size, num_beams, vocab_size)
+
+            # Track tokens selected by previous groups for diversity penalty
+            # selected_tokens_per_batch[b] accumulates token counts across groups
+            selected_tokens_per_batch: List[torch.Tensor] = [
+                torch.zeros(vocab_size, device=device) for _ in range(batch_size)
+            ]
+
+            # New tensors to collect results across groups
+            next_beam_scores_all = torch.zeros(batch_size, num_beams, device=device)
+            next_beam_indices_all = torch.zeros(
+                batch_size, num_beams, dtype=torch.long, device=device
+            )
+            next_token_indices_all = torch.zeros(
+                batch_size, num_beams, dtype=torch.long, device=device
+            )
+
+            for g in range(num_groups):
+                group_start = g * beams_per_group
+                group_end = group_start + beams_per_group
+
+                # Extract group beams
+                group_log_probs = log_probs[:, group_start:group_end, :]  # [B, bpg, V]
+                group_beam_scores = beam_scores.view(batch_size, num_beams)[
+                    :, group_start:group_end
+                ]  # [B, bpg]
+
+                # Apply diversity penalty from previous groups
+                if g > 0 and diversity_penalty > 0.0:
+                    for b in range(batch_size):
+                        penalty = diversity_penalty * selected_tokens_per_batch[b]
+                        # Subtract penalty from log probs for tokens already chosen
+                        group_log_probs[b] = group_log_probs[b] - penalty.unsqueeze(0)
+
+                # Compute next scores for this group
+                group_next_scores = (
+                    group_beam_scores.unsqueeze(-1) + group_log_probs
+                )  # [B, bpg, V]
+                group_next_scores = group_next_scores.view(
+                    batch_size, beams_per_group * vocab_size
+                )
+
+                # Select top beams_per_group candidates
+                top_scores, top_indices = group_next_scores.topk(
+                    beams_per_group, dim=-1
+                )
+
+                # Decode beam and token indices (relative to group)
+                group_beam_idx = top_indices // vocab_size  # within group
+                group_token_idx = top_indices % vocab_size
+
+                # Map back to global beam indices
+                global_beam_idx = group_beam_idx + group_start
+
+                # Store results
+                next_beam_scores_all[:, group_start:group_end] = top_scores
+                next_beam_indices_all[:, group_start:group_end] = global_beam_idx
+                next_token_indices_all[:, group_start:group_end] = group_token_idx
+
+                # Update diversity tracking: count selected tokens per batch
+                for b in range(batch_size):
+                    for t in group_token_idx[b]:
+                        selected_tokens_per_batch[b][t.item()] += 1.0
+
+            if return_all_scores and all_scores is not None:
+                all_scores.append(next_beam_scores_all.clone())
+
+            # Flatten indices for gathering
+            batch_indices = torch.arange(batch_size, device=device).unsqueeze(-1)
+            flat_beam_indices = (
+                batch_indices * num_beams + next_beam_indices_all
+            ).view(-1)
+
+            # Update sequences
+            generated = torch.cat(
+                [
+                    generated[flat_beam_indices],
+                    next_token_indices_all.view(-1, 1),
+                ],
+                dim=-1,
+            )
+
+            # Update beam scores with length penalty
+            seq_len = generated.size(1)
+            if config.length_penalty != 1.0:
+                length_factor = ((5 + seq_len) / 6) ** config.length_penalty
+            else:
+                length_factor = 1.0
+
+            beam_scores = next_beam_scores_all.view(-1) / length_factor
+
+            # Update finished status
+            finished = finished[flat_beam_indices] | (
+                next_token_indices_all.view(-1) == config.eos_token_id
+            )
+
+            # Update n-gram history with reordered beams
+            new_history: Dict[int, set] = {}
+            for i, old_idx in enumerate(flat_beam_indices.tolist()):
+                new_history[i] = ngram_history.get(old_idx, set()).copy()
+            ngram_history = new_history
+            self._update_ngram_history(
+                ngram_history, generated, config.no_repeat_ngram_size
+            )
+
+            # Early stopping
+            if config.early_stopping and finished.all():
+                break
+
+        # Select best beam for each batch
+        beam_scores = beam_scores.view(batch_size, num_beams)
+        best_beam_idx = beam_scores.argmax(dim=-1)
+
+        generated = generated.view(batch_size, num_beams, -1)
+        batch_indices = torch.arange(batch_size, device=device)
+        best_sequences = generated[batch_indices, best_beam_idx]
         best_scores = beam_scores[batch_indices, best_beam_idx]
 
         return GenerationOutput(
