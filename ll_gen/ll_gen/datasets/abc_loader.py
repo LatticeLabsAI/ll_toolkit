@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 
 __all__ = ["ABCDataset", "load_abc"]
 
-logger = logging.getLogger(__name__)
+_log = logging.getLogger(__name__)
 
 # Lazy imports
 _torch = None
@@ -45,13 +45,13 @@ def _check_pythonocc():
     global _pythonocc_available
     if _pythonocc_available is None:
         try:
-            from OCP.TopoDS import TopoDS_Shape
-            from OCP.TopExp import TopExp_Expl
-            from OCP.TopAbs import TopAbs_FACE
+            from OCC.Core.TopoDS import TopoDS_Shape
+            from OCC.Core.TopExp import TopExp_Explorer
+            from OCC.Core.TopAbs import TopAbs_FACE
             _pythonocc_available = True
         except ImportError:
             _pythonocc_available = False
-            logger.warning(
+            _log.warning(
                 "pythonocc not available. STEP files will be loaded as paths only."
             )
     return _pythonocc_available
@@ -67,35 +67,35 @@ def _extract_face_features(step_file: str) -> Dict[str, Any]:
         Dictionary with node_features and edge_index arrays.
     """
     try:
-        from OCP.STEPCAFControl import STEPCAFControl_Reader
-        from OCP.TDocStd import TDocStd_Document
-        from OCP.XCAFDoc import XCAFDoc_DocumentTool
-        from OCP.TopExp import TopExp_Expl
-        from OCP.TopAbs import TopAbs_FACE, TopAbs_EDGE
-        from OCP.BRepGProp import BRepGProp
-        from OCP.GProp import GProp_GProps
-        from OCP.Bnd import Bnd_Box
-        from OCP.BRepBndLib import BRepBndLib
+        from OCC.Core.STEPControl import STEPControl_Reader
+        from OCC.Core.IFSelect import IFSelect_RetDone
+        from OCC.Core.TopExp import TopExp_Explorer, TopExp
+        from OCC.Core.TopAbs import TopAbs_FACE, TopAbs_EDGE
+        from OCC.Core.BRepGProp import brepgprop
+        from OCC.Core.GProp import GProp_GProps
+        from OCC.Core.Bnd import Bnd_Box
+        from OCC.Core.BRepBndLib import brepbndlib
+        from OCC.Core.TopTools import TopTools_IndexedDataMapOfShapeListOfShape
 
         np = _get_numpy()
 
         # Read STEP file
-        reader = STEPCAFControl_Reader()
+        reader = STEPControl_Reader()
         status = reader.ReadFile(step_file)
 
-        if status != 0:
-            logger.warning(f"Failed to read STEP file: {step_file}")
+        if status != IFSelect_RetDone:
+            _log.warning("Failed to read STEP file: %s", step_file)
             return {
                 "node_features": None,
                 "edge_index": None,
             }
 
-        reader.Transfer(reader.Document(), 0)
+        reader.TransferRoots()
         shape = reader.OneShape()
 
         # Extract faces
         faces = []
-        face_explorer = TopExp_Expl(shape, TopAbs_FACE)
+        face_explorer = TopExp_Explorer(shape, TopAbs_FACE)
 
         while face_explorer.More():
             face = face_explorer.Current()
@@ -112,7 +112,7 @@ def _extract_face_features(step_file: str) -> Dict[str, Any]:
         features = []
         for face in faces:
             props = GProp_GProps()
-            BRepGProp.SurfaceProperties_s(face, props)
+            brepgprop.SurfaceProperties(face, props)
 
             # Surface area
             area = props.Mass()
@@ -126,7 +126,7 @@ def _extract_face_features(step_file: str) -> Dict[str, Any]:
 
             # Bounding box
             bbox = Bnd_Box()
-            BRepBndLib.Add_s(face, bbox)
+            brepbndlib.Add(face, bbox)
             xmin, ymin, zmin, xmax, ymax, zmax = bbox.Get()
 
             bbox_array = np.array(
@@ -148,17 +148,42 @@ def _extract_face_features(step_file: str) -> Dict[str, Any]:
 
         node_features = np.stack(features, axis=0)
 
-        # Build edge index (simple: connect adjacent faces)
-        num_faces = len(faces)
-        edge_index = []
+        # Build edge index: connect faces that share an edge
+        edge_map = TopTools_IndexedDataMapOfShapeListOfShape()
+        TopExp.MapShapesAndAncestors(shape, TopAbs_EDGE, TopAbs_FACE, edge_map)
 
-        for i in range(num_faces):
-            for j in range(i + 1, num_faces):
-                edge_index.append([i, j])
-                edge_index.append([j, i])
+        # Build face-index lookup
+        face_index = {}
+        for idx, face in enumerate(faces):
+            try:
+                key = face.HashCode(2**31 - 1)
+            except Exception:
+                key = hash(face)
+            face_index[key] = idx
 
-        if edge_index:
-            edge_index = np.array(edge_index, dtype=np.int64).T
+        adjacency_set = set()
+        for edge_idx in range(1, edge_map.Extent() + 1):
+            adjacent_faces = edge_map.FindFromIndex(edge_idx)
+            face_indices = []
+            for fi in range(1, adjacent_faces.Extent() + 1):
+                adj_face = adjacent_faces.Value(fi)
+                try:
+                    key = adj_face.HashCode(2**31 - 1)
+                except Exception:
+                    key = hash(adj_face)
+                if key in face_index:
+                    face_indices.append(face_index[key])
+            # Connect all faces sharing this edge
+            for a in range(len(face_indices)):
+                for b in range(a + 1, len(face_indices)):
+                    i_idx, j_idx = face_indices[a], face_indices[b]
+                    if i_idx != j_idx:
+                        adjacency_set.add((i_idx, j_idx))
+                        adjacency_set.add((j_idx, i_idx))
+
+        edge_index_list = sorted(adjacency_set)
+        if edge_index_list:
+            edge_index = np.array(edge_index_list, dtype=np.int64).T
         else:
             edge_index = np.array([], dtype=np.int64).reshape(2, 0)
 
@@ -168,7 +193,7 @@ def _extract_face_features(step_file: str) -> Dict[str, Any]:
         }
 
     except Exception as e:
-        logger.warning(f"Error extracting features from {step_file}: {e}")
+        _log.warning("Error extracting features from %s: %s", step_file, e)
         return {
             "node_features": None,
             "edge_index": None,
@@ -225,7 +250,7 @@ class ABCDataset:
         if max_samples is not None:
             self.step_files = self.step_files[:max_samples]
 
-        logger.info(
+        _log.info(
             f"Loaded {len(self.step_files)} ABC samples from {split}"
         )
 
@@ -302,7 +327,7 @@ def _tokenize_abc_sample(
             result["node_features"] = features.get("node_features")
             result["edge_index"] = features.get("edge_index")
         except Exception as e:
-            logger.warning(f"Failed to extract features: {e}")
+            _log.warning(f"Failed to extract features: {e}")
             result["node_features"] = None
             result["edge_index"] = None
     else:
@@ -339,7 +364,7 @@ def load_abc(
     """
     # Check if path is a local directory
     if os.path.isdir(path):
-        logger.info(f"Loading ABC from local directory: {path}")
+        _log.info(f"Loading ABC from local directory: {path}")
         return ABCDataset(
             data_dir=path,
             split=split,
@@ -347,7 +372,7 @@ def load_abc(
         )
     else:
         # Load from HuggingFace Hub
-        logger.info(f"Loading ABC from HuggingFace Hub: {path}")
+        _log.info(f"Loading ABC from HuggingFace Hub: {path}")
         datasets = _get_datasets()
 
         hf_dataset = datasets.load_dataset(
