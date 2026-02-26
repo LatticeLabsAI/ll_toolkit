@@ -230,6 +230,9 @@ class RLAlignmentTrainer:
         except Exception as e:
             _log.error("Error during policy gradient computation: %s", e)
             loss_value = 0.0
+            step_failed = True
+        else:
+            step_failed = False
 
         # Track step
         self._step_count += 1
@@ -240,9 +243,12 @@ class RLAlignmentTrainer:
             "loss": loss_value,
             "baseline": float(self._baseline),
             "is_valid": float(result.is_valid),
+            "failed": step_failed,
         }
 
-        self._train_history.append(step_result)
+        # Only record successful steps in training history
+        if not step_failed:
+            self._train_history.append(step_result)
 
         return step_result
 
@@ -299,39 +305,38 @@ class RLAlignmentTrainer:
             return None, 0.0
 
         try:
-            with torch.no_grad():
-                # Convert to tensor
-                if isinstance(token_ids, np.ndarray):
-                    token_ids_t = torch.from_numpy(token_ids).long().to(self.device)
-                else:
-                    token_ids_t = token_ids.to(self.device)
+            # Convert to tensor
+            if isinstance(token_ids, np.ndarray):
+                token_ids_t = torch.from_numpy(token_ids).long().to(self.device)
+            else:
+                token_ids_t = token_ids.to(self.device)
 
-                # Forward pass
-                # The exact interface depends on your model.
-                # Assumes model returns logits or log_probs directly
-                output = self.generator._model(token_ids_t.unsqueeze(0))
+            # Forward pass (no torch.no_grad — gradients must flow for training)
+            # The exact interface depends on your model.
+            # Assumes model returns logits or log_probs directly
+            output = self.generator._model(token_ids_t.unsqueeze(0))
 
-                # Extract log probabilities from output
-                # This is model-specific; adapt as needed
-                if hasattr(output, "logits"):
-                    logits = output.logits
-                elif isinstance(output, tuple) and len(output) > 0:
-                    logits = output[0]
-                else:
-                    logits = output
+            # Extract log probabilities from output
+            # This is model-specific; adapt as needed
+            if hasattr(output, "logits"):
+                logits = output.logits
+            elif isinstance(output, tuple) and len(output) > 0:
+                logits = output[0]
+            else:
+                logits = output
 
-                # Compute log_probs via softmax
-                log_probs = torch.nn.functional.log_softmax(logits, dim=-1)
+            # Compute log_probs via softmax
+            log_probs = torch.nn.functional.log_softmax(logits, dim=-1)
 
-                # Sum log_probs for the generated tokens
-                # (This is a simplification; adapt to your tokenization)
-                log_prob_sum = log_probs.sum()
+            # Sum log_probs for the generated tokens
+            # (This is a simplification; adapt to your tokenization)
+            log_prob_sum = log_probs.sum()
 
-                # Compute entropy as a bonus for exploration
-                probs = torch.exp(log_probs)
-                entropy = -(probs * log_probs).sum()
+            # Compute entropy as a bonus for exploration
+            probs = torch.exp(log_probs)
+            entropy = -(probs * log_probs).sum()
 
-                return log_prob_sum, float(entropy.cpu())
+            return log_prob_sum, float(entropy.detach().cpu())
 
         except Exception as e:
             _log.warning("Error computing log_probs: %s", e)
@@ -370,6 +375,10 @@ class RLAlignmentTrainer:
         validities = []
 
         _log.info("Starting epoch with %d samples", len(dataset))
+
+        # Set model to training mode for correct dropout/batchnorm behavior
+        if self.generator._model is not None:
+            self.generator._model.train()
 
         for i, sample in enumerate(dataset):
             prompt = sample.get("prompt", "")
@@ -428,6 +437,10 @@ class RLAlignmentTrainer:
 
         self._init_training()
         assert self._disposal_engine is not None
+
+        # Set model to eval mode for correct dropout/batchnorm behavior
+        if self.generator._model is not None:
+            self.generator._model.eval()
 
         results = []
 
@@ -505,7 +518,13 @@ class RLAlignmentTrainer:
         assert self._optimizer is not None
 
         path = Path(path)
-        checkpoint = torch.load(path, map_location=self.device)
+        try:
+            checkpoint = torch.load(
+                path, map_location=self.device, weights_only=True,
+            )
+        except TypeError:
+            # PyTorch < 2.0 does not support weights_only
+            checkpoint = torch.load(path, map_location=self.device)
 
         self._step_count = checkpoint.get("step_count", 0)
         self._baseline = checkpoint.get("baseline", 0.0)
