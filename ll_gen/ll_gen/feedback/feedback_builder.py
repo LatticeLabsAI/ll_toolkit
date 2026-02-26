@@ -160,8 +160,10 @@ def build_code_feedback(
             lines.append(f"CORRECTION: {suggestion}")
 
     lines.append("")
+    lang = getattr(original_proposal, "language", None)
+    lang_name = lang.value if lang is not None else "CadQuery"
     lines.append(
-        "Please regenerate a corrected CadQuery script that avoids "
+        f"Please regenerate a corrected {lang_name} script that avoids "
         "these issues. Ensure all sketch loops are closed, fillet "
         "radii do not exceed edge lengths, and boolean operations "
         "operate on valid solid shapes."
@@ -403,7 +405,7 @@ def _check_euler(result: DisposalResult) -> bool:
     """Check if Euler characteristic is valid (V - E + F = 2 for genus-0)."""
     if result.geometry_report and result.geometry_report.euler_characteristic is not None:
         return result.geometry_report.euler_characteristic == 2
-    return True  # Assume valid if we can't check
+    return False  # Missing report means shape failed validation
 
 
 def _check_no_self_intersection(result: DisposalResult) -> bool:

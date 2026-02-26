@@ -216,8 +216,8 @@ def _count_passing_tiers(result: DisposalResult) -> int:
         if ec is not None and ec == 2:
             tiers_passed += 1
     else:
-        # Can't check — give benefit of the doubt
-        tiers_passed += 1
+        # Missing geometry report means shape failed — no benefit of the doubt
+        pass
 
     # Self-intersection check
     si_codes = {

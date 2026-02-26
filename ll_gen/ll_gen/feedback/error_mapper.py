@@ -453,6 +453,15 @@ def map_brep_errors(
 
     errors: List[MappedError] = []
 
+    # Build a lookup of known BRepCheck/BOPAlgo status enums once
+    import OCC.Core.BRepCheck as brep_mod
+
+    known_statuses: List[Tuple[str, Any]] = []
+    for code_name in OCC_ERROR_MAP:
+        enum_obj = getattr(brep_mod, code_name, None)
+        if enum_obj is not None:
+            known_statuses.append((code_name, enum_obj))
+
     for topabs_type, type_name in topabs_types:
         explorer = TopExp_Explorer(shape, topabs_type)
         entity_idx = 0
@@ -462,52 +471,22 @@ def map_brep_errors(
             result = analyzer.Result(sub_shape)
 
             if result is not None:
-                status_list = result.Status()
-                status_iter = status_list  # OCC returns an iterable
-
-                # The status list from BRepCheck_Result contains
-                # BRepCheck_Status values. We iterate via StatusOnShape.
-                status_on_shape = result.StatusOnShape()
-
-                # Collect all statuses from StatusOnShape
-                for status in [result.StatusOnShape()]:
-                    # StatusOnShape returns a single status — we also
-                    # need to check IsStatusOnShape for each code.
-                    pass
-
-                # More reliable approach: check each known status
-                # against the result's IsStatusOnShape method
-                import OCC.Core.BRepCheck as brep_mod
-                for attr_name in dir(brep_mod):
-                    if not attr_name.startswith("BRepCheck_"):
-                        continue
-                    if attr_name in ("BRepCheck_Analyzer", "BRepCheck_NoError",
-                                     "BRepCheck_Result", "BRepCheck_Wire",
-                                     "BRepCheck_Face", "BRepCheck_Shell",
-                                     "BRepCheck_Edge"):
-                        continue  # Skip class names
-                    try:
-                        status_enum = getattr(brep_mod, attr_name)
-                        # Check if this is a status enum (integer-like)
-                        _ = int(status_enum)
-                    except (TypeError, ValueError):
-                        continue
-
-                    if attr_name == "BRepCheck_NoError":
-                        continue
-
-                    # Check if this status is present on this sub-shape
+                # Check each known error status against the result
+                for code_name, status_enum in known_statuses:
                     try:
                         is_present = result.IsStatusOnShape(status_enum)
                         if is_present:
                             mapped = map_single_error(
-                                attr_name, type_name, entity_idx
+                                code_name, type_name, entity_idx
                             )
                             mapped.occ_code_value = int(status_enum)
                             errors.append(mapped)
                     except Exception:
-                        # Some status codes may not be checkable
-                        # on certain entity types — skip silently
+                        _log.debug(
+                            "Could not check status %s on %s #%d",
+                            code_name, type_name, entity_idx,
+                            exc_info=True,
+                        )
                         continue
 
             explorer.Next()

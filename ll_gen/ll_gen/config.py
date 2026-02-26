@@ -197,10 +197,13 @@ class FeedbackConfig:
     """Configuration for feedback and reward signals."""
 
     # Reward components and their weights
-    validity_reward: float = 1.0
-    shape_constructed_reward: float = 0.3
-    repairable_reward: float = 0.2
-    per_tier_reward: float = 0.1
+    # 5 tiers (shape_exists, manifold, watertight, euler_valid,
+    # no_self_intersection) sum to 0.8, leaving 0.2 for bonus
+    # dimensions match.  Maximum possible reward = 1.0.
+    validity_reward: float = 0.8
+    shape_constructed_reward: float = 0.16
+    repairable_reward: float = 0.0
+    per_tier_reward: float = 0.16
     semantic_match_reward: float = 0.2
     critical_error_penalty: float = -0.1
 

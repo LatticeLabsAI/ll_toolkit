@@ -570,8 +570,8 @@ class TestComputeReward:
         """Valid result gets validity_reward plus shape_constructed_reward."""
         reward = compute_reward(disposal_result_valid)
 
-        # validity_reward (1.0) + shape_constructed_reward (0.3) = 1.3, clamped to 1.0
-        assert reward == 1.0
+        # validity_reward (0.8) + shape_constructed_reward (0.16) = 0.96
+        assert reward == 0.96
         assert isinstance(reward, float)
 
     def test_compute_reward_no_shape(
@@ -580,13 +580,14 @@ class TestComputeReward:
     ) -> None:
         """Result with no shape gets no shape_constructed reward but tiers may pass.
 
-        With no shape and no errors, some tiers pass (manifold, watertight, euler
-        benefit of doubt, self-intersection). This gives 4 tiers * 0.1 = 0.4.
+        With no shape and no errors, 3 tiers pass (manifold, watertight,
+        no_self_intersection) but euler fails (no geometry report).
+        3 tiers * 0.16 = 0.48.
         """
         reward = compute_reward(disposal_result_no_shape)
 
-        # No shape, but no errors means some tiers pass: 4 tiers * 0.1 = 0.4
-        assert reward == 0.4
+        # No shape, 3 passing tiers * 0.16 = 0.48
+        assert reward == 0.48
 
     def test_compute_reward_shape_constructed(
         self,
@@ -656,8 +657,8 @@ class TestComputeReward:
         target_dims = (50.0, 50.0, 50.0)  # Different from box
         reward = compute_reward(disposal_result_valid, target_dimensions=target_dims)
 
-        # Should not get semantic_match_reward
-        assert reward == 1.0
+        # Should not get semantic_match_reward; validity(0.8) + shape(0.16) = 0.96
+        assert reward == 0.96
 
     def test_compute_reward_with_target_volume_match(
         self,
@@ -677,14 +678,14 @@ class TestComputeReward:
         """Custom FeedbackConfig weights are applied.
 
         Valid result is valid, so only validity_reward and shape_constructed_reward apply.
-        With validity_reward=0.5 and shape_constructed_reward=0.3, total = 0.8.
+        With validity_reward=0.5 and shape_constructed_reward=0.16, total = 0.66.
         """
         config = FeedbackConfig()
         config.validity_reward = 0.5  # Lower validity reward
         reward = compute_reward(disposal_result_valid, config)
 
-        # Valid result gets 0.5 (validity) + 0.3 (shape_constructed) = 0.8
-        assert reward == 0.8
+        # Valid result gets 0.5 (validity) + 0.16 (shape_constructed) = 0.66
+        assert reward == 0.66
 
     def test_compute_reward_rounded(
         self,
@@ -829,7 +830,7 @@ class TestFeedbackIntegration:
         reward = compute_reward(disposal_result_valid)
 
         # Valid result should have high reward
-        assert reward == 1.0
+        assert reward == 0.96
         # Should still have feedback strings
         assert len(code_fb) > 0
         assert len(neural_fb) > 0
