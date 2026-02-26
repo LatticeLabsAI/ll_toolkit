@@ -13,7 +13,8 @@ from ll_gen.proposals.command_proposal import CommandSequenceProposal
 # Lazy imports for OCC
 _OCC_AVAILABLE = False
 try:
-    from OCC.Core.gp import gp_Pnt, gp_Pnt2d, gp_Dir, gp_Vec
+    from OCC.Core.gp import gp_Ax2, gp_Circ, gp_Pnt, gp_Pnt2d, gp_Dir, gp_Vec
+    from OCC.Core.GC import GC_MakeArcOfCircle
     from OCC.Core.BRepBuilderAPI import (
         BRepBuilderAPI_MakeEdge,
         BRepBuilderAPI_MakeWire,
@@ -377,20 +378,29 @@ def _create_arc_edge(params: dict[str, Any]) -> TopoDS_Shape | None:
         x_end = float(params.get("x_end", 0.0))
         y_end = float(params.get("y_end", 0.0))
         
-        p_start = gp_Pnt2d(x_start, y_start)
-        p_mid = gp_Pnt2d(x_mid, y_mid)
-        p_end = gp_Pnt2d(x_end, y_end)
-        
-        # Create arc using three points
-        edge_maker = BRepBuilderAPI_MakeEdge(p_start, p_mid, p_end)
-        
+        p_start = gp_Pnt(x_start, y_start, 0.0)
+        p_mid = gp_Pnt(x_mid, y_mid, 0.0)
+        p_end = gp_Pnt(x_end, y_end, 0.0)
+
+        # Create arc using GC_MakeArcOfCircle with three 3D points
+        arc_maker = GC_MakeArcOfCircle(p_start, p_mid, p_end)
+        if not arc_maker.IsDone():
+            logger.warning(
+                f"Failed to create arc edge from ({x_start}, {y_start}) "
+                f"through ({x_mid}, {y_mid}) to ({x_end}, {y_end})"
+            )
+            return None
+
+        arc_curve = arc_maker.Value()
+        edge_maker = BRepBuilderAPI_MakeEdge(arc_curve)
+
         if not edge_maker.IsDone():
             logger.warning(
                 f"Failed to create arc edge from ({x_start}, {y_start}) "
                 f"through ({x_mid}, {y_mid}) to ({x_end}, {y_end})"
             )
             return None
-        
+
         edge = edge_maker.Edge()
         logger.debug(
             f"Created arc edge from ({x_start}, {y_start}) "
@@ -421,12 +431,12 @@ def _create_circle_edge(params: dict[str, Any]) -> TopoDS_Shape | None:
             logger.warning(f"Invalid circle radius: {r}")
             return None
         
-        center = gp_Pnt2d(cx, cy)
-        
+        # Create 3D circle on XY plane at the given center
+        axis = gp_Ax2(gp_Pnt(cx, cy, 0.0), gp_Dir(0, 0, 1))
+        circle = gp_Circ(axis, r)
+
         # Create circle edge
-        edge_maker = BRepBuilderAPI_MakeEdge(
-            center, r, 0.0, 2 * 3.141592653589793
-        )
+        edge_maker = BRepBuilderAPI_MakeEdge(circle)
         
         if not edge_maker.IsDone():
             logger.warning(f"Failed to create circle edge at ({cx}, {cy}) with radius {r}")

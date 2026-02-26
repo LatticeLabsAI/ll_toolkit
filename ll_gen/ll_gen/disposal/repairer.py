@@ -37,6 +37,8 @@ try:
     from OCC.Core.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_SHELL, TopAbs_WIRE
     from OCC.Core.TopExp import TopExp_Explorer
     from OCC.Core.TopoDS import TopoDS_Shape, topods
+    from OCC.Core.ShapeBuild import ShapeBuild_ReShape
+    from OCC.Core.ShapeExtend import ShapeExtend_DONE4
 
     _OCC_AVAILABLE = True
 except ImportError:
@@ -240,6 +242,7 @@ def _apply_wire_fixes(
         (repaired_shape, list of RepairActions)
     """
     actions: List[RepairAction] = []
+    reshaper = ShapeBuild_ReShape()
     wire_explorer = TopExp_Explorer(shape, TopAbs_WIRE)
     wires_fixed = 0
 
@@ -266,10 +269,16 @@ def _apply_wire_fixes(
             if fixer.FixDegenerated():
                 wires_fixed += 1
 
+            # Replace old wire with fixed wire in the parent shape
+            fixed_wire = fixer.Wire()
+            reshaper.Replace(wire, fixed_wire)
+
         except Exception as exc:
             _log.debug("Wire fix failed: %s", exc)
 
         wire_explorer.Next()
+
+    result = reshaper.Apply(shape)
 
     if wires_fixed > 0:
         actions.append(RepairAction(
@@ -280,7 +289,7 @@ def _apply_wire_fixes(
             entities_affected=wires_fixed,
         ))
 
-    return shape, actions
+    return result, actions
 
 
 def _apply_face_fixes(
@@ -298,6 +307,7 @@ def _apply_face_fixes(
         (repaired_shape, list of RepairActions)
     """
     actions: List[RepairAction] = []
+    reshaper = ShapeBuild_ReShape()
     face_explorer = TopExp_Explorer(shape, TopAbs_FACE)
     faces_fixed = 0
 
@@ -311,13 +321,17 @@ def _apply_face_fixes(
             fixer.FixAddNaturalBound()
             fixer.Perform()
 
-            if fixer.Status(8):  # ShapeExtend_DONE
+            if fixer.Status(ShapeExtend_DONE4):
                 faces_fixed += 1
+                fixed_face = fixer.Face()
+                reshaper.Replace(face, fixed_face)
 
         except Exception as exc:
             _log.debug("Face fix failed: %s", exc)
 
         face_explorer.Next()
+
+    result = reshaper.Apply(shape)
 
     if faces_fixed > 0:
         actions.append(RepairAction(
@@ -328,7 +342,7 @@ def _apply_face_fixes(
             entities_affected=faces_fixed,
         ))
 
-    return shape, actions
+    return result, actions
 
 
 def _apply_shell_fixes(
@@ -386,7 +400,7 @@ def _apply_solid_fix(shape: Any) -> tuple:
         fixer.Perform()
         repaired = fixer.Shape()
 
-        if fixer.Status(8):  # ShapeExtend_DONE
+        if fixer.Status(ShapeExtend_DONE4):
             return repaired, RepairAction(
                 tool="ShapeFix_Solid",
                 action="Ensured solid completeness",
