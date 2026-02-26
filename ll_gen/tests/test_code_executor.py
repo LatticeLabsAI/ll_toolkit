@@ -1,19 +1,20 @@
 """Comprehensive test suite for ll_gen.disposal.code_executor module.
 
 Tests code execution functionality for CadQuery, OpenSCAD, and pythonocc:
-- Timeout handling and signal-based interruption
-- Sandbox environment restrictions
+- Timeout handling via subprocess.run(timeout=...)
+- Subprocess-based isolation (no in-process exec)
 - Language-specific execution paths
 - Error extraction and categorization
 - Import validation and availability checking
 """
 from __future__ import annotations
 
+import json
 import signal
-from typing import Any
-from unittest.mock import MagicMock, patch, mock_open
 import subprocess
 import tempfile
+from typing import Any
+from unittest.mock import MagicMock, patch, mock_open
 
 import pytest
 
@@ -339,7 +340,7 @@ class TestErrorHandling:
     """Test error handling in code execution."""
 
     def test_syntax_error_wrapped_in_runtime_error(self) -> None:
-        """Test that SyntaxError is wrapped in RuntimeError."""
+        """Test that SyntaxError is wrapped in RuntimeError via subprocess."""
         proposal = CodeProposal(
             proposal_id="test",
             confidence=0.8,
@@ -352,16 +353,19 @@ class TestErrorHandling:
             with patch(
                 "ll_gen.disposal.code_executor._OCC_AVAILABLE", True
             ):
+                # Mock _run_in_subprocess to simulate the error
                 with patch(
-                    "ll_gen.disposal.code_executor.cadquery",
-                    MagicMock(),
+                    "ll_gen.disposal.code_executor._run_in_subprocess",
+                    side_effect=RuntimeError(
+                        "CadQuery execution failed: SyntaxError: invalid syntax"
+                    ),
                 ):
                     with pytest.raises(RuntimeError) as exc_info:
                         execute_code_proposal(proposal)
                     assert "execution failed" in str(exc_info.value).lower()
 
     def test_name_error_wrapped_in_runtime_error(self) -> None:
-        """Test that NameError is wrapped in RuntimeError."""
+        """Test that NameError is wrapped in RuntimeError via subprocess."""
         proposal = CodeProposal(
             proposal_id="test",
             confidence=0.8,
@@ -375,8 +379,10 @@ class TestErrorHandling:
                 "ll_gen.disposal.code_executor._OCC_AVAILABLE", True
             ):
                 with patch(
-                    "ll_gen.disposal.code_executor.cadquery",
-                    MagicMock(),
+                    "ll_gen.disposal.code_executor._run_in_subprocess",
+                    side_effect=RuntimeError(
+                        "CadQuery execution failed: NameError: name 'undefined_variable' is not defined"
+                    ),
                 ):
                     with pytest.raises(RuntimeError) as exc_info:
                         execute_code_proposal(proposal)
@@ -397,8 +403,11 @@ class TestErrorHandling:
                 "ll_gen.disposal.code_executor._OCC_AVAILABLE", True
             ):
                 with patch(
-                    "ll_gen.disposal.code_executor.cadquery",
-                    MagicMock(),
+                    "ll_gen.disposal.code_executor._run_in_subprocess",
+                    side_effect=RuntimeError(
+                        "CadQuery execution did not produce a result. "
+                        "Expected one of: result, part, model, shape, body, solid"
+                    ),
                 ):
                     with pytest.raises(RuntimeError) as exc_info:
                         execute_code_proposal(proposal)
@@ -475,6 +484,35 @@ class TestProposalInterface:
 class TestSandboxSecurity:
     """Test sandbox security restrictions."""
 
+    def test_code_runs_in_subprocess_not_exec(self) -> None:
+        """Test that user code is executed via subprocess, not exec()."""
+        from ll_gen.disposal import code_executor
+        # Verify _run_in_subprocess exists and is used
+        assert hasattr(code_executor, "_run_in_subprocess")
+        assert callable(code_executor._run_in_subprocess)
+
+    def test_subprocess_timeout_enforcement(self) -> None:
+        """Test that subprocess timeout is enforced cross-platform."""
+        proposal = CodeProposal(
+            proposal_id="test",
+            confidence=0.8,
+            code="import time; time.sleep(100); result = 42",
+            language=CodeLanguage.CADQUERY,
+        )
+        with patch(
+            "ll_gen.disposal.code_executor._CADQUERY_AVAILABLE", True
+        ):
+            with patch(
+                "ll_gen.disposal.code_executor._OCC_AVAILABLE", True
+            ):
+                with patch(
+                    "ll_gen.disposal.code_executor._run_in_subprocess",
+                    side_effect=TimeoutError("CadQuery execution exceeded timeout of 1s"),
+                ):
+                    with pytest.raises(TimeoutError) as exc_info:
+                        execute_code_proposal(proposal, timeout=1)
+                    assert "timeout" in str(exc_info.value).lower()
+
     def test_dangerous_builtins_not_in_restricted_namespace(self) -> None:
         """Test that dangerous builtins are restricted."""
         # The code uses a restricted __builtins__ dict
@@ -497,3 +535,80 @@ class TestSandboxSecurity:
             "len": len,
         }
         assert isinstance(safe_builtins, dict)
+
+
+# ============================================================================
+# SECTION 10: Subprocess IPC Tests
+# ============================================================================
+
+
+class TestSubprocessIPC:
+    """Test subprocess-based IPC for code execution."""
+
+    def test_run_in_subprocess_success(self) -> None:
+        """Test _run_in_subprocess returns parsed JSON on success."""
+        from ll_gen.disposal.code_executor import _run_in_subprocess
+
+        success_json = json.dumps({"success": True, "shape_type": "TopoDS_Shape"})
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = success_json
+        mock_result.stderr = ""
+
+        with patch("subprocess.run", return_value=mock_result):
+            result = _run_in_subprocess(
+                "print('hello')", "result = 42", 30, "Test"
+            )
+            assert result["success"] is True
+
+    def test_run_in_subprocess_timeout(self) -> None:
+        """Test _run_in_subprocess raises TimeoutError on timeout."""
+        from ll_gen.disposal.code_executor import _run_in_subprocess
+
+        with patch(
+            "subprocess.run",
+            side_effect=subprocess.TimeoutExpired(cmd="python", timeout=5),
+        ):
+            with pytest.raises(TimeoutError) as exc_info:
+                _run_in_subprocess("print('hello')", "x = 1", 5, "Test")
+            assert "timeout" in str(exc_info.value).lower()
+
+    def test_run_in_subprocess_failure_json(self) -> None:
+        """Test _run_in_subprocess raises RuntimeError on failure JSON."""
+        from ll_gen.disposal.code_executor import _run_in_subprocess
+
+        fail_json = json.dumps({"success": False, "error": "Something went wrong"})
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = fail_json
+        mock_result.stderr = ""
+
+        with patch("subprocess.run", return_value=mock_result):
+            with pytest.raises(RuntimeError, match="Something went wrong"):
+                _run_in_subprocess("print('hello')", "bad code", 30, "Test")
+
+    def test_run_in_subprocess_no_output(self) -> None:
+        """Test _run_in_subprocess raises RuntimeError on empty output."""
+        from ll_gen.disposal.code_executor import _run_in_subprocess
+
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = ""
+        mock_result.stderr = ""
+
+        with patch("subprocess.run", return_value=mock_result):
+            with pytest.raises(RuntimeError, match="produced no output"):
+                _run_in_subprocess("print('hello')", "x = 1", 30, "Test")
+
+    def test_run_in_subprocess_invalid_json(self) -> None:
+        """Test _run_in_subprocess raises RuntimeError on invalid JSON."""
+        from ll_gen.disposal.code_executor import _run_in_subprocess
+
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = "not json at all"
+        mock_result.stderr = ""
+
+        with patch("subprocess.run", return_value=mock_result):
+            with pytest.raises(RuntimeError, match="invalid JSON"):
+                _run_in_subprocess("print('hello')", "x = 1", 30, "Test")

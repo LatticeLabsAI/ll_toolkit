@@ -1,18 +1,24 @@
-"""Execute CodeProposal objects in a sandboxed environment.
+"""Execute CodeProposal objects in a sandboxed subprocess.
 
 This module provides functionality to execute code proposals (CadQuery, OpenSCAD,
-or raw pythonocc Python scripts) in a sandboxed environment and extract the
-resulting TopoDS_Shape geometry.
+or raw pythonocc Python scripts) in an isolated subprocess and extract geometry
+metadata from the resulting TopoDS_Shape.
+
+Security: All user code runs in a separate process via ``subprocess.run()``,
+never via ``exec()`` in the parent.  Timeout is enforced by
+``subprocess.run(timeout=...)``, which works cross-platform.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import signal
 import subprocess
 import sys
 import tempfile
+import textwrap
 from typing import Any
 
 from ll_gen.config import CodeLanguage
@@ -58,21 +64,224 @@ def _timeout_handler(signum: int, frame: Any) -> None:
     raise TimeoutError("Code execution exceeded timeout limit")
 
 
+# ---------------------------------------------------------------------------
+# Wrapper script templates executed in the subprocess
+# ---------------------------------------------------------------------------
+
+_CADQUERY_WRAPPER = textwrap.dedent("""\
+    import json, sys, math, traceback
+    try:
+        import numpy
+    except ImportError:
+        numpy = None
+    try:
+        import cadquery
+        from cadquery import Workplane
+        cq = Workplane
+    except ImportError:
+        print(json.dumps({"success": False, "error": "CadQuery not available"}))
+        sys.exit(0)
+
+    namespace = {
+        "cadquery": cadquery,
+        "cq": cq,
+        "Workplane": Workplane,
+        "math": math,
+        "numpy": numpy,
+    }
+
+    code = open(sys.argv[1]).read()
+    try:
+        exec(code, namespace)
+    except Exception as exc:
+        print(json.dumps({
+            "success": False,
+            "error": f"CadQuery execution failed: {type(exc).__name__}: {exc}",
+        }))
+        sys.exit(0)
+
+    result_obj = None
+    for var_name in ("result", "part", "model", "shape", "body", "solid"):
+        if var_name in namespace:
+            result_obj = namespace[var_name]
+            break
+
+    if result_obj is None:
+        print(json.dumps({
+            "success": False,
+            "error": ("CadQuery execution did not produce a result. "
+                      "Expected one of: result, part, model, shape, body, solid"),
+        }))
+        sys.exit(0)
+
+    # Extract metadata from the CadQuery result
+    meta = {"success": True, "shape_type": type(result_obj).__name__}
+    try:
+        if isinstance(result_obj, cadquery.Workplane):
+            cq_shape = result_obj.val().wrapped
+        else:
+            cq_shape = result_obj
+        meta["shape_class"] = type(cq_shape).__name__
+        # Try basic geometry stats via OCC
+        try:
+            from OCC.Core.BRepGProp import brepgprop
+            from OCC.Core.GProp import GProp_GProps
+            from OCC.Core.TopExp import TopExp_Explorer
+            from OCC.Core.TopAbs import TopAbs_FACE, TopAbs_EDGE, TopAbs_VERTEX
+
+            props = GProp_GProps()
+            brepgprop.VolumeProperties(cq_shape, props)
+            meta["volume"] = props.Mass()
+
+            sprops = GProp_GProps()
+            brepgprop.SurfaceProperties(cq_shape, sprops)
+            meta["surface_area"] = sprops.Mass()
+
+            face_count = 0
+            exp = TopExp_Explorer(cq_shape, TopAbs_FACE)
+            while exp.More():
+                face_count += 1
+                exp.Next()
+            meta["face_count"] = face_count
+
+            edge_count = 0
+            exp = TopExp_Explorer(cq_shape, TopAbs_EDGE)
+            while exp.More():
+                edge_count += 1
+                exp.Next()
+            meta["edge_count"] = edge_count
+
+            vertex_count = 0
+            exp = TopExp_Explorer(cq_shape, TopAbs_VERTEX)
+            while exp.More():
+                vertex_count += 1
+                exp.Next()
+            meta["vertex_count"] = vertex_count
+        except Exception:
+            pass
+    except Exception as exc:
+        meta["success"] = False
+        meta["error"] = f"Failed to extract shape: {type(exc).__name__}: {exc}"
+
+    print(json.dumps(meta))
+""")
+
+
+_PYTHONOCC_WRAPPER = textwrap.dedent("""\
+    import json, sys, math, traceback
+    try:
+        import numpy
+    except ImportError:
+        numpy = None
+    try:
+        from OCC.Core.TopoDS import TopoDS_Shape
+    except ImportError:
+        print(json.dumps({"success": False, "error": "pythonocc not available"}))
+        sys.exit(0)
+
+    namespace = {
+        "math": math,
+        "numpy": numpy,
+    }
+
+    # Import all OCC.Core submodules into the namespace
+    try:
+        from OCC import Core as occ_core
+        for attr_name in dir(occ_core):
+            if not attr_name.startswith("_"):
+                namespace[attr_name] = getattr(occ_core, attr_name)
+    except Exception:
+        pass
+
+    code = open(sys.argv[1]).read()
+    try:
+        exec(code, namespace)
+    except Exception as exc:
+        print(json.dumps({
+            "success": False,
+            "error": f"pythonocc execution failed: {type(exc).__name__}: {exc}",
+        }))
+        sys.exit(0)
+
+    result_obj = None
+    for var_name in ("result", "part", "model", "shape", "body", "solid"):
+        if var_name in namespace:
+            result_obj = namespace[var_name]
+            break
+
+    if result_obj is None:
+        print(json.dumps({
+            "success": False,
+            "error": ("pythonocc execution did not produce a result. "
+                      "Expected one of: result, part, model, shape, body, solid"),
+        }))
+        sys.exit(0)
+
+    if not isinstance(result_obj, TopoDS_Shape):
+        print(json.dumps({
+            "success": False,
+            "error": f"pythonocc result is not a TopoDS_Shape, got: {type(result_obj)}",
+        }))
+        sys.exit(0)
+
+    meta = {"success": True, "shape_type": type(result_obj).__name__}
+    try:
+        from OCC.Core.BRepGProp import brepgprop
+        from OCC.Core.GProp import GProp_GProps
+        from OCC.Core.TopExp import TopExp_Explorer
+        from OCC.Core.TopAbs import TopAbs_FACE, TopAbs_EDGE, TopAbs_VERTEX
+
+        props = GProp_GProps()
+        brepgprop.VolumeProperties(result_obj, props)
+        meta["volume"] = props.Mass()
+
+        sprops = GProp_GProps()
+        brepgprop.SurfaceProperties(result_obj, sprops)
+        meta["surface_area"] = sprops.Mass()
+
+        face_count = 0
+        exp = TopExp_Explorer(result_obj, TopAbs_FACE)
+        while exp.More():
+            face_count += 1
+            exp.Next()
+        meta["face_count"] = face_count
+
+        edge_count = 0
+        exp = TopExp_Explorer(result_obj, TopAbs_EDGE)
+        while exp.More():
+            edge_count += 1
+            exp.Next()
+        meta["edge_count"] = edge_count
+
+        vertex_count = 0
+        exp = TopExp_Explorer(result_obj, TopAbs_VERTEX)
+        while exp.More():
+            vertex_count += 1
+            exp.Next()
+        meta["vertex_count"] = vertex_count
+    except Exception:
+        pass
+
+    print(json.dumps(meta))
+""")
+
+
 def execute_code_proposal(
     proposal: CodeProposal, timeout: int = 30
 ) -> Any:
-    """Execute a CodeProposal and return the resulting geometry.
+    """Execute a CodeProposal and return geometry metadata.
 
-    Executes code proposals in a sandboxed environment with appropriate
-    restrictions based on the code language. Supports CadQuery, OpenSCAD,
-    and pythonocc code proposals.
+    Executes code proposals in an isolated subprocess with cross-platform
+    timeout enforcement.  Supports CadQuery, OpenSCAD, and pythonocc code
+    proposals.
 
     Args:
         proposal: The CodeProposal object containing code and language.
         timeout: Maximum execution time in seconds. Defaults to 30.
 
     Returns:
-        The resulting TopoDS_Shape object.
+        A dict of geometry metadata (face_count, volume, etc.) on success,
+        or a TopoDS_Shape when OCC is available and the language is OpenSCAD.
 
     Raises:
         RuntimeError: If execution fails, including timeout, import errors,
@@ -91,15 +300,87 @@ def execute_code_proposal(
         )
 
 
+def _run_in_subprocess(
+    wrapper_script: str, code: str, timeout: int, language_label: str
+) -> dict[str, Any]:
+    """Write code to a temp file, run wrapper_script in a subprocess, parse JSON.
+
+    Args:
+        wrapper_script: Python source for the wrapper that executes user code.
+        code: The user's code to execute.
+        timeout: Timeout in seconds.
+        language_label: Human label for error messages (e.g. "CadQuery").
+
+    Returns:
+        Parsed JSON dict from subprocess stdout.
+
+    Raises:
+        TimeoutError: On subprocess timeout.
+        RuntimeError: On any other failure.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        code_path = os.path.join(tmpdir, "user_code.py")
+        wrapper_path = os.path.join(tmpdir, "wrapper.py")
+
+        with open(code_path, "w") as f:
+            f.write(code)
+        with open(wrapper_path, "w") as f:
+            f.write(wrapper_script)
+
+        try:
+            completed = subprocess.run(
+                [sys.executable, wrapper_path, code_path],
+                timeout=timeout,
+                capture_output=True,
+                text=True,
+            )
+        except subprocess.TimeoutExpired as e:
+            raise TimeoutError(
+                f"{language_label} execution exceeded timeout of {timeout}s"
+            ) from e
+        except Exception as e:
+            raise RuntimeError(
+                f"{language_label} subprocess execution failed: "
+                f"{type(e).__name__}: {str(e)}"
+            ) from e
+
+        stdout = completed.stdout.strip()
+        if completed.returncode != 0 and not stdout:
+            stderr = completed.stderr.strip()
+            raise RuntimeError(
+                f"{language_label} execution failed: {stderr}"
+            )
+
+        if not stdout:
+            raise RuntimeError(
+                f"{language_label} execution produced no output"
+            )
+
+        try:
+            result = json.loads(stdout)
+        except json.JSONDecodeError as e:
+            raise RuntimeError(
+                f"{language_label} execution produced invalid JSON: {stdout[:200]}"
+            ) from e
+
+        if not result.get("success", False):
+            error_msg = result.get("error", "Unknown error")
+            if "did not produce a result" in error_msg:
+                raise RuntimeError(error_msg)
+            raise RuntimeError(error_msg)
+
+        return result
+
+
 def _execute_cadquery(code: str, timeout: int) -> Any:
-    """Execute CadQuery code in a sandboxed environment.
+    """Execute CadQuery code in a subprocess.
 
     Args:
         code: The CadQuery Python code to execute.
         timeout: Maximum execution time in seconds.
 
     Returns:
-        The resulting TopoDS_Shape object.
+        A dict of geometry metadata from the subprocess.
 
     Raises:
         RuntimeError: If execution fails or required dependencies are missing.
@@ -115,82 +396,7 @@ def _execute_cadquery(code: str, timeout: int) -> Any:
             "pythonocc is not available. Install it with: pip install pythonocc"
         )
 
-    # Create restricted namespace with allowed imports
-    # Provide common CadQuery aliases to avoid import statements
-    namespace = {
-        "cadquery": cadquery,
-        "cq": cadquery.Workplane,  # Common alias used in examples
-        "Workplane": cadquery.Workplane,
-        "math": __import__("math"),
-        "numpy": __import__("numpy"),
-        "__builtins__": {
-            "abs": abs,
-            "round": round,
-            "len": len,
-            "range": range,
-            "enumerate": enumerate,
-            "zip": zip,
-            "map": map,
-            "filter": filter,
-            "list": list,
-            "dict": dict,
-            "tuple": tuple,
-            "set": set,
-            "sum": sum,
-            "min": min,
-            "max": max,
-            "float": float,
-            "int": int,
-            "str": str,
-            "bool": bool,
-            "print": print,
-            "Exception": Exception,
-        },
-    }
-
-    # Set up signal alarm for timeout
-    old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
-    signal.alarm(timeout)
-
-    try:
-        exec(code, namespace)
-    except TimeoutError as e:
-        raise TimeoutError(str(e)) from e
-    except Exception as e:
-        raise RuntimeError(
-            f"CadQuery execution failed: {type(e).__name__}: {str(e)}"
-        ) from e
-    finally:
-        signal.alarm(0)
-        signal.signal(signal.SIGALRM, old_handler)
-
-    # Try to extract the result from various possible variable names
-    result = None
-    for var_name in ["result", "part", "model", "shape", "body", "solid"]:
-        if var_name in namespace:
-            result = namespace[var_name]
-            break
-
-    if result is None:
-        raise RuntimeError(
-            "CadQuery execution did not produce a result. "
-            "Expected one of: result, part, model, shape, body, solid"
-        )
-
-    # Extract TopoDS_Shape from CadQuery Workplane if needed
-    if isinstance(result, cadquery.Workplane):
-        try:
-            cq_shape = result.val().wrapped
-        except Exception as e:
-            raise RuntimeError(
-                f"Failed to extract shape from CadQuery result: {str(e)}"
-            ) from e
-    else:
-        cq_shape = result
-
-    # Convert from OCP (cadquery) to OCC.Core (pythonocc) via BREP serialization
-    # CadQuery uses OCP SWIG bindings which are incompatible with OCC.Core
-    return _convert_ocp_to_occ(cq_shape)
+    return _run_in_subprocess(_CADQUERY_WRAPPER, code, timeout, "CadQuery")
 
 
 def _convert_ocp_to_occ(ocp_shape: Any) -> Any:
@@ -330,14 +536,14 @@ def _execute_openscad(code: str, timeout: int) -> Any:
 
 
 def _execute_pythonocc(code: str, timeout: int) -> Any:
-    """Execute pythonocc code in a sandboxed environment.
+    """Execute pythonocc code in a subprocess.
 
     Args:
         code: The pythonocc Python code to execute.
         timeout: Maximum execution time in seconds.
 
     Returns:
-        The resulting TopoDS_Shape object.
+        A dict of geometry metadata from the subprocess.
 
     Raises:
         RuntimeError: If execution fails or required dependencies are missing.
@@ -348,82 +554,4 @@ def _execute_pythonocc(code: str, timeout: int) -> Any:
             "pythonocc is not available. Install it with: pip install pythonocc"
         )
 
-    # Import all OCC.Core modules for the namespace
-    try:
-        from OCC import Core as occ_core
-
-        # Build a namespace with all OCC.Core submodules
-        occ_namespace = {}
-        for attr_name in dir(occ_core):
-            if not attr_name.startswith("_"):
-                attr = getattr(occ_core, attr_name)
-                occ_namespace[attr_name] = attr
-    except Exception as e:
-        raise RuntimeError(f"Failed to import OCC.Core modules: {str(e)}") from e
-
-    # Create restricted namespace with allowed imports
-    namespace = {
-        "math": __import__("math"),
-        "numpy": __import__("numpy"),
-        "__builtins__": {
-            "abs": abs,
-            "round": round,
-            "len": len,
-            "range": range,
-            "enumerate": enumerate,
-            "zip": zip,
-            "map": map,
-            "filter": filter,
-            "list": list,
-            "dict": dict,
-            "tuple": tuple,
-            "set": set,
-            "sum": sum,
-            "min": min,
-            "max": max,
-            "float": float,
-            "int": int,
-            "str": str,
-            "bool": bool,
-            "print": print,
-            "Exception": Exception,
-        },
-        **occ_namespace,
-    }
-
-    # Set up signal alarm for timeout
-    old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
-    signal.alarm(timeout)
-
-    try:
-        exec(code, namespace)
-    except TimeoutError as e:
-        raise TimeoutError(str(e)) from e
-    except Exception as e:
-        raise RuntimeError(
-            f"pythonocc execution failed: {type(e).__name__}: {str(e)}"
-        ) from e
-    finally:
-        signal.alarm(0)
-        signal.signal(signal.SIGALRM, old_handler)
-
-    # Try to extract the result from the namespace
-    result = None
-    for var_name in ["result", "part", "model", "shape", "body", "solid"]:
-        if var_name in namespace:
-            result = namespace[var_name]
-            break
-
-    if result is None:
-        raise RuntimeError(
-            "pythonocc execution did not produce a result. "
-            "Expected one of: result, part, model, shape, body, solid"
-        )
-
-    # Verify result is a TopoDS_Shape
-    if not isinstance(result, TopoDS_Shape):
-        raise RuntimeError(
-            f"pythonocc result is not a TopoDS_Shape, got: {type(result)}"
-        )
-
-    return result
+    return _run_in_subprocess(_PYTHONOCC_WRAPPER, code, timeout, "pythonocc")

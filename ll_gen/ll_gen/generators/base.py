@@ -164,7 +164,13 @@ class BaseNeuralGenerator(ABC):
             raise FileNotFoundError(f"Checkpoint not found: {path}")
 
         _log.info(f"Loading checkpoint from {path}")
-        state_dict = torch.load(path, map_location=self.device)
+        try:
+            state_dict = torch.load(
+                path, map_location=self.device, weights_only=True
+            )
+        except TypeError:
+            # PyTorch < 2.0 does not support weights_only
+            state_dict = torch.load(path, map_location=self.device)
         self._model.load_state_dict(state_dict)
         self._model = self._model.to(self.device)
         _log.info("Checkpoint loaded successfully")
