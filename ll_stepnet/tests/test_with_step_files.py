@@ -37,7 +37,7 @@ def log_print(message="", end="\n"):
         LOG_FILE.flush()
 
 
-# STEP test files
+# STEP test files (relative to this test file)
 TEST_DIR = Path(__file__).resolve().parent.parent / "data" / "test_files"
 TEST_FILES = [
     str(TEST_DIR / "4in_rod.step"),

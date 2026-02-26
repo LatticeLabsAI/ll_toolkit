@@ -190,21 +190,14 @@ def train_causal_lm(data_dir: str, output_dir: str, num_epochs: int = 3):
             # Labels are just the input shifted by 1
             labels = input_ids.clone()
 
-            # Process each sample in the batch (topology data is per-sample)
-            batch_loss = 0.0
-            for i in range(len(input_ids)):
-                sample_input = input_ids[i:i+1]
-                sample_labels = labels[i:i+1]
-                sample_topology = topology_data_list[i]
-
-                # Forward pass with STEP topology
-                outputs = model(sample_input, topology_data=sample_topology, labels=sample_labels)
-                loss = outputs['loss']
-
-                batch_loss += loss
-
-            # Average loss over batch
-            batch_loss = batch_loss / len(input_ids)
+            # Forward pass as a full batch
+            # Pass topology_data_list for per-sample topology handling
+            outputs = model(
+                input_ids,
+                topology_data=topology_data_list,
+                labels=labels,
+            )
+            batch_loss = outputs['loss']
 
             # Backward pass
             optimizer.zero_grad()

@@ -226,6 +226,7 @@ class DiffusionTrainer:
         """
         self.model.train()
         total_loss = 0.0
+        total_noise_mse = 0.0
         num_batches = 0
 
         pbar = tqdm(
@@ -263,8 +264,18 @@ class DiffusionTrainer:
             # Predict noise
             noise_pred = self.model(noisy, timesteps)
 
-            # Compute loss: MSE between predicted and actual noise
+            # Compute loss: MSE between predicted and actual noise (mean over all elements)
             loss = F.mse_loss(noise_pred, noise)
+
+            # Per-sample noise MSE: average of per-sample MSE values
+            with torch.no_grad():
+                per_sample_mse = F.mse_loss(
+                    noise_pred, noise, reduction="none"
+                )
+                # Average over all dims except batch, then mean over batch
+                while per_sample_mse.dim() > 1:
+                    per_sample_mse = per_sample_mse.mean(dim=-1)
+                noise_mse = per_sample_mse.mean().item()
 
             # Backward pass
             self.optimizer.zero_grad()
@@ -279,14 +290,16 @@ class DiffusionTrainer:
 
             # Accumulate metrics
             total_loss += loss.item()
+            total_noise_mse += noise_mse
             num_batches += 1
             self.global_step += 1
 
-            pbar.set_postfix({"loss": loss.item()})
+            pbar.set_postfix({"loss": loss.item(), "noise_mse": noise_mse})
 
         n = max(num_batches, 1)
         metrics = {
             "loss": total_loss / n,
+            "noise_mse": total_noise_mse / n,
         }
 
         _log.info(

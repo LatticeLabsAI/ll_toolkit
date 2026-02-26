@@ -14,6 +14,8 @@ import math
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Union
 
+from stepnet.training.streaming_utils import build_dataset_from_config, create_cosine_scheduler
+
 _log = logging.getLogger(__name__)
 
 try:
@@ -194,28 +196,13 @@ class StreamingDiffusionTrainer:
 
     def _create_scheduler(self) -> "LambdaLR":
         """Create a learning rate scheduler with linear warmup and cosine decay."""
-
-        def lr_lambda(step: int) -> float:
-            if step < self.warmup_steps:
-                # Linear warmup
-                return step / max(self.warmup_steps, 1)
-            else:
-                # Cosine decay
-                progress = (step - self.warmup_steps) / max(
-                    self.total_steps - self.warmup_steps, 1
-                )
-                return 0.5 * (1.0 + torch.cos(torch.tensor(progress * math.pi)).item())
-
-        return LambdaLR(self.optimizer, lr_lambda)
+        return create_cosine_scheduler(self.optimizer, self.warmup_steps, self.total_steps)
 
     @staticmethod
     def _build_dataset_from_config(dataset_config) -> Any:
         """Build a streaming dataset from a StreamingCadlingConfig.
 
-        Lazy-imports ``cadling.data.streaming.CADStreamingDataset`` and
-        ``cadling.data.streaming.CADStreamingConfig`` to construct a
-        streaming data pipeline from the provided ll_stepnet
-        ``StreamingCadlingConfig``.
+        Delegates to :func:`streaming_utils.build_dataset_from_config`.
 
         Args:
             dataset_config: A ``StreamingCadlingConfig`` instance.
@@ -223,34 +210,7 @@ class StreamingDiffusionTrainer:
         Returns:
             A ``CADStreamingDataset`` ready for iteration.
         """
-        try:
-            from cadling.data.streaming import (
-                CADStreamingDataset,
-                CADStreamingConfig,
-            )
-        except ImportError as exc:
-            raise ImportError(
-                "cadling is required for dataset_config support. "
-                "Install via: pip install cadling"
-            ) from exc
-
-        cadling_cfg = CADStreamingConfig(
-            dataset_id=dataset_config.dataset_id,
-            split=dataset_config.split,
-            streaming=dataset_config.streaming,
-            batch_size=dataset_config.batch_size,
-            shuffle=dataset_config.shuffle,
-            shuffle_buffer_size=dataset_config.shuffle_buffer_size,
-            max_samples=dataset_config.max_samples,
-        )
-        ds = CADStreamingDataset(cadling_cfg)
-
-        _log.info(
-            "Built CADStreamingDataset from config: dataset_id=%s, split=%s",
-            dataset_config.dataset_id,
-            dataset_config.split,
-        )
-        return ds
+        return build_dataset_from_config(dataset_config)
 
     def _get_num_timesteps(self) -> int:
         """Get the total number of diffusion timesteps from the scheduler."""
@@ -296,18 +256,37 @@ class StreamingDiffusionTrainer:
         if hasattr(self.scheduler, "add_noise"):
             return self.scheduler.add_noise(clean, noise, timesteps)
 
-        # Fallback: cosine noise schedule (matches non-streaming DiffusionTrainer)
-        t = timesteps.float() / self._num_timesteps
-        # Cosine schedule: alpha_bar(t) = cos((t + s) / (1 + s) * pi/2)^2
-        s = 0.008  # small offset to prevent singularity at t=0
-        alpha_bar = torch.cos((t + s) / (1.0 + s) * math.pi / 2.0) ** 2
-        alpha_bar = alpha_bar / torch.cos(torch.tensor(s / (1.0 + s) * math.pi / 2.0)) ** 2
-        alpha_bar = alpha_bar.clamp(min=1e-5, max=1.0)
-        while alpha_bar.dim() < clean.dim():
-            alpha_bar = alpha_bar.unsqueeze(-1)
+        # Fallback: DDPM cosine schedule (cached, matches non-streaming DiffusionTrainer)
+        if not hasattr(self, "_alpha_bar_cache"):
+            self._alpha_bar_cache = self._build_cosine_schedule().to(
+                clean.device
+            )
 
-        noisy = alpha_bar.sqrt() * clean + (1.0 - alpha_bar).sqrt() * noise
+        alpha_bar = self._alpha_bar_cache.to(clean.device)
+        t_clamped = timesteps.clamp(0, len(alpha_bar) - 1).long()
+        alpha_t = alpha_bar[t_clamped]  # (batch,)
+
+        # Reshape for broadcasting
+        while alpha_t.dim() < clean.dim():
+            alpha_t = alpha_t.unsqueeze(-1)
+
+        # x_t = sqrt(alpha_bar_t) * x_0 + sqrt(1 - alpha_bar_t) * noise
+        noisy = alpha_t.sqrt() * clean + (1.0 - alpha_t).sqrt() * noise
         return noisy
+
+    def _build_cosine_schedule(self) -> "torch.Tensor":
+        """Build the DDPM cosine noise schedule (Nichol & Dhariwal, 2021).
+
+        Returns:
+            1-D tensor of cumulative alpha-bar values, length
+            ``self._num_timesteps``.
+        """
+        steps = self._num_timesteps
+        s = 0.008  # offset to prevent beta_t being too small at t=0
+        t = torch.linspace(0, steps, steps + 1, dtype=torch.float64)
+        alpha_bar = torch.cos(((t / steps) + s) / (1.0 + s) * math.pi * 0.5) ** 2
+        alpha_bar = alpha_bar / alpha_bar[0]  # normalise so alpha_bar[0] = 1
+        return alpha_bar[1:].float()  # drop the extra leading entry
 
     def _prepare_batch(
         self, batch: Dict[str, Any]

@@ -636,12 +636,45 @@ class TestTemperature:
             vocab_size=vocab_size,
         )
 
-        # With same seed and low temp, outputs should be similar
+        # With same seed and low temp, outputs should be identical
         assert output_low_1.sequences is not None
         assert output_low_2.sequences is not None
+        assert torch.equal(output_low_1.sequences, output_low_2.sequences), (
+            "Low temperature with same seed should produce identical sequences"
+        )
+
+        # Low temperature should produce fewer unique tokens than high temperature
+        config_high = GenerationConfig.sampling(temperature=2.0, max_length=10)
+        decoder_high = BeamSearchDecoder(config_high)
+
+        high_temp_unique_tokens: set = set()
+        for seed in range(10):
+            torch.manual_seed(seed)
+            output_high = decoder_high.decode(
+                model_step_fn=lambda t, m: mock_model(t, m),
+                memory=memory.clone(),
+                vocab_size=vocab_size,
+            )
+            high_temp_unique_tokens.update(output_high.sequences.flatten().tolist())
+
+        low_temp_unique_tokens: set = set()
+        for seed in range(10):
+            torch.manual_seed(seed)
+            output_low = decoder_low.decode(
+                model_step_fn=lambda t, m: mock_model(t, m),
+                memory=memory.clone(),
+                vocab_size=vocab_size,
+            )
+            low_temp_unique_tokens.update(output_low.sequences.flatten().tolist())
+
+        # Higher temperature should produce more diverse tokens across runs
+        assert len(high_temp_unique_tokens) >= len(low_temp_unique_tokens), (
+            f"High temp unique tokens ({len(high_temp_unique_tokens)}) should be "
+            f">= low temp unique tokens ({len(low_temp_unique_tokens)})"
+        )
 
     def test_temperature_applied_to_logits(self) -> None:
-        """Test temperature divides logits."""
+        """Test temperature divides logits and affects probability distribution."""
         from stepnet.generation import GenerationConfig
 
         config = GenerationConfig(temperature=0.5)
@@ -651,3 +684,53 @@ class TestTemperature:
 
         expected = torch.tensor([4.0, 8.0, 12.0])
         assert torch.allclose(scaled, expected)
+
+        # Lower temperature should produce a sharper (less uniform) distribution
+        probs_high_temp = torch.softmax(logits / 2.0, dim=-1)
+        probs_low_temp = torch.softmax(logits / 0.1, dim=-1)
+
+        # Entropy of low-temp distribution should be lower (more peaked)
+        entropy_high = -(probs_high_temp * probs_high_temp.log()).sum()
+        entropy_low = -(probs_low_temp * probs_low_temp.log()).sum()
+        assert entropy_low < entropy_high, (
+            f"Low temperature entropy ({entropy_low:.4f}) should be less than "
+            f"high temperature entropy ({entropy_high:.4f})"
+        )
+
+        # Very low temperature should concentrate almost all mass on top token
+        assert probs_low_temp.argmax() == 2  # token with logit 6.0
+        assert probs_low_temp[2] > 0.99, (
+            f"Very low temperature should give >99% to top token, got {probs_low_temp[2]:.4f}"
+        )
+
+    def test_different_temperatures_produce_different_distributions(self) -> None:
+        """Test that different temperatures produce meaningfully different logit distributions."""
+        logits = torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0])
+
+        temperatures = [0.1, 0.5, 1.0, 2.0, 5.0]
+        distributions = []
+        for temp in temperatures:
+            probs = torch.softmax(logits / temp, dim=-1)
+            distributions.append(probs)
+
+        # Each pair of different temperatures should yield different distributions
+        for i in range(len(distributions)):
+            for j in range(i + 1, len(distributions)):
+                assert not torch.allclose(distributions[i], distributions[j], atol=1e-4), (
+                    f"Temperatures {temperatures[i]} and {temperatures[j]} "
+                    f"should produce different distributions"
+                )
+
+        # Verify monotonic: as temperature increases, entropy increases
+        entropies = []
+        for probs in distributions:
+            safe_probs = probs.clamp(min=1e-10)
+            entropy = -(safe_probs * safe_probs.log()).sum().item()
+            entropies.append(entropy)
+
+        for i in range(len(entropies) - 1):
+            assert entropies[i] < entropies[i + 1], (
+                f"Entropy should increase with temperature: "
+                f"temp={temperatures[i]} entropy={entropies[i]:.4f} >= "
+                f"temp={temperatures[i+1]} entropy={entropies[i+1]:.4f}"
+            )
