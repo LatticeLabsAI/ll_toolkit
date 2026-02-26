@@ -54,6 +54,7 @@ class LatentSampler:
         latent1: np.ndarray,
         latent2: np.ndarray,
         steps: int = 5,
+        seed: int | None = None,
     ) -> list[np.ndarray]:
         """Interpolate between two latent vectors via spherical linear interpolation.
 
@@ -64,6 +65,7 @@ class LatentSampler:
             latent1: First latent vector (shape: (latent_dim,)).
             latent2: Second latent vector (shape: (latent_dim,)).
             steps: Number of interpolation steps (including endpoints).
+            seed: Optional random seed for reproducibility.
 
         Returns:
             List of interpolated latent vectors, from latent1 to latent2.
@@ -75,6 +77,10 @@ class LatentSampler:
             raise ValueError(
                 f"Latent shapes must match: {latent1.shape} vs {latent2.shape}"
             )
+
+        # Guard against steps <= 1
+        if steps <= 1:
+            return [latent1.copy()]
 
         # Normalize for SLERP
         l1_norm = latent1 / (np.linalg.norm(latent1) + 1e-8)
@@ -110,6 +116,7 @@ class LatentSampler:
         seed_latent: np.ndarray,
         radius: float = 0.3,
         num_samples: int = 5,
+        seed: int | None = None,
     ) -> list[np.ndarray]:
         """Sample points in a hypersphere around a seed latent vector.
 
@@ -120,20 +127,22 @@ class LatentSampler:
             seed_latent: Center of the neighborhood (shape: (latent_dim,)).
             radius: Radius of the hypersphere neighborhood.
             num_samples: Number of points to sample.
+            seed: Optional random seed for reproducibility.
 
         Returns:
             List of latent vectors sampled in the neighborhood.
         """
+        rng = np.random.default_rng(seed)
         seed_latent = np.array(seed_latent, dtype=np.float32)
         results: list[np.ndarray] = []
 
         for _ in range(num_samples):
             # Sample random direction on unit hypersphere
-            direction = np.random.randn(self.latent_dim).astype(np.float32)
+            direction = rng.standard_normal(self.latent_dim).astype(np.float32)
             direction = direction / (np.linalg.norm(direction) + 1e-8)
 
             # Scale by radius and add random magnitude component
-            magnitude = np.random.uniform(0.5, 1.0)
+            magnitude = rng.uniform(0.5, 1.0)
             perturbation = direction * radius * magnitude
 
             sampled = seed_latent + perturbation
@@ -144,19 +153,22 @@ class LatentSampler:
     def sample_from_prior(
         self,
         num_samples: int = 3,
+        seed: int | None = None,
     ) -> list[np.ndarray]:
         """Sample latent vectors from the prior N(0, I).
 
         Args:
             num_samples: Number of vectors to sample.
+            seed: Optional random seed for reproducibility.
 
         Returns:
             List of latent vectors sampled from the standard normal prior.
         """
+        rng = np.random.default_rng(seed)
         samples: list[np.ndarray] = []
 
         for _ in range(num_samples):
-            sample = np.random.randn(self.latent_dim).astype(np.float32)
+            sample = rng.standard_normal(self.latent_dim).astype(np.float32)
             samples.append(sample)
 
         _log.debug(f"Sampled {num_samples} latent vectors from prior N(0, I)")
@@ -165,6 +177,7 @@ class LatentSampler:
     def sample_from_gan(
         self,
         num_samples: int = 3,
+        seed: int | None = None,
     ) -> list[np.ndarray]:
         """Sample latent vectors from a learned GAN generator (if available).
 
@@ -172,6 +185,7 @@ class LatentSampler:
 
         Args:
             num_samples: Number of vectors to sample.
+            seed: Optional random seed for reproducibility.
 
         Returns:
             List of latent vectors from GAN or prior.
@@ -183,14 +197,15 @@ class LatentSampler:
                 "ll_stepnet.stepnet.latent_gan not available; "
                 "falling back to prior sampling"
             )
-            return self.sample_from_prior(num_samples)
+            return self.sample_from_prior(num_samples, seed=seed)
 
         try:
+            rng = np.random.default_rng(seed)
             gan = LatentGAN(latent_dim=self.latent_dim, device=self.device)
             samples: list[np.ndarray] = []
 
             for _ in range(num_samples):
-                noise = np.random.randn(1, self.latent_dim).astype(np.float32)
+                noise = rng.standard_normal((1, self.latent_dim)).astype(np.float32)
 
                 try:
                     import torch
@@ -210,14 +225,14 @@ class LatentSampler:
                     samples.append(sample.astype(np.float32))
                 except (ImportError, RuntimeError) as e:
                     _log.warning(f"GAN sampling failed: {e}; falling back to prior")
-                    return self.sample_from_prior(num_samples)
+                    return self.sample_from_prior(num_samples, seed=seed)
 
             _log.debug(f"Sampled {num_samples} latent vectors from GAN")
             return samples
 
         except Exception as e:
             _log.warning(f"GAN initialization failed: {e}; falling back to prior")
-            return self.sample_from_prior(num_samples)
+            return self.sample_from_prior(num_samples, seed=seed)
 
     def decode_latents(
         self,

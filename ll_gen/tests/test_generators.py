@@ -743,13 +743,11 @@ class TestNeuralVQVAEGenerator:
             "original_prompt": "shape",
         }
 
-        mock_torch = MagicMock()
-        with patch.dict("sys.modules", {"torch": mock_torch}):
-            proposal = gen.generate_from_masked_codebooks(error_ctx)
+        proposal = gen.generate_from_masked_codebooks(error_ctx)
 
-            assert isinstance(proposal, CommandSequenceProposal)
-            # Verify masked sampling was called
-            gen._pipeline.generate_masked.assert_called_once()
+        assert isinstance(proposal, CommandSequenceProposal)
+        # Verify masked sampling was called
+        gen._pipeline.generate_masked.assert_called_once()
 
     @pytest.mark.unit
     def test_generate_from_masked_codebooks_no_mask(self):

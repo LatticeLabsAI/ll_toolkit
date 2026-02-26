@@ -12,6 +12,7 @@ from typing import Any
 import numpy as np
 
 from ll_gen.conditioning.embeddings import ConditioningEmbeddings
+from ll_gen.config import ErrorCategory
 from ll_gen.generators.base import BaseNeuralGenerator
 from ll_gen.proposals.latent_proposal import LatentProposal
 
@@ -124,11 +125,12 @@ class NeuralDiffusionGenerator(BaseNeuralGenerator):
             # Raw tensor output — create placeholder geometry
             face_grids = self._create_placeholder_face_grids(output)
 
-        # If no geometry extracted, create minimal placeholders
+        # If no geometry extracted, log warning and return with empty geometry
         if not face_grids and not edge_points:
-            _log.warning("Diffusion model returned no geometry; using placeholders")
-            face_grids = [np.random.randn(32, 32, 3).astype(np.float32)]
-            edge_points = [np.random.randn(20, 3).astype(np.float32)]
+            _log.warning(
+                "Diffusion model returned no geometry; returning proposal "
+                "with empty geometry (callers should handle None/empty)"
+            )
 
         # Compute confidence based on stage completeness
         confidence = self._compute_confidence(face_grids, edge_points)
@@ -221,8 +223,10 @@ class NeuralDiffusionGenerator(BaseNeuralGenerator):
                     face_grids = self._create_placeholder_face_grids(output)
 
                 if not face_grids and not edge_points:
-                    face_grids = [np.random.randn(32, 32, 3).astype(np.float32)]
-                    edge_points = [np.random.randn(20, 3).astype(np.float32)]
+                    _log.warning(
+                        "Diffusion model returned no geometry for candidate; "
+                        "returning proposal with empty geometry"
+                    )
 
                 confidence = self._compute_confidence(face_grids, edge_points)
 
@@ -272,11 +276,11 @@ class NeuralDiffusionGenerator(BaseNeuralGenerator):
 
         # Determine which stage to re-run from
         start_stage = 0
-        if error_category == "self_intersection":
+        if error_category == ErrorCategory.SELF_INTERSECTION.value:
             # Re-run face geometry stage
             start_stage = 1
             _log.info("Self-intersection detected; re-running from face_geometry stage")
-        elif error_category == "topology_error":
+        elif error_category == ErrorCategory.TOPOLOGY_ERROR.value:
             # Re-run edge positions stage
             start_stage = 2
             _log.info("Topology error detected; re-running from edge_positions stage")
@@ -313,8 +317,10 @@ class NeuralDiffusionGenerator(BaseNeuralGenerator):
                 edge_points = self._tensor_to_numpy_list(output["edge_points"])
 
         if not face_grids and not edge_points:
-            face_grids = [np.random.randn(32, 32, 3).astype(np.float32)]
-            edge_points = [np.random.randn(20, 3).astype(np.float32)]
+            _log.warning(
+                "Diffusion model returned no geometry from error recovery; "
+                "returning proposal with empty geometry"
+            )
 
         confidence = self._compute_confidence(face_grids, edge_points)
 

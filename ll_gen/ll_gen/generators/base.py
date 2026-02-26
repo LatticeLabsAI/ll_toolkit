@@ -12,11 +12,44 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from ll_gen.conditioning.embeddings import ConditioningEmbeddings
 from ll_gen.config import ErrorCategory
 from ll_gen.proposals.base import BaseProposal
 
 _log = logging.getLogger(__name__)
+
+# Token ID constants (must match geotoken vocabulary)
+BOS_TOKEN_ID = 1
+EOS_TOKEN_ID = 2
+SOL_TOKEN_ID = 6
+LINE_TOKEN_ID = 7
+ARC_TOKEN_ID = 8
+CIRCLE_TOKEN_ID = 9
+EXTRUDE_TOKEN_ID = 10
+EOS_CMD_TOKEN_ID = 11
+PARAM_OFFSET = 12
+
+# Parameter masks: for each command type, which of the 16 parameter slots are active
+PARAMETER_MASKS = {
+    0: [True, True, False, False, False, False, False, False, False, False, False, False, False, False, False, False],  # SOL: 2 params (x, y)
+    1: [True, True, True, True, False, False, False, False, False, False, False, False, False, False, False, False],  # LINE: 4 params (x1, y1, x2, y2)
+    2: [True, True, True, True, True, True, False, False, False, False, False, False, False, False, False, False],  # ARC: 6 params (x1, y1, x2, y2, cx, cy)
+    3: [True, True, True, False, False, False, False, False, False, False, False, False, False, False, False, False],  # CIRCLE: 3 params (cx, cy, r)
+    4: [True, True, True, True, True, True, True, True, False, False, False, False, False, False, False, False],  # EXTRUDE: 8 params (depth, operation_type, etc.)
+    5: [False] * 16,  # EOS: no parameters
+}
+
+# Command type to token ID mapping
+CMD_TOKEN_MAP = {
+    0: SOL_TOKEN_ID,
+    1: LINE_TOKEN_ID,
+    2: ARC_TOKEN_ID,
+    3: CIRCLE_TOKEN_ID,
+    4: EXTRUDE_TOKEN_ID,
+    5: EOS_CMD_TOKEN_ID,
+}
 
 
 class BaseNeuralGenerator(ABC):
@@ -174,6 +207,142 @@ class BaseNeuralGenerator(ABC):
         self._model.load_state_dict(state_dict)
         self._model = self._model.to(self.device)
         _log.info("Checkpoint loaded successfully")
+
+    def _logits_to_token_ids(
+        self,
+        command_logits: Any,
+        param_logits: Any,
+        max_seq_len: int = 60,
+    ) -> list[int]:
+        """Convert raw logits to token IDs.
+
+        Args:
+            command_logits: Tensor of shape (batch, seq_len, num_commands).
+            param_logits: List or dict of parameter logit tensors.
+            max_seq_len: Maximum sequence length to decode.
+
+        Returns:
+            List of token IDs following geotoken vocabulary.
+        """
+        if command_logits is None or param_logits is None:
+            return []
+
+        try:
+            import torch
+        except ImportError:
+            _log.warning("torch not available; cannot process logits")
+            return []
+
+        token_ids: list[int] = [BOS_TOKEN_ID]
+
+        # Convert numpy arrays to tensors if needed
+        if isinstance(command_logits, np.ndarray):
+            command_logits = torch.from_numpy(command_logits)
+
+        # Handle batch dimension
+        if command_logits.shape[0] > 0:
+            command_logits = command_logits[0]  # Take first sample
+
+        seq_len = min(command_logits.shape[0], max_seq_len)
+
+        for pos in range(seq_len):
+            # Predict command type
+            cmd_logits = command_logits[pos]  # Shape: (num_commands,)
+            cmd_type = int(torch.argmax(cmd_logits).item())
+
+            if cmd_type not in CMD_TOKEN_MAP:
+                break
+
+            cmd_token = CMD_TOKEN_MAP[cmd_type]
+            token_ids.append(cmd_token)
+
+            # Stop at EOS
+            if cmd_token == EOS_CMD_TOKEN_ID or cmd_token == EOS_TOKEN_ID:
+                break
+
+            # Extract parameters for this command
+            if isinstance(param_logits, dict):
+                for param_idx in range(16):
+                    if param_idx not in param_logits:
+                        continue
+                    if not PARAMETER_MASKS[cmd_type][param_idx]:
+                        continue
+
+                    param_tensor = param_logits[param_idx]
+                    if isinstance(param_tensor, np.ndarray):
+                        param_tensor = torch.from_numpy(param_tensor)
+                    if param_tensor.shape[0] > 0:
+                        param_tensor = param_tensor[0]
+                    if len(param_tensor.shape) > 1:
+                        param_tensor = param_tensor[pos]
+
+                    param_val = int(torch.argmax(param_tensor).item())
+                    token_ids.append(PARAM_OFFSET + param_val)
+
+            elif isinstance(param_logits, (list, tuple)):
+                for param_idx, param_tensor in enumerate(param_logits):
+                    if param_idx >= 16:
+                        break
+                    if not PARAMETER_MASKS[cmd_type][param_idx]:
+                        continue
+
+                    if isinstance(param_tensor, np.ndarray):
+                        param_tensor = torch.from_numpy(param_tensor)
+                    if param_tensor.shape[0] > 0:
+                        param_tensor = param_tensor[0]
+                    if len(param_tensor.shape) > 1:
+                        param_tensor = param_tensor[pos]
+
+                    param_val = int(torch.argmax(param_tensor).item())
+                    token_ids.append(PARAM_OFFSET + param_val)
+
+        if token_ids[-1] != EOS_TOKEN_ID:
+            token_ids.append(EOS_TOKEN_ID)
+
+        return token_ids
+
+    def _compute_confidence(
+        self,
+        command_logits: Any | None,
+        param_logits: Any | None,
+    ) -> float:
+        """Compute confidence from prediction entropy.
+
+        Args:
+            command_logits: Command logits tensor.
+            param_logits: Parameter logits (dict or list).
+
+        Returns:
+            Confidence score in [0, 1].
+        """
+        if command_logits is None:
+            return 0.5
+
+        try:
+            import torch
+            import torch.nn.functional as functional
+        except ImportError:
+            _log.warning("torch not available; returning default confidence")
+            return 0.5
+
+        # Convert numpy to tensor if needed
+        if isinstance(command_logits, np.ndarray):
+            command_logits = torch.from_numpy(command_logits)
+
+        if command_logits.shape[0] > 0:
+            command_logits = command_logits[0]
+
+        # Compute entropy of command predictions
+        probs = functional.softmax(command_logits, dim=-1)
+        entropy = -torch.sum(probs * torch.log(probs + 1e-8), dim=-1)
+        mean_entropy = entropy.mean().item()
+
+        # Normalize entropy to [0, 1]
+        max_entropy = float(np.log(command_logits.shape[-1]))
+        normalized_entropy = min(mean_entropy / max_entropy, 1.0)
+
+        confidence = 1.0 - normalized_entropy
+        return float(confidence)
 
     def _adjust_temperature_for_error(
         self,

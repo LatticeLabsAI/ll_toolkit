@@ -17,27 +17,6 @@ from ll_gen.proposals.command_proposal import CommandSequenceProposal
 
 _log = logging.getLogger(__name__)
 
-# Token ID constants (shared with neural_vae.py)
-BOS_TOKEN_ID = 1
-EOS_TOKEN_ID = 2
-SOL_TOKEN_ID = 6
-LINE_TOKEN_ID = 7
-ARC_TOKEN_ID = 8
-CIRCLE_TOKEN_ID = 9
-EXTRUDE_TOKEN_ID = 10
-EOS_CMD_TOKEN_ID = 11
-PARAM_OFFSET = 12
-
-# Parameter masks for each command type
-PARAMETER_MASKS = {
-    0: [True, True, False, False, False, False, False, False, False, False, False, False, False, False, False, False],  # SOL: 2 params
-    1: [True, True, True, True, False, False, False, False, False, False, False, False, False, False, False, False],  # LINE: 4 params
-    2: [True, True, True, True, True, True, False, False, False, False, False, False, False, False, False, False],  # ARC: 6 params
-    3: [True, True, True, False, False, False, False, False, False, False, False, False, False, False, False, False],  # CIRCLE: 3 params
-    4: [True, True, True, True, True, True, True, True, False, False, False, False, False, False, False, False],  # EXTRUDE: 8 params
-    5: [False] * 16,  # EOS: no parameters
-}
-
 
 class NeuralVQVAEGenerator(BaseNeuralGenerator):
     """Neural generator wrapping VQVAEModel + CADGenerationPipeline.
@@ -127,7 +106,9 @@ class NeuralVQVAEGenerator(BaseNeuralGenerator):
         param_logits = result.get("param_logits")
 
         if command_logits is not None and param_logits is not None:
-            token_ids = self._logits_to_token_ids(command_logits, param_logits)
+            token_ids = self._logits_to_token_ids(
+                command_logits, param_logits, max_seq_len=self.max_seq_len
+            )
 
         # Extract codebook indices if available
         codebook_indices: np.ndarray | None = None
@@ -157,6 +138,7 @@ class NeuralVQVAEGenerator(BaseNeuralGenerator):
                 temperature=temp,
                 has_codebook_indices=codebook_indices is not None,
                 codebook_dim=self.codebook_dim,
+                codebook_indices=codebook_indices,
             ),
             error_context=error_context,
         )
@@ -198,7 +180,9 @@ class NeuralVQVAEGenerator(BaseNeuralGenerator):
             param_logits = result.get("param_logits")
 
             if command_logits is not None and param_logits is not None:
-                token_ids = self._logits_to_token_ids(command_logits, param_logits)
+                token_ids = self._logits_to_token_ids(
+                    command_logits, param_logits, max_seq_len=self.max_seq_len
+                )
 
             confidence = self._compute_confidence(command_logits, param_logits)
 
@@ -280,7 +264,9 @@ class NeuralVQVAEGenerator(BaseNeuralGenerator):
         param_logits = result.get("param_logits")
 
         if command_logits is not None and param_logits is not None:
-            token_ids = self._logits_to_token_ids(command_logits, param_logits)
+            token_ids = self._logits_to_token_ids(
+                command_logits, param_logits, max_seq_len=self.max_seq_len
+            )
 
         confidence = self._compute_confidence(command_logits, param_logits)
 
@@ -326,126 +312,3 @@ class NeuralVQVAEGenerator(BaseNeuralGenerator):
         )
 
         _log.info("VQVAEModel initialized and ready")
-
-    def _logits_to_token_ids(
-        self,
-        command_logits: Any,
-        param_logits: Any,
-    ) -> list[int]:
-        """Convert raw logits to token IDs.
-
-        Args:
-            command_logits: Tensor of shape (batch, seq_len, num_commands).
-            param_logits: List or dict of parameter logit tensors.
-
-        Returns:
-            List of token IDs following geotoken vocabulary.
-        """
-        try:
-            import torch
-        except ImportError:
-            _log.warning("torch not available; cannot process logits")
-            return []
-
-        token_ids: list[int] = [BOS_TOKEN_ID]
-
-        if command_logits.shape[0] > 0:
-            command_logits = command_logits[0]
-
-        seq_len = min(command_logits.shape[0], self.max_seq_len)
-
-        for pos in range(seq_len):
-            cmd_logits = command_logits[pos]
-            cmd_type = int(torch.argmax(cmd_logits).item())
-
-            cmd_token_map = {
-                0: SOL_TOKEN_ID,
-                1: LINE_TOKEN_ID,
-                2: ARC_TOKEN_ID,
-                3: CIRCLE_TOKEN_ID,
-                4: EXTRUDE_TOKEN_ID,
-                5: EOS_CMD_TOKEN_ID,
-            }
-
-            if cmd_type not in cmd_token_map:
-                break
-
-            cmd_token = cmd_token_map[cmd_type]
-            token_ids.append(cmd_token)
-
-            if cmd_token == EOS_CMD_TOKEN_ID or cmd_token == EOS_TOKEN_ID:
-                break
-
-            # Extract parameters
-            if isinstance(param_logits, dict):
-                for param_idx in range(16):
-                    if param_idx not in param_logits:
-                        continue
-                    if not PARAMETER_MASKS[cmd_type][param_idx]:
-                        continue
-
-                    param_tensor = param_logits[param_idx]
-                    if param_tensor.shape[0] > 0:
-                        param_tensor = param_tensor[0]
-                    if len(param_tensor.shape) > 1:
-                        param_tensor = param_tensor[pos]
-
-                    param_val = int(torch.argmax(param_tensor).item())
-                    token_ids.append(PARAM_OFFSET + param_val)
-
-            elif isinstance(param_logits, (list, tuple)):
-                for param_idx, param_tensor in enumerate(param_logits):
-                    if param_idx >= 16:
-                        break
-                    if not PARAMETER_MASKS[cmd_type][param_idx]:
-                        continue
-
-                    if param_tensor.shape[0] > 0:
-                        param_tensor = param_tensor[0]
-                    if len(param_tensor.shape) > 1:
-                        param_tensor = param_tensor[pos]
-
-                    param_val = int(torch.argmax(param_tensor).item())
-                    token_ids.append(PARAM_OFFSET + param_val)
-
-        if token_ids[-1] != EOS_TOKEN_ID:
-            token_ids.append(EOS_TOKEN_ID)
-
-        return token_ids
-
-    def _compute_confidence(
-        self,
-        command_logits: Any | None,
-        param_logits: Any | None,
-    ) -> float:
-        """Compute confidence from prediction entropy.
-
-        Args:
-            command_logits: Command logits tensor.
-            param_logits: Parameter logits (dict or list).
-
-        Returns:
-            Confidence score in [0, 1].
-        """
-        if command_logits is None:
-            return 0.5
-
-        try:
-            import torch
-            import torch.nn.functional as functional
-        except ImportError:
-            _log.warning("torch not available; returning default confidence")
-            return 0.5
-
-        if command_logits.shape[0] > 0:
-            command_logits = command_logits[0]
-
-        probs = functional.softmax(command_logits, dim=-1)
-        entropy = -torch.sum(probs * torch.log(probs + 1e-8), dim=-1)
-        mean_entropy = entropy.mean().item()
-
-        max_entropy = float(np.log(command_logits.shape[-1]))
-        normalized_entropy = min(mean_entropy / max_entropy, 1.0)
-
-        confidence = 1.0 - normalized_entropy
-        return float(confidence)
