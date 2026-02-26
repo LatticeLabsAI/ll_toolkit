@@ -192,7 +192,7 @@ class GenerationOrchestrator:
             # Dispose
             result = self.disposal_engine.dispose(
                 proposal=proposal,
-                export=export and (attempt == retries or True),
+                export=export and (attempt == retries),
                 render=render and (attempt == retries),
             )
 

@@ -166,9 +166,25 @@ class MetricsComputer:
             pair2 = np.tile(centroids2, (len(centroids1), 1))
 
         if kernel == "rbf":
-            k_11 = self._rbf_kernel(centroids1, centroids1)
-            k_22 = self._rbf_kernel(centroids2, centroids2)
-            k_12 = self._rbf_kernel(pair1, pair2)
+            if len(centroids1) * len(centroids2) > sample_size:
+                # Sampled estimation — use sampled pairs for ALL three kernels
+                k_11 = self._rbf_kernel(
+                    centroids1[np.random.choice(len(centroids1), size=min(sample_size, len(centroids1)), replace=True)],
+                    centroids1[np.random.choice(len(centroids1), size=min(sample_size, len(centroids1)), replace=True)]
+                )
+                k_22 = self._rbf_kernel(
+                    centroids2[np.random.choice(len(centroids2), size=min(sample_size, len(centroids2)), replace=True)],
+                    centroids2[np.random.choice(len(centroids2), size=min(sample_size, len(centroids2)), replace=True)]
+                )
+                k_12 = self._rbf_kernel(pair1, pair2)
+            else:
+                # Full pairwise estimation for all three kernels
+                k_11 = self._rbf_kernel(centroids1, centroids1)
+                k_22 = self._rbf_kernel(centroids2, centroids2)
+                # Full cross-kernel
+                pair1_full = np.repeat(centroids1, len(centroids2), axis=0)
+                pair2_full = np.tile(centroids2, (len(centroids1), 1))
+                k_12 = self._rbf_kernel(pair1_full, pair2_full)
 
             e_k11 = np.mean(k_11)
             e_k22 = np.mean(k_22)

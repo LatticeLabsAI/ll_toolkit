@@ -540,12 +540,15 @@ def _apply_boolean_operation(
             logger.warning("No extrude command found for boolean operation")
             return base_shape
         
-        # Extract operation type from params
-        params = extrude_command.get("params", {})
-        param_list = params.get("params", [])
-        
-        if len(param_list) > 4:
-            operation_type = int(param_list[4])
+        # Extract operation type from parameters
+        parameters = extrude_command.get("parameters", [])
+
+        if len(parameters) > 13:
+            # Parameter index 13 is the boolean operation type
+            # After dequantization it's a float; round to nearest int
+            operation_type = int(round(parameters[13]))
+            # Clamp to valid range [0, 3]
+            operation_type = max(0, min(3, operation_type))
         else:
             logger.warning("Boolean operation type not found, defaulting to union")
             operation_type = 1

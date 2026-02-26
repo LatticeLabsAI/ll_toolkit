@@ -263,21 +263,48 @@ class RLAlignmentTrainer:
         Returns:
             Array of token IDs, or None if extraction fails.
         """
+        # DeepCAD vocabulary mapping
+        COMMAND_TYPE_MAP = {
+            "SOL": 0,
+            "LINE": 1,
+            "ARC": 2,
+            "CIRCLE": 3,
+            "EXTRUDE": 4,
+            "EOS": 5,
+        }
+        PARAM_OFFSET = 12
+
         try:
             if hasattr(proposal, "token_ids"):
                 return proposal.token_ids
             elif hasattr(proposal, "command_sequence"):
                 # For CommandSequenceProposal, synthesize token IDs from commands
-                # This is a placeholder — adapt to your actual command encoding
                 commands = proposal.command_sequence
                 token_ids = []
                 for cmd in commands:
-                    # Map command to token ID (e.g., 1-indexed)
                     if hasattr(cmd, "token_id"):
                         token_ids.append(cmd.token_id)
+                    elif isinstance(cmd, dict):
+                        # Map command_type string to DeepCAD vocabulary ID
+                        cmd_type = cmd.get("command_type", "")
+                        cmd_token = COMMAND_TYPE_MAP.get(
+                            cmd_type.upper(), COMMAND_TYPE_MAP.get(cmd_type, 0)
+                        )
+                        token_ids.append(cmd_token)
+                        # Include parameter token IDs offset by PARAM_OFFSET
+                        params = cmd.get("parameters", [])
+                        param_mask = cmd.get("parameter_mask", None)
+                        for j, p in enumerate(params):
+                            if param_mask is not None and j < len(param_mask) and not param_mask[j]:
+                                continue
+                            token_ids.append(int(p) + PARAM_OFFSET)
                     else:
-                        # Default: use command type as token
-                        token_ids.append(1)
+                        # Object with command_type attribute
+                        cmd_type = getattr(cmd, "command_type", "")
+                        cmd_token = COMMAND_TYPE_MAP.get(
+                            str(cmd_type).upper(), 0
+                        )
+                        token_ids.append(cmd_token)
                 return np.array(token_ids, dtype=np.int64)
             else:
                 return None
@@ -328,13 +355,28 @@ class RLAlignmentTrainer:
             # Compute log_probs via softmax
             log_probs = torch.nn.functional.log_softmax(logits, dim=-1)
 
-            # Sum log_probs for the generated tokens
-            # (This is a simplification; adapt to your tokenization)
-            log_prob_sum = log_probs.sum()
+            # Gather log-probs for actually chosen tokens only (REINFORCE)
+            # logits shape: (1, seq_len, vocab_size) or (seq_len, vocab_size)
+            if log_probs.dim() == 3:
+                log_probs = log_probs.squeeze(0)  # (seq_len, vocab_size)
 
-            # Compute entropy as a bonus for exploration
-            probs = torch.exp(log_probs)
-            entropy = -(probs * log_probs).sum()
+            # Shift: teacher forcing means logits[t] predicts token[t+1]
+            if len(token_ids_t) > 1:
+                shifted_log_probs = log_probs[:-1]   # (seq_len-1, vocab)
+                shifted_targets = token_ids_t[1:]     # (seq_len-1,)
+                chosen_log_probs = shifted_log_probs.gather(
+                    1, shifted_targets.unsqueeze(1)
+                ).squeeze(1)
+                log_prob_sum = chosen_log_probs.sum()
+
+                # Entropy over valid shifted positions
+                shifted_probs = torch.exp(shifted_log_probs)
+                entropy = -(shifted_probs * shifted_log_probs).sum(dim=-1).mean()
+            else:
+                # Degenerate single-token case
+                log_prob_sum = log_probs.sum()
+                probs = torch.exp(log_probs)
+                entropy = -(probs * log_probs).sum()
 
             return log_prob_sum, float(entropy.detach().cpu())
 

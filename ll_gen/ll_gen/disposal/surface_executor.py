@@ -30,10 +30,13 @@ try:
     from OCC.Core.BRepBndLib import brepbndlib_Add
     from OCC.Core.Bnd import Bnd_Box
     from OCC.Core.BRepLProp import BRepLProp_CLProps
-    from OCC.Core.TopExp import topexp_MapShapes
+    from OCC.Core.TopExp import topexp_MapShapes, TopExp_Explorer
     from OCC.Core.TopTools import TopTools_IndexedMapOfShape
     from OCC.Core.TopAbs import TopAbs_EDGE, TopAbs_VERTEX
     from OCC.Core.BRepBuilderAPI import BRepBuilderAPI_MakeWire
+    from OCC.Core.BRep import BRep_Tool
+    from OCC.Core.BRepExtrema import BRepExtrema_DistShapeShape
+    from OCC.Core.ShapeAnalysis import ShapeAnalysis_FreeBounds
 
     _OCC_AVAILABLE = True
 except ImportError:
@@ -458,13 +461,45 @@ def _trim_surfaces_with_edges(faces: list[Any], edges: list[Any]) -> list[Any]:
     trimmed_faces = []
     for i, face in enumerate(faces):
         try:
-            # For now, return the original face as trimming is complex
-            # In a full implementation, we would:
-            # 1. Determine which edges bound this face
-            # 2. Create a wire from those edges
-            # 3. Use BRepBuilderAPI_MakeFace(surface, wire, True)
-            trimmed_faces.append(face)
-            logger.debug(f"Processed face {i} (trimming deferred)")
+            # Find edges that are close to this face (within tolerance)
+            face_edges = []
+            for edge in edges:
+                try:
+                    dist_calc = BRepExtrema_DistShapeShape(face, edge)
+                    if dist_calc.IsDone() and dist_calc.Value() < 1e-4:
+                        face_edges.append(edge)
+                except Exception:
+                    continue
+
+            if not face_edges:
+                # No matching edges; keep original face
+                trimmed_faces.append(face)
+                logger.debug(f"Face {i}: no matching edges, keeping original")
+                continue
+
+            # Build wire from matching edges
+            wire_builder = BRepBuilderAPI_MakeWire()
+            for edge in face_edges:
+                wire_builder.Add(edge)
+
+            if not wire_builder.IsDone():
+                logger.warning(f"Face {i}: wire construction failed, keeping original")
+                trimmed_faces.append(face)
+                continue
+
+            wire = wire_builder.Wire()
+
+            # Extract surface and create trimmed face
+            surface = BRep_Tool.Surface(face)
+            face_builder = BRepBuilderAPI_MakeFace(surface, wire, True)
+
+            if face_builder.IsDone():
+                trimmed_faces.append(face_builder.Face())
+                logger.debug(f"Face {i}: successfully trimmed with {len(face_edges)} edges")
+            else:
+                logger.warning(f"Face {i}: face construction failed, keeping original")
+                trimmed_faces.append(face)
+
         except Exception as e:
             logger.warning(f"Failed to trim face {i}: {e}")
             trimmed_faces.append(face)
@@ -536,11 +571,25 @@ def _check_sewed_shape_quality(shape: Any) -> None:
         free_edges = []
         degenerated_edges = []
 
+        # Detect free edges using ShapeAnalysis_FreeBounds
+        try:
+            fb = ShapeAnalysis_FreeBounds(shape)
+            open_wires = fb.GetOpenWires()
+
+            if not open_wires.IsNull():
+                # Count edges in open wires (these are free edges)
+                explorer = TopExp_Explorer(open_wires, TopAbs_EDGE)
+                idx = 0
+                while explorer.More():
+                    free_edges.append(idx)
+                    idx += 1
+                    explorer.Next()
+        except Exception as e:
+            logger.debug(f"Free bounds analysis failed: {e}")
+
+        # Detect degenerated edges
         for i in range(1, edge_map.Extent() + 1):
             edge = edge_map.FindKey(i)
-            
-            # Check if edge is degenerated
-            from OCC.Core.BRep import BRep_Tool
             if BRep_Tool.Degenerated(edge):
                 degenerated_edges.append(i - 1)
 
