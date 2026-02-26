@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, Optional, Tuple
 
+from ll_gen.disposal._occ_utils import count_entities as _count_entities
 from ll_gen.proposals.disposal_result import GeometryReport
 
 _log = logging.getLogger(__name__)
@@ -176,33 +177,6 @@ def introspect(shape: Any) -> GeometryReport:
     report.curve_types = _classify_curves(shape)
 
     return report
-
-
-def _count_entities(shape: Any, topabs_type: Any) -> int:
-    """Count unique entities of a given TopAbs type.
-
-    Uses TopTools_IndexedMapOfShape to avoid counting duplicates
-    (e.g., an edge shared by two faces should only be counted once).
-    """
-    from OCC.Core.TopTools import TopTools_IndexedMapOfShape
-    from OCC.Core.TopExp import topexp
-
-    entity_map = TopTools_IndexedMapOfShape()
-    topexp.MapShapes(shape, topabs_type, entity_map)
-
-    # Handle API differences between pythonocc versions
-    if hasattr(entity_map, "Size"):
-        return entity_map.Size()
-    elif hasattr(entity_map, "Extent"):
-        return entity_map.Extent()
-    else:
-        # Fallback to explorer counting
-        count = 0
-        explorer = TopExp_Explorer(shape, topabs_type)
-        while explorer.More():
-            count += 1
-            explorer.Next()
-        return count
 
 
 def _classify_surfaces(shape: Any) -> Dict[str, int]:

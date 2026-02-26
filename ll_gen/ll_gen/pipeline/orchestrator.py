@@ -356,13 +356,13 @@ class GenerationOrchestrator:
             return self._propose_openscad(prompt, image_path, error_context, attempt)
 
         elif route == GenerationRoute.NEURAL_VAE:
-            return self._propose_neural_vae(prompt, error_context)
+            return self._propose_neural_vae(prompt, error_context, image_path=image_path)
 
         elif route == GenerationRoute.NEURAL_DIFFUSION:
-            return self._propose_neural_diffusion(prompt, error_context)
+            return self._propose_neural_diffusion(prompt, error_context, image_path=image_path)
 
         elif route == GenerationRoute.NEURAL_VQVAE:
-            return self._propose_neural_vqvae(prompt, error_context)
+            return self._propose_neural_vqvae(prompt, error_context, image_path=image_path)
 
         else:
             raise RuntimeError(f"Unsupported generation route: {route}")
@@ -405,6 +405,7 @@ class GenerationOrchestrator:
         self,
         prompt: str,
         error_context: Optional[Dict[str, Any]],
+        image_path: Optional[Path] = None,
     ) -> CommandSequenceProposal:
         """Generate a CommandSequenceProposal via VAE sampling."""
         if self._vae_generator is None:
@@ -428,7 +429,7 @@ class GenerationOrchestrator:
                 max_seq_len=gen_config.max_seq_len if gen_config else 60,
             )
 
-        conditioning = self._get_conditioning(prompt)
+        conditioning = self._get_conditioning(prompt, image_path=image_path)
         return self._vae_generator.generate(
             prompt=prompt,
             conditioning=conditioning,
@@ -439,6 +440,7 @@ class GenerationOrchestrator:
         self,
         prompt: str,
         error_context: Optional[Dict[str, Any]],
+        image_path: Optional[Path] = None,
     ) -> LatentProposal:
         """Generate a LatentProposal via structured diffusion."""
         if self._diffusion_generator is None:
@@ -464,7 +466,7 @@ class GenerationOrchestrator:
                 eta=gen_config.diffusion_eta if gen_config else 0.0,
             )
 
-        conditioning = self._get_conditioning(prompt)
+        conditioning = self._get_conditioning(prompt, image_path=image_path)
         return self._diffusion_generator.generate(
             prompt=prompt,
             conditioning=conditioning,
@@ -475,6 +477,7 @@ class GenerationOrchestrator:
         self,
         prompt: str,
         error_context: Optional[Dict[str, Any]],
+        image_path: Optional[Path] = None,
     ) -> CommandSequenceProposal:
         """Generate a CommandSequenceProposal via VQ-VAE codebooks."""
         if self._vqvae_generator is None:
@@ -500,7 +503,7 @@ class GenerationOrchestrator:
                 ),
             )
 
-        conditioning = self._get_conditioning(prompt)
+        conditioning = self._get_conditioning(prompt, image_path=image_path)
         return self._vqvae_generator.generate(
             prompt=prompt,
             conditioning=conditioning,

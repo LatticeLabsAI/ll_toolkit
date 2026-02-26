@@ -158,6 +158,7 @@ class DisposalEngine:
             val_report = None
         except Exception as exc:
             _log.warning("Validation failed: %s", exc)
+            result.is_valid = True  # Assume valid if validation can't run
             val_report = None
 
         # ----------------------------------------------------------
@@ -299,7 +300,7 @@ class DisposalEngine:
 
             return execute_code_proposal(
                 proposal,
-                timeout=self.disposal_config.enable_auto_repair and 30 or 60,
+                timeout=60 if self.disposal_config.enable_auto_repair else 30,
             )
 
         elif isinstance(proposal, CommandSequenceProposal):

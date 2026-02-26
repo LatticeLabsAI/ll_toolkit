@@ -75,6 +75,8 @@ class VisualVerifier:
     ) -> None:
         self.dimension_tolerance = dimension_tolerance
         self.vlm_backend = vlm_backend
+        self._clip_model = None
+        self._clip_processor = None
 
     def verify(
         self,
@@ -338,8 +340,11 @@ class VisualVerifier:
             _log.warning("CLIP verification requires transformers+PIL: %s", exc)
             return {"matches": True, "response": "", "issues": []}
 
-        model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
-        processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+        if self._clip_model is None:
+            self._clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
+            self._clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+        model = self._clip_model
+        processor = self._clip_processor
 
         # Load images
         images = []

@@ -163,6 +163,23 @@ _CADQUERY_WRAPPER = textwrap.dedent("""\
         meta["success"] = False
         meta["error"] = f"Failed to extract shape: {type(exc).__name__}: {exc}"
 
+    # Serialize shape to BREP for the parent process to reload
+    try:
+        import os as _os
+        brep_path = _os.path.join(_os.path.dirname(sys.argv[1]), "shape.brep")
+        # CadQuery uses OCP bindings; write BREP via OCP.BRepTools
+        from OCP.BRepTools import BRepTools as _BRepTools
+        _BRepTools.Write_s(cq_shape, brep_path)
+        meta["brep_path"] = brep_path
+    except Exception:
+        # Fallback: try OCC.Core for pythonocc environments
+        try:
+            from OCC.Core.BRepTools import breptools as _breptools
+            _breptools.Write(cq_shape, brep_path)
+            meta["brep_path"] = brep_path
+        except Exception:
+            pass
+
     print(json.dumps(meta))
 """)
 
@@ -259,6 +276,16 @@ _PYTHONOCC_WRAPPER = textwrap.dedent("""\
             vertex_count += 1
             exp.Next()
         meta["vertex_count"] = vertex_count
+    except Exception:
+        pass
+
+    # Serialize shape to BREP for the parent process to reload
+    try:
+        import os
+        brep_path = os.path.join(os.path.dirname(sys.argv[1]), "shape.brep")
+        from OCC.Core.BRepTools import breptools
+        breptools.Write(result_obj, brep_path)
+        meta["brep_path"] = brep_path
     except Exception:
         pass
 
@@ -368,6 +395,24 @@ def _run_in_subprocess(
             if "did not produce a result" in error_msg:
                 raise RuntimeError(error_msg)
             raise RuntimeError(error_msg)
+
+        # If a BREP file was written, reload it as a TopoDS_Shape
+        brep_path = result.get("brep_path")
+        if brep_path and os.path.isfile(brep_path) and _OCC_AVAILABLE:
+            try:
+                from OCC.Core.BRepTools import breptools
+                from OCC.Core.BRep import BRep_Builder
+                from OCC.Core.TopoDS import TopoDS_Shape as _TopoDS_Shape
+
+                shape = _TopoDS_Shape()
+                builder = BRep_Builder()
+                if breptools.Read(shape, brep_path, builder):
+                    logger.debug("Reloaded TopoDS_Shape from BREP file")
+                    return shape
+                else:
+                    logger.warning("Failed to read BREP file; returning metadata dict")
+            except Exception as exc:
+                logger.warning("BREP reload failed: %s", exc)
 
         return result
 

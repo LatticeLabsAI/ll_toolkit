@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from ll_gen.config import DisposalConfig, ErrorCategory, ErrorSeverity
+from ll_gen.disposal._occ_utils import count_entities as _count_entities
 from ll_gen.proposals.disposal_result import ValidationFinding
 
 _log = logging.getLogger(__name__)
@@ -149,7 +150,7 @@ def validate_shape(
 
     # --- Euler check ---
     if config.check_euler and report.euler_characteristic is not None:
-        if report.solid_count > 0 and report.euler_characteristic != 2:
+        if report.solid_count == 1 and report.euler_characteristic != 2:
             report.findings.append(ValidationFinding(
                 entity_type="SHAPE",
                 entity_index=0,
@@ -198,37 +199,6 @@ def validate_shape(
     )
 
     return report
-
-
-# ---------------------------------------------------------------------------
-# Entity counting
-# ---------------------------------------------------------------------------
-
-def _count_entities(shape: Any, topabs_type: Any) -> int:
-    """Count unique entities of a given TopAbs type in a shape.
-
-    Uses TopTools_IndexedMapOfShape to avoid counting duplicates
-    (e.g., an edge shared by two faces should only be counted once).
-    """
-    from OCC.Core.TopTools import TopTools_IndexedMapOfShape
-    from OCC.Core.TopExp import topexp
-
-    entity_map = TopTools_IndexedMapOfShape()
-    topexp.MapShapes(shape, topabs_type, entity_map)
-
-    # Use compatibility helper for Size/Extent
-    if hasattr(entity_map, "Size"):
-        return entity_map.Size()
-    elif hasattr(entity_map, "Extent"):
-        return entity_map.Extent()
-    else:
-        # Fallback to explorer counting
-        count = 0
-        explorer = TopExp_Explorer(shape, topabs_type)
-        while explorer.More():
-            count += 1
-            explorer.Next()
-        return count
 
 
 # ---------------------------------------------------------------------------

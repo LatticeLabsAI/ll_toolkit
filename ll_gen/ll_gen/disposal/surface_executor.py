@@ -265,38 +265,65 @@ def _deduplicate_edges(edges: list[Any]) -> list[Any]:
                 'merged': False,
             })
 
-    # Identify duplicate edge pairs
+    # Spatial binning: bin edges by midpoint into grid cells to avoid O(n^2)
+    cell_size = 0.08  # Same as bbox_dist threshold
+    bins: dict[tuple[int, int, int], list[int]] = {}
+    for idx, data in enumerate(edge_data):
+        center = data['bbox_center']
+        cell = (
+            int(np.floor(center[0] / cell_size)),
+            int(np.floor(center[1] / cell_size)),
+            int(np.floor(center[2] / cell_size)),
+        )
+        bins.setdefault(cell, []).append(idx)
+
+    # Identify duplicate edge pairs (only compare within same/adjacent cells)
     merged_pairs = []
-    for i in range(len(edge_data)):
-        if edge_data[i]['merged']:
-            continue
+    visited_pairs: set[tuple[int, int]] = set()
+    for cell, indices in bins.items():
+        # Gather candidates from this cell and all 26 neighbors
+        candidates = set(indices)
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                for dz in (-1, 0, 1):
+                    neighbor = (cell[0] + dx, cell[1] + dy, cell[2] + dz)
+                    if neighbor in bins:
+                        candidates.update(bins[neighbor])
 
-        for j in range(i + 1, len(edge_data)):
-            if edge_data[j]['merged']:
+        sorted_candidates = sorted(candidates)
+        for ci, i in enumerate(sorted_candidates):
+            if edge_data[i]['merged']:
                 continue
+            for j in sorted_candidates[ci + 1:]:
+                if edge_data[j]['merged']:
+                    continue
+                pair_key = (i, j)
+                if pair_key in visited_pairs:
+                    continue
+                visited_pairs.add(pair_key)
 
-            # Compute bounding box distance
-            bbox_dist = np.linalg.norm(
-                edge_data[i]['bbox_center'] - edge_data[j]['bbox_center']
-            )
-
-            # Compute shape similarity (Chamfer distance)
-            if edge_data[i]['sampled_points'].size > 0 and edge_data[j]['sampled_points'].size > 0:
-                shape_sim = _chamfer_distance(
-                    edge_data[i]['sampled_points'],
-                    edge_data[j]['sampled_points'],
+                # Compute bounding box distance
+                bbox_dist = np.linalg.norm(
+                    edge_data[i]['bbox_center'] - edge_data[j]['bbox_center']
                 )
-            else:
-                shape_sim = float('inf')
 
-            # Check if edges should be merged
-            if bbox_dist < 0.08 and shape_sim < 0.2:
-                logger.debug(
-                    f"Merging edges {i} and {j} "
-                    f"(bbox_dist={bbox_dist:.6f}, shape_sim={shape_sim:.6f})"
-                )
-                merged_pairs.append((i, j))
-                edge_data[j]['merged'] = True
+                # Compute shape similarity (Chamfer distance)
+                if edge_data[i]['sampled_points'].size > 0 and edge_data[j]['sampled_points'].size > 0:
+                    shape_sim = _chamfer_distance(
+                        edge_data[i]['sampled_points'],
+                        edge_data[j]['sampled_points'],
+                    )
+                else:
+                    shape_sim = float('inf')
+
+                # Check if edges should be merged
+                if bbox_dist < 0.08 and shape_sim < 0.2:
+                    logger.debug(
+                        f"Merging edges {i} and {j} "
+                        f"(bbox_dist={bbox_dist:.6f}, shape_sim={shape_sim:.6f})"
+                    )
+                    merged_pairs.append((i, j))
+                    edge_data[j]['merged'] = True
 
     # Create merged edges by averaging vertex positions
     deduplicated_edges = []
