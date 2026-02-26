@@ -440,13 +440,12 @@ class NeuralDiffusionGenerator(BaseNeuralGenerator):
         else:
             num_faces = 1
 
-        face_grids: list[np.ndarray] = []
-        for _ in range(num_faces):
-            # Standard 32×32 grid
-            grid = np.random.randn(32, 32, 3).astype(np.float32)
-            face_grids.append(grid)
-
-        return face_grids
+        _log.warning(
+            "Model produced no decodable face grids from latent "
+            "(shape=%s); returning empty geometry.",
+            latent.shape,
+        )
+        return []
 
     def _compute_confidence(
         self,
