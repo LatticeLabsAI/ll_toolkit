@@ -188,8 +188,8 @@ class CodeProposal(BaseProposal):
         Returns:
             New CodeProposal ready for retry generation.
         """
-        new = copy.copy(self)
-        new.proposal_id = uuid.uuid4().hex[:16]
+        new = copy.deepcopy(self)
+        new.proposal_id = uuid.uuid4().hex
         new.attempt = self.next_attempt()
         new.error_context = error
         new.timestamp = datetime.now(timezone.utc).isoformat()

@@ -925,7 +925,11 @@ class TestLatentProposalWithErrorContext:
         latent_proposal.stage_latents = {"face_positions": np.zeros(10)}
         error = {"error_code": "INVALID_SHAPE"}
         new_prop = latent_proposal.with_error_context(error)
-        assert new_prop.stage_latents == latent_proposal.stage_latents
+        assert new_prop.stage_latents is not None
+        for key in latent_proposal.stage_latents:
+            np.testing.assert_array_equal(
+                new_prop.stage_latents[key], latent_proposal.stage_latents[key]
+            )
 
     def test_with_error_context_increments_attempt(self, latent_proposal):
         """with_error_context() increments attempt."""

@@ -228,8 +228,8 @@ class LatentProposal(BaseProposal):
         Preserves stage_latents so the diffusion model can re-denoise
         from an intermediate stage, but clears decoded geometry.
         """
-        new = copy.copy(self)
-        new.proposal_id = uuid.uuid4().hex[:16]
+        new = copy.deepcopy(self)
+        new.proposal_id = uuid.uuid4().hex
         new.attempt = self.next_attempt()
         new.error_context = error
         new.timestamp = datetime.now(timezone.utc).isoformat()

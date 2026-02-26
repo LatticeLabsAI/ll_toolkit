@@ -42,7 +42,7 @@ class BaseProposal:
             attempt, used by the generator to correct on retry.
     """
 
-    proposal_id: str = field(default_factory=lambda: uuid.uuid4().hex[:16])
+    proposal_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     confidence: float = 0.0
     attempt: int = 1
     max_attempts: int = 3
@@ -91,8 +91,8 @@ class BaseProposal:
         """
         import copy
 
-        new = copy.copy(self)
-        new.proposal_id = uuid.uuid4().hex[:16]
+        new = copy.deepcopy(self)
+        new.proposal_id = uuid.uuid4().hex
         new.attempt = self.next_attempt()
         new.error_context = error
         new.timestamp = datetime.now(timezone.utc).isoformat()

@@ -18,8 +18,6 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-import numpy as np
-
 from ll_gen.proposals.base import BaseProposal
 
 
@@ -55,7 +53,7 @@ class CommandSequenceProposal(BaseProposal):
     quantization_bits: int = 8
     normalization_range: float = 2.0
     precision_tier: str = "STANDARD"
-    latent_vector: Optional[np.ndarray] = None
+    latent_vector: Optional[Any] = None  # np.ndarray, lazy import
 
     # ------------------------------------------------------------------
     # Conversion helpers
@@ -148,12 +146,7 @@ class CommandSequenceProposal(BaseProposal):
         while i < len(ids):
             tid = ids[i]
 
-            # Skip special tokens
-            if tid < 6:
-                i += 1
-                continue
-
-            # EOS sequence token
+            # EOS sequence token (must check before tid < 6 guard)
             if tid == 2 or tid == 11:
                 commands.append(CommandToken(
                     command_type=CommandType.EOS,
@@ -161,6 +154,11 @@ class CommandSequenceProposal(BaseProposal):
                     parameter_mask=[False] * 16,
                 ))
                 break
+
+            # Skip special tokens (PAD=0, BOS=1, SEP=3, UNK=4, reserved=5)
+            if tid < 6:
+                i += 1
+                continue
 
             if tid not in COMMAND_ID_MAP:
                 i += 1
@@ -295,8 +293,8 @@ class CommandSequenceProposal(BaseProposal):
         Preserves the latent vector (so the generator can perturb it)
         but clears the decoded tokens.
         """
-        new = copy.copy(self)
-        new.proposal_id = uuid.uuid4().hex[:16]
+        new = copy.deepcopy(self)
+        new.proposal_id = uuid.uuid4().hex
         new.attempt = self.next_attempt()
         new.error_context = error
         new.timestamp = datetime.now(timezone.utc).isoformat()
