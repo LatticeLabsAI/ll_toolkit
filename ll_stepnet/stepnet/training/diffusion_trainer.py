@@ -95,9 +95,7 @@ class DiffusionTrainer:
         self.best_val_loss = float("inf")
         self.history: Dict[str, List[float]] = {
             "train_loss": [],
-            "noise_mse": [],
             "val_loss": [],
-            "val_noise_mse": [],
         }
 
         # Infer number of diffusion timesteps from scheduler
@@ -228,7 +226,6 @@ class DiffusionTrainer:
         """
         self.model.train()
         total_loss = 0.0
-        total_noise_mse = 0.0
         num_batches = 0
 
         pbar = tqdm(
@@ -282,7 +279,6 @@ class DiffusionTrainer:
 
             # Accumulate metrics
             total_loss += loss.item()
-            total_noise_mse += loss.item()
             num_batches += 1
             self.global_step += 1
 
@@ -291,14 +287,12 @@ class DiffusionTrainer:
         n = max(num_batches, 1)
         metrics = {
             "loss": total_loss / n,
-            "noise_mse": total_noise_mse / n,
         }
 
         _log.info(
-            "Epoch %d train: loss=%.6f noise_mse=%.6f",
+            "Epoch %d train: loss=%.6f",
             self.epoch,
             metrics["loss"],
-            metrics["noise_mse"],
         )
 
         return metrics
@@ -353,7 +347,6 @@ class DiffusionTrainer:
         n = max(num_batches, 1)
         metrics = {
             "val_loss": total_loss / n,
-            "val_noise_mse": total_loss / n,
             "ema_val_loss": total_ema_loss / n,
         }
 
@@ -495,11 +488,9 @@ class DiffusionTrainer:
             # Train one epoch
             train_metrics = self.train_epoch()
             self.history["train_loss"].append(train_metrics["loss"])
-            self.history["noise_mse"].append(train_metrics["noise_mse"])
 
             print(
-                f"\nEpoch {epoch}: Loss = {train_metrics['loss']:.6f}, "
-                f"Noise MSE = {train_metrics['noise_mse']:.6f}"
+                f"\nEpoch {epoch}: Loss = {train_metrics['loss']:.6f}"
             )
 
             # Validate
@@ -507,9 +498,6 @@ class DiffusionTrainer:
                 val_metrics = self.validate()
                 self.history["val_loss"].append(
                     val_metrics.get("val_loss", 0.0)
-                )
-                self.history["val_noise_mse"].append(
-                    val_metrics.get("val_noise_mse", 0.0)
                 )
 
                 print(
@@ -583,7 +571,7 @@ class DiffusionTrainer:
             )
 
         load_path = self.checkpoint_dir / filename
-        checkpoint = torch.load(load_path, map_location=self.device)
+        checkpoint = torch.load(load_path, map_location=self.device, weights_only=True)
 
         self.model.load_state_dict(checkpoint["model_state_dict"])
         self.ema_model.load_state_dict(checkpoint["ema_model_state_dict"])

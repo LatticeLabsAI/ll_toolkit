@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr
 
 from cadling.models.base_model import EnrichmentModel
 
@@ -60,7 +60,7 @@ class VlmOptions(BaseModel):
     """
 
     model_name: str
-    api_key: Optional[str] = None
+    api_key: Optional[SecretStr] = None
     api_base_url: Optional[str] = None
     max_tokens: int = 1024
     temperature: float = 0.0

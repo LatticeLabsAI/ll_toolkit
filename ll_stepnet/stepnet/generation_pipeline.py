@@ -107,6 +107,13 @@ class CADGenerationPipeline:
         # Infer mode from model if not explicitly set (as fallback)
         self._inferred_model_type = self._infer_model_type(model)
 
+        # Cached projection layers (created lazily on first use so input dim
+        # is known). Once created they are reused across generate() calls so
+        # weights are consistent and could be fine-tuned.
+        self._command_proj: Optional[nn.Linear] = None
+        self._param_projs: Optional[nn.ModuleList] = None
+        self._latent_mlps: Dict[tuple, nn.Sequential] = {}
+
         _log.info(
             "CADGenerationPipeline initialised: mode=%s, model_type=%s, "
             "device=%s, quantization_levels=%d",
@@ -671,9 +678,10 @@ class CADGenerationPipeline:
             decoded = decoded.unsqueeze(1)
 
         feat_dim = decoded.shape[-1]
-        proj = nn.Linear(feat_dim, 6, bias=True).to(decoded.device)
-        nn.init.xavier_uniform_(proj.weight)
-        return proj(decoded)
+        if self._command_proj is None or self._command_proj.in_features != feat_dim:
+            self._command_proj = nn.Linear(feat_dim, 6, bias=True).to(decoded.device)
+            nn.init.xavier_uniform_(self._command_proj.weight)
+        return self._command_proj(decoded)
 
     def _project_to_param_logits(
         self, decoded: torch.Tensor,
@@ -696,13 +704,15 @@ class CADGenerationPipeline:
             decoded = decoded.unsqueeze(1)
 
         feat_dim = decoded.shape[-1]
-        param_logits = []
-        for _ in range(16):
-            proj = nn.Linear(feat_dim, self.quantization_levels, bias=True).to(decoded.device)
-            nn.init.xavier_uniform_(proj.weight)
-            param_logits.append(proj(decoded))
+        if self._param_projs is None or self._param_projs[0].in_features != feat_dim:
+            self._param_projs = nn.ModuleList([
+                nn.Linear(feat_dim, self.quantization_levels, bias=True).to(decoded.device)
+                for _ in range(16)
+            ])
+            for proj in self._param_projs:
+                nn.init.xavier_uniform_(proj.weight)
 
-        return param_logits
+        return [proj(decoded) for proj in self._param_projs]
 
     def _latent_to_sequence_logits(
         self,
@@ -727,21 +737,26 @@ class CADGenerationPipeline:
         hidden_dim = max(512, latent_dim)
         output_dim = target_seq_len * num_classes
 
-        mlp = nn.Sequential(
-            nn.Linear(latent_dim, hidden_dim),
-            nn.GELU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.GELU(),
-            nn.Linear(hidden_dim, output_dim),
-        ).to(latent.device)
+        # Cache MLP keyed by (latent_dim, target_seq_len, num_classes)
+        cache_key = (latent_dim, target_seq_len, num_classes)
+        if cache_key not in self._latent_mlps:
+            mlp = nn.Sequential(
+                nn.Linear(latent_dim, hidden_dim),
+                nn.GELU(),
+                nn.Linear(hidden_dim, hidden_dim),
+                nn.GELU(),
+                nn.Linear(hidden_dim, output_dim),
+            ).to(latent.device)
 
-        # Initialize weights for reasonable output range
-        for layer in mlp:
-            if isinstance(layer, nn.Linear):
-                nn.init.xavier_uniform_(layer.weight)
-                nn.init.zeros_(layer.bias)
+            # Initialize weights for reasonable output range
+            for layer in mlp:
+                if isinstance(layer, nn.Linear):
+                    nn.init.xavier_uniform_(layer.weight)
+                    nn.init.zeros_(layer.bias)
 
-        logits_flat = mlp(latent)  # [B, S*C]
+            self._latent_mlps[cache_key] = mlp
+
+        logits_flat = self._latent_mlps[cache_key](latent)  # [B, S*C]
         return logits_flat.reshape(batch_size, target_seq_len, num_classes)
 
     def _decode_to_token_sequence(
@@ -882,7 +897,7 @@ class CADGenerationPipeline:
                     for param in cmd_token.parameters:
                         token_ids.append(int(param))
             else:
-                raise AttributeError("TokenSequence has no method to convert to IDs")
+                raise ValueError("TokenSequence has no method to convert to IDs")
 
             # Execute the sequence
             executor = CommandExecutor(tolerance=self.executor_tolerance)
@@ -899,7 +914,7 @@ class CADGenerationPipeline:
             result['shape'] = shape
             result['valid'] = validity
 
-        except Exception as e:
+        except (RuntimeError, ValueError, KeyError) as e:
             _log.debug(f"Reconstruction error: {e}")
             result['error'] = str(e)
 

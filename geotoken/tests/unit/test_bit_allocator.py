@@ -25,6 +25,7 @@ class TestBitAllocator:
 
         # High complexity should get more bits
         assert result.max_bits >= result.min_bits
+        assert result.bits_per_vertex[-1] > result.bits_per_vertex[0]
 
     def test_clamping(self):
         config = AdaptiveBitAllocationConfig(

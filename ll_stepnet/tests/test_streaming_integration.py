@@ -107,7 +107,7 @@ class TestLazyTopologyLoader:
 
         # Fill cache
         for i in range(3):
-            loader.load(f"sample_{i}", lambda: {"id": i})
+            loader.load(f"sample_{i}", lambda i=i: {"id": i})
 
         # Add one more to trigger eviction
         loader.load("sample_3", lambda: {"id": 3})

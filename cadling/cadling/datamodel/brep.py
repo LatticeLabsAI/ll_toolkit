@@ -148,11 +148,46 @@ class BRepDocument(CADlingDocument):
     face_index: Dict[int, BRepFaceItem] = Field(default_factory=dict)
     solid_index: Dict[int, BRepSolidItem] = Field(default_factory=dict)
 
-    # Counts
-    num_solids: int = 0
-    num_faces: int = 0
-    num_edges: int = 0
-    num_vertices: int = 0
+    @property
+    def num_solids(self) -> int:
+        """Number of solids derived from solid_index."""
+        return len(self.solid_index)
+
+    @property
+    def num_faces(self) -> int:
+        """Number of faces derived from face_index."""
+        return len(self.face_index)
+
+    @property
+    def num_edges(self) -> int:
+        """Number of edges derived from edge_index."""
+        return len(self.edge_index)
+
+    @property
+    def num_vertices(self) -> int:
+        """Number of vertices derived from vertex_index."""
+        return len(self.vertex_index)
+
+    def add_item(self, item: "CADItem"):
+        """Add an item to the document and update format-specific indices.
+
+        Overrides base class to keep indices in sync automatically.
+        Items are stored once in self.items; indices provide fast lookups.
+
+        Args:
+            item: CADItem (or BRep subclass) to add
+        """
+        super().add_item(item)
+
+        # Update format-specific index based on item type
+        if isinstance(item, BRepVertexItem):
+            self.vertex_index[item.vertex_id] = item
+        elif isinstance(item, BRepEdgeItem):
+            self.edge_index[item.edge_id] = item
+        elif isinstance(item, BRepFaceItem):
+            self.face_index[item.face_id] = item
+        elif isinstance(item, BRepSolidItem):
+            self.solid_index[item.solid_id] = item
 
     def add_vertex(self, vertex: BRepVertexItem):
         """Add a vertex to the document.
@@ -161,8 +196,6 @@ class BRepDocument(CADlingDocument):
             vertex: BRepVertexItem to add
         """
         self.add_item(vertex)
-        self.vertex_index[vertex.vertex_id] = vertex
-        self.num_vertices += 1
 
     def add_edge(self, edge: BRepEdgeItem):
         """Add an edge to the document.
@@ -171,8 +204,6 @@ class BRepDocument(CADlingDocument):
             edge: BRepEdgeItem to add
         """
         self.add_item(edge)
-        self.edge_index[edge.edge_id] = edge
-        self.num_edges += 1
 
     def add_face(self, face: BRepFaceItem):
         """Add a face to the document.
@@ -181,8 +212,6 @@ class BRepDocument(CADlingDocument):
             face: BRepFaceItem to add
         """
         self.add_item(face)
-        self.face_index[face.face_id] = face
-        self.num_faces += 1
 
     def add_solid(self, solid: BRepSolidItem):
         """Add a solid to the document.
@@ -191,8 +220,6 @@ class BRepDocument(CADlingDocument):
             solid: BRepSolidItem to add
         """
         self.add_item(solid)
-        self.solid_index[solid.solid_id] = solid
-        self.num_solids += 1
 
     def get_vertex(self, vertex_id: int) -> Optional[BRepVertexItem]:
         """Get vertex by ID.

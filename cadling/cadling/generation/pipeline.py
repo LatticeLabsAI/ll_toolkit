@@ -10,7 +10,12 @@ text/image conditioning via Text2CAD-style cross-attention.
 
 from __future__ import annotations
 
+import json
 import logging
+import subprocess
+import sys
+import tempfile
+import textwrap
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -357,22 +362,16 @@ class GenerationPipeline:
                 # CadQuery and OpenSCAD executors have different signatures:
                 # - CadQuery: execute(script) -> dict, then export_step(result, path)
                 # - OpenSCAD: execute(script, output_path) -> dict (writes file directly)
-                if backend == GenerationBackend.CODEGEN_CADQUERY:
-                    exec_result = executor.execute(generated_code or "")
-                    if exec_result.get("success"):
+                exec_result = self._sandbox_execute_code(
+                    executor, backend, generated_code or "", output_path
+                )
+                if exec_result.get("success"):
+                    if backend == GenerationBackend.CODEGEN_CADQUERY:
                         executor.export_step(exec_result, output_path)
-                        shape_or_path = output_path
-                    else:
-                        shape_or_path = None
-                        last_error = exec_result.get("error", "Execution failed")
+                    shape_or_path = exec_result.get("output_path", output_path)
                 else:
-                    # OpenSCAD - execute writes file directly
-                    exec_result = executor.execute(generated_code or "", output_path)
-                    if exec_result.get("success"):
-                        shape_or_path = exec_result.get("output_path", output_path)
-                    else:
-                        shape_or_path = None
-                        last_error = exec_result.get("error", "Execution failed")
+                    shape_or_path = None
+                    last_error = exec_result.get("error", "Execution failed")
 
                 # Step 3: Validate output (only if execution succeeded)
                 if shape_or_path is None:
@@ -431,6 +430,104 @@ class GenerationPipeline:
             success=False,
             generation_metadata={**metadata, "error": "Max retries exceeded"},
         )
+
+    def _sandbox_execute_code(
+        self,
+        executor: Any,
+        backend: GenerationBackend,
+        code: str,
+        output_path: str,
+        timeout: int = 120,
+    ) -> dict:
+        """Execute LLM-generated code in a subprocess sandbox.
+
+        Serializes the execution request and runs it in an isolated subprocess
+        with a timeout to prevent runaway or malicious code from affecting the
+        parent process.
+
+        Args:
+            executor: The backend executor instance.
+            backend: Which generation backend is in use.
+            code: The generated code string.
+            output_path: Desired output file path.
+            timeout: Maximum execution time in seconds.
+
+        Returns:
+            Result dict with 'success', 'error', and optionally 'output_path'.
+        """
+        if backend == GenerationBackend.CODEGEN_OPENSCAD:
+            # OpenSCAD executor already runs an external binary via subprocess
+            return executor.execute(code, output_path)
+
+        # For CadQuery and other code-exec backends, use subprocess isolation
+        wrapper = textwrap.dedent("""\
+            import sys
+            import json
+
+            try:
+                import cadquery as cq
+            except ImportError:
+                print(json.dumps({{"success": False, "error": "cadquery not available"}}))
+                sys.exit(1)
+
+            script = {script_repr}
+            output_path = {output_repr}
+
+            namespace = {{"cq": cq, "cadquery": cq}}
+            try:
+                exec(compile(script, "<generated_script>", "exec"), namespace)
+            except Exception as e:
+                print(json.dumps({{"success": False, "error": str(e)}}))
+                sys.exit(1)
+
+            result = namespace.get("result")
+            if result is None:
+                for name in ("part", "model", "shape", "body", "solid"):
+                    result = namespace.get(name)
+                    if result is not None:
+                        break
+
+            if result is None:
+                print(json.dumps({{"success": False, "error": "No result variable found"}}))
+                sys.exit(1)
+
+            try:
+                if hasattr(result, "val"):
+                    cq.exporters.export(result, output_path)
+                else:
+                    cq.exporters.export(cq.Workplane().add(result), output_path)
+                print(json.dumps({{"success": True, "output_path": output_path}}))
+            except Exception as e:
+                print(json.dumps({{"success": False, "error": f"Export failed: {{e}}"}}))
+                sys.exit(1)
+        """).format(script_repr=repr(code), output_repr=repr(output_path))
+
+        try:
+            proc = subprocess.run(
+                [sys.executable, "-c", wrapper],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+
+            if proc.returncode == 0 and proc.stdout.strip():
+                try:
+                    return json.loads(proc.stdout.strip().splitlines()[-1])
+                except (json.JSONDecodeError, IndexError):
+                    pass
+
+            stderr_msg = (proc.stderr or "").strip()[:500]
+            return {
+                "success": False,
+                "error": f"Subprocess failed (rc={proc.returncode}): {stderr_msg}",
+            }
+
+        except subprocess.TimeoutExpired:
+            _log.error("Code execution timed out after %ds", timeout)
+            return {"success": False, "error": f"Execution timed out after {timeout}s"}
+        except Exception as e:
+            _log.warning("Subprocess sandbox failed (%s), falling back to executor", e)
+            return executor.execute(code)
 
     def _load_cadquery_backend(self):
         """Lazily load the CadQuery generator and executor.

@@ -16,7 +16,19 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Iterator, Optional
 
 from pydantic import BaseModel, Field
-from stepnet import STEPTokenizer
+
+from cadling.chunker.tokenizer.tokenizer import (
+    CADTokenizer,
+    SimpleTokenizer,
+    get_tokenizer,
+)
+
+try:
+    from stepnet import STEPTokenizer
+    _has_stepnet = True
+except ImportError:
+    STEPTokenizer = None
+    _has_stepnet = False
 
 if TYPE_CHECKING:
     from cadling.datamodel.base_models import CADlingDocument, TopologyGraph
@@ -110,6 +122,8 @@ class BaseCADChunker(ABC):
         max_tokens: int = 512,
         overlap_tokens: int = 50,
         vocab_size: int = 50000,
+        tokenizer_type: str = "auto",
+        tokenizer_model: str | None = None,
     ):
         """Initialize chunker.
 
@@ -117,14 +131,47 @@ class BaseCADChunker(ABC):
             max_tokens: Maximum tokens per chunk
             overlap_tokens: Number of overlapping tokens between chunks
             vocab_size: Vocabulary size for tokenizer
+            tokenizer_type: Tokenizer type ("auto", "simple", "gpt", "huggingface").
+                "auto" tries STEPTokenizer first, then falls back to SimpleTokenizer.
+            tokenizer_model: Model name for gpt/huggingface tokenizers.
         """
         self.max_tokens = max_tokens
         self.overlap_tokens = overlap_tokens
-        self.tokenizer = STEPTokenizer(vocab_size=vocab_size)
+        self.tokenizer = self._create_tokenizer(tokenizer_type, tokenizer_model, vocab_size)
         _log.debug(
             f"Initialized {self.__class__.__name__} "
-            f"(max_tokens={max_tokens}, overlap={overlap_tokens})"
+            f"(max_tokens={max_tokens}, overlap={overlap_tokens}, "
+            f"tokenizer={self.tokenizer.__class__.__name__})"
         )
+
+    @staticmethod
+    def _create_tokenizer(
+        tokenizer_type: str, tokenizer_model: str | None, vocab_size: int
+    ) -> Any:
+        """Create the appropriate tokenizer instance.
+
+        Tries STEPTokenizer first when tokenizer_type is "auto", falling back
+        to SimpleTokenizer. For explicit types ("simple", "gpt", "huggingface"),
+        delegates to the get_tokenizer factory.
+
+        Args:
+            tokenizer_type: Tokenizer selection strategy.
+            tokenizer_model: Model name for gpt/huggingface tokenizers.
+            vocab_size: Vocabulary size for STEPTokenizer.
+
+        Returns:
+            A tokenizer instance (STEPTokenizer or CADTokenizer subclass).
+        """
+        if tokenizer_type == "auto":
+            if _has_stepnet and STEPTokenizer is not None:
+                try:
+                    return STEPTokenizer(vocab_size=vocab_size)
+                except Exception as exc:
+                    _log.debug("STEPTokenizer init failed (%s), using SimpleTokenizer", exc)
+            return SimpleTokenizer()
+
+        # Explicit tokenizer type requested
+        return get_tokenizer(tokenizer_type, model=tokenizer_model)
 
     @abstractmethod
     def chunk(self, doc: CADlingDocument) -> Iterator[CADChunk]:
@@ -148,7 +195,10 @@ class BaseCADChunker(ABC):
         pass
 
     def _count_tokens(self, text: str) -> int:
-        """Count tokens in text using ll_stepnet tokenizer.
+        """Count tokens in text using the configured tokenizer.
+
+        Supports both STEPTokenizer (encode -> list of IDs) and
+        CADTokenizer subclasses (count_tokens method).
 
         Args:
             text: Text to count tokens in
@@ -156,8 +206,119 @@ class BaseCADChunker(ABC):
         Returns:
             Token count
         """
+        if isinstance(self.tokenizer, CADTokenizer):
+            return self.tokenizer.count_tokens(text)
+        # STEPTokenizer path
         token_ids = self.tokenizer.encode(text)
         return len(token_ids)
+
+    def _item_to_text(self, item: Any) -> str:
+        """Convert a CAD item/entity to text representation.
+
+        Shared utility used by all chunker subclasses. Handles multiple
+        item types with format-specific logic for STEP entities and
+        generic CADItem fallbacks.
+
+        Args:
+            item: CAD item or entity to convert.
+
+        Returns:
+            Text representation of the item.
+        """
+        from cadling.datamodel.step import STEPEntityItem
+
+        # Handle STEPEntityItem specifically
+        if isinstance(item, STEPEntityItem):
+            parts = [f"#{item.entity_id} {item.entity_type}"]
+            if item.text:
+                parts.append(item.text)
+            return "\n".join(parts)
+
+        # Try raw_line attribute (e.g. parsed STEP lines)
+        if hasattr(item, "raw_line") and item.raw_line:
+            return str(item.raw_line)
+
+        # Build from entity_id and type attributes
+        parts: list[str] = []
+        entity_id = getattr(item, "entity_id", getattr(item, "id", None))
+        entity_type = getattr(item, "type", getattr(item, "entity_type", None))
+
+        if entity_id is not None:
+            parts.append(f"#{entity_id}")
+        if entity_type is not None:
+            parts.append(f"={entity_type}")
+
+        # Add parameters if available
+        params = getattr(item, "parameters", getattr(item, "params", None))
+        if params:
+            if isinstance(params, dict):
+                param_str = ",".join(f"{k}={v}" for k, v in params.items())
+            elif isinstance(params, (list, tuple)):
+                param_str = ",".join(str(p) for p in params)
+            else:
+                param_str = str(params)
+            parts.append(f"({param_str})")
+
+        if parts:
+            return "".join(parts) + ";"
+
+        # Try CADItem standard attributes (label + text + properties + bbox)
+        if hasattr(item, "label") and item.label is not None:
+            label_parts = [f"[{item.label.text}]"]
+
+            if hasattr(item, "text") and item.text:
+                label_parts.append(item.text)
+
+            # Add properties (excluding large objects)
+            if hasattr(item, "properties") and item.properties:
+                prop_lines = []
+                for key, value in item.properties.items():
+                    if key in ["embedding", "children"]:
+                        continue
+                    prop_lines.append(f"{key}: {value}")
+                if prop_lines:
+                    label_parts.append("Properties: " + ", ".join(prop_lines))
+
+            # Add bounding box info
+            if hasattr(item, "bbox") and item.bbox is not None:
+                center = item.bbox.center
+                size = item.bbox.size
+                label_parts.append(
+                    f"BBox: center=({center[0]:.2f}, {center[1]:.2f}, {center[2]:.2f}), "
+                    f"size=({size[0]:.2f}, {size[1]:.2f}, {size[2]:.2f})"
+                )
+
+            return "\n".join(label_parts)
+
+        # Fallback to string representation
+        return str(item)
+
+    def _get_overlap_items(self, items: list) -> list:
+        """Get items for overlap with next chunk.
+
+        Takes items from the end of the current chunk such that their
+        total token count does not exceed ``self.overlap_tokens``.
+
+        Args:
+            items: Current chunk items
+
+        Returns:
+            Items to include in next chunk for overlap
+        """
+        if not items or self.overlap_tokens <= 0:
+            return []
+
+        overlap_items: list = []
+        overlap_tokens_count = 0
+
+        for item in reversed(items):
+            item_tokens = self._count_tokens(self._item_to_text(item))
+            if overlap_tokens_count + item_tokens > self.overlap_tokens:
+                break
+            overlap_items.insert(0, item)
+            overlap_tokens_count += item_tokens
+
+        return overlap_items
 
     def _extract_topology_subgraph(
         self,

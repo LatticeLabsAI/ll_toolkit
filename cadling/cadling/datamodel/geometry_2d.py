@@ -54,7 +54,7 @@ import math
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, PrivateAttr, field_validator
 
 from cadling.datamodel.base_models import CADItem, CADItemLabel
 
@@ -563,6 +563,11 @@ class Sketch2DItem(CADItem):
     source_page: Optional[int] = None
     source_layer: Optional[str] = None
 
+    _all_primitives_cache: Optional[List[Primitive2D]] = PrivateAttr(default=None)
+    _all_annotations_cache: Optional[List[DimensionAnnotation]] = PrivateAttr(
+        default=None
+    )
+
     @property
     def total_primitives(self) -> int:
         """Total number of primitives across all profiles."""
@@ -575,19 +580,28 @@ class Sketch2DItem(CADItem):
 
     @property
     def all_primitives(self) -> List[Primitive2D]:
-        """Flat list of all primitives from all profiles."""
-        result = []
-        for p in self.profiles:
-            result.extend(p.primitives)
-        return result
+        """Flat list of all primitives from all profiles (cached)."""
+        if self._all_primitives_cache is None:
+            result: List[Primitive2D] = []
+            for p in self.profiles:
+                result.extend(p.primitives)
+            self._all_primitives_cache = result
+        return self._all_primitives_cache
 
     @property
     def all_annotations(self) -> List[DimensionAnnotation]:
-        """Flat list of all annotations from all profiles."""
-        result = []
-        for p in self.profiles:
-            result.extend(p.annotations)
-        return result
+        """Flat list of all annotations from all profiles (cached)."""
+        if self._all_annotations_cache is None:
+            result: List[DimensionAnnotation] = []
+            for p in self.profiles:
+                result.extend(p.annotations)
+            self._all_annotations_cache = result
+        return self._all_annotations_cache
+
+    def _invalidate_caches(self) -> None:
+        """Invalidate primitive and annotation caches after mutation."""
+        self._all_primitives_cache = None
+        self._all_annotations_cache = None
 
     def add_profile(self, profile: SketchProfile) -> None:
         """Add a sketch profile to this item.
@@ -596,6 +610,7 @@ class Sketch2DItem(CADItem):
             profile: SketchProfile to add.
         """
         self.profiles.append(profile)
+        self._invalidate_caches()
         _log.debug(
             "Added profile %s (%d primitives) to %s",
             profile.profile_id,

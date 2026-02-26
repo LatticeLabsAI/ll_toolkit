@@ -142,12 +142,14 @@ class DocumentConverter:
         self,
         source: Union[Path, str, BytesIO],
         format: Optional[InputFormat] = None,
+        pipeline_options: Optional[PipelineOptions] = None,
     ) -> ConversionResult:
         """Convert a CAD file to CADlingDocument.
 
         Args:
             source: Path to file or byte stream.
             format: Format (auto-detected if not provided).
+            pipeline_options: Pipeline options to override format-level defaults.
 
         Returns:
             ConversionResult with status and document (or errors).
@@ -219,8 +221,9 @@ class DocumentConverter:
         # Attach backend to input doc
         input_doc._backend = backend
 
-        # Initialize pipeline
-        pipeline = format_option.pipeline_cls(format_option.pipeline_options)
+        # Initialize pipeline (use caller-provided options if given)
+        effective_options = pipeline_options or format_option.pipeline_options
+        pipeline = format_option.pipeline_cls(effective_options)
 
         # Execute conversion
         _log.info(
@@ -297,11 +300,23 @@ class DocumentConverter:
         if header_str.strip().startswith("solid"):
             return InputFormat.STL
 
-        # Binary STL has specific header format
-        if len(header) >= 84:  # Binary STL minimum size
-            # Check if it looks like binary STL
-            # (header is 80 bytes, then 4 bytes for triangle count)
-            return InputFormat.STL
+        # Binary STL has specific header format (80-byte header + 4-byte triangle count)
+        # But first rule out other formats that could match the size heuristic
+        _known_signatures = (
+            b"ISO-10303-21",  # STEP
+            b"%PDF",          # PDF
+        )
+        _known_text_prefixes = ("IGES", "0\nSECTION", "0\r\nSECTION")
+        is_known_format = any(header.startswith(sig) for sig in _known_signatures)
+        if not is_known_format:
+            is_known_format = any(header_str.lstrip().startswith(p) for p in _known_text_prefixes)
+        if not is_known_format and len(header) >= 84:
+            import struct
+            num_triangles = struct.unpack_from('<I', header, 80)[0]
+            # Validate: expected file size = 84 + (num_triangles * 50)
+            # Only classify as STL if triangle count is reasonable (>0 and <10M)
+            if 0 < num_triangles < 10_000_000:
+                return InputFormat.STL
 
         # IGES files start with specific format
         if "IGES" in header_str:
@@ -331,7 +346,7 @@ class DocumentConverter:
         Returns:
             CADInputDocument.
         """
-        # Compute hash
+        # Compute hash (cache content to avoid redundant re-reads)
         if isinstance(source, Path):
             with open(source, "rb") as f:
                 content = f.read()
@@ -344,11 +359,13 @@ class DocumentConverter:
         # Create input document
         file_path = source if isinstance(source, Path) else Path("stream")
 
-        return CADInputDocument(
+        input_doc = CADInputDocument(
             file=file_path,
             format=format,
             document_hash=doc_hash,
         )
+        input_doc._content_cache = content
+        return input_doc
 
     def _get_default_format_option(self, format: InputFormat) -> FormatOption:
         """Get default format option for a format.

@@ -187,7 +187,9 @@ class DXFBackend(DeclarativeCADBackend):
 
             _log.debug("DXF validation passed for %s", self.file.name)
             return True
-        except Exception as exc:
+        except (ezdxf.DXFError, ezdxf.DXFStructureError, ezdxf.DXFValueError,
+                ezdxf.DXFTableEntryError, ezdxf.DXFKeyError,
+                IOError, OSError, UnicodeDecodeError) as exc:
             _log.warning("DXF validation failed for %s: %s", self.file.name, exc)
             self._dxf_doc = None
             return False

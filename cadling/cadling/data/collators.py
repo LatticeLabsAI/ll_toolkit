@@ -594,7 +594,9 @@ class CADGraphCollator:
 
                 if x is not None:
                     all_x.append(x)
-                    batch_indices.extend([batch_idx] * (x.numel() // 10))
+                    # Derive num_nodes from tensor shape (rows) instead of hardcoded divisor
+                    num_nodes = x.shape[0] if x.dim() >= 1 else (x.numel() // max(x.shape[-1], 1) if x.numel() > 0 else 0)
+                    batch_indices.extend([batch_idx] * num_nodes)
 
                 if edge_index is not None:
                     # Offset edge indices

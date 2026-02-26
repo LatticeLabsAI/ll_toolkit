@@ -601,6 +601,20 @@ class BRepChunker(BaseCADChunker):
 
 
 # Convenience aliases
-EntityTypeChunker = lambda **kwargs: BRepChunker(strategy="entity_type", **kwargs)
-TopologyChunker = lambda **kwargs: BRepChunker(strategy="topology", **kwargs)
-HierarchyChunker = lambda **kwargs: BRepChunker(strategy="hierarchy", **kwargs)
+def EntityTypeChunker(**kwargs) -> BRepChunker:
+    """Create a BRepChunker with entity_type strategy."""
+    return BRepChunker(strategy="entity_type", **kwargs)
+
+
+def BRepTopologyChunker(**kwargs) -> BRepChunker:
+    """Create a BRepChunker with topology strategy."""
+    return BRepChunker(strategy="topology", **kwargs)
+
+
+# Keep backward-compatible alias
+TopologyChunker = BRepTopologyChunker
+
+
+def HierarchyChunker(**kwargs) -> BRepChunker:
+    """Create a BRepChunker with hierarchy strategy."""
+    return BRepChunker(strategy="hierarchy", **kwargs)

@@ -77,6 +77,7 @@ class GraphTokenizer:
         )
         self._node_params: Optional[FeatureQuantizationParams] = None
         self._edge_params: Optional[FeatureQuantizationParams] = None
+        self._explicitly_fitted: bool = False
 
     def fit(
         self,
@@ -96,6 +97,7 @@ class GraphTokenizer:
         self._node_params = self.node_quantizer.fit(node_features)
         if edge_features is not None:
             self._edge_params = self.edge_quantizer.fit(edge_features)
+        self._explicitly_fitted = True
         _log.info(
             "GraphTokenizer fitted: node_dim=%d, edge_dim=%s",
             node_features.shape[1],
@@ -158,12 +160,16 @@ class GraphTokenizer:
                 edge_features = edge_features[:self.config.max_edges]
             num_edges = self.config.max_edges
 
-        # Fit quantizers if not pre-fitted
-        node_params = self._node_params
-        if node_params is None:
+        # Fit quantizers: use cached params only when explicitly fitted
+        if self._explicitly_fitted:
+            node_params = self._node_params
+            edge_params = self._edge_params
+        else:
+            # Auto-fit fresh params per call — don't cache so graph B
+            # doesn't reuse graph A's normalization parameters
             node_params = self.node_quantizer.fit(node_features)
+            edge_params = None
 
-        edge_params = self._edge_params
         if edge_features is not None and edge_params is None:
             edge_params = self.edge_quantizer.fit(edge_features)
 
@@ -229,6 +235,12 @@ class GraphTokenizer:
         for e in range(num_edges):
             src = int(edge_index[0, e])
             tgt = int(edge_index[1, e])
+
+            if src > 65535 or tgt > 65535:
+                raise ValueError(
+                    f"Edge node indices ({src}, {tgt}) exceed 16-bit packing "
+                    f"limit of 65535. Reduce graph size or max_nodes."
+                )
 
             structure_tokens.append(GraphStructureToken(
                 token_type="edge",
@@ -354,13 +366,6 @@ class GraphTokenizer:
         else:
             edge_index = np.zeros((2, 0), dtype=np.int64)
             edge_features = None
-
-        # Build adjacency from edge_index
-        for e in range(num_edges):
-            src = int(edge_index[0, e])
-            if src not in adjacency:
-                adjacency[src] = []
-            adjacency[src].append(int(edge_index[1, e]))
 
         return {
             "node_features": node_features,

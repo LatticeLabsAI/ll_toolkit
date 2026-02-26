@@ -171,12 +171,11 @@ class CADlingSettings(BaseSettings):
             file_handler.setFormatter(formatter)
             handlers.append(file_handler)
 
-        # Configure root logger
-        logging.basicConfig(
-            level=log_level,
-            handlers=handlers,
-            force=True,
-        )
+        # Configure cadling logger (not root, to avoid overriding host app config)
+        cadling_logger = logging.getLogger("cadling")
+        cadling_logger.setLevel(log_level)
+        for handler in handlers:
+            cadling_logger.addHandler(handler)
 
     def get_device(self) -> str:
         """Get device string for PyTorch/frameworks.

@@ -3,6 +3,7 @@ STEP Encoder Module
 Neural network that processes tokenized STEP data.
 Uses tokenizer, features, and topology separately.
 """
+from __future__ import annotations
 
 import torch
 import torch.nn as nn
@@ -295,9 +296,20 @@ class STEPGraphEncoder(nn.Module):
         x = self.input_proj(node_features)
         x = self.activation(x)
 
+        # Add self-loops to adjacency (standard GCN: A_hat = A + I)
+        identity = torch.eye(
+            adjacency_matrix.shape[0],
+            device=adjacency_matrix.device,
+            dtype=adjacency_matrix.dtype,
+        )
+        adj_with_self_loops = adjacency_matrix + identity
+        # Degree normalization
+        deg = adj_with_self_loops.sum(dim=1, keepdim=True).clamp(min=1)
+        adj_norm = adj_with_self_loops / deg
+
         for conv in self.conv_layers:
-            # Message passing: aggregate neighbor features
-            messages = torch.matmul(adjacency_matrix, x)  # [num_nodes, node_dim]
+            # Message passing: aggregate neighbor + self features (GCN with self-loops)
+            messages = torch.matmul(adj_norm, x)  # [num_nodes, node_dim]
 
             # Update with MLP
             x_new = conv(messages)
@@ -357,6 +369,10 @@ class STEPEncoder(nn.Module):
             num_layers=num_graph_layers
         )
 
+        # Projection layers for mismatched feature dims, keyed by input dim.
+        # Registered as nn.ModuleDict so weights are part of state_dict/optimizer.
+        self._feature_projs = nn.ModuleDict()
+
         # Fusion layer
         self.fusion = nn.Sequential(
             nn.Linear(token_embed_dim + graph_node_dim, output_dim),
@@ -394,13 +410,14 @@ class STEPEncoder(nn.Module):
 
             # Auto-project if feature dim doesn't match graph encoder input_dim
             if node_features.shape[-1] != self.graph_encoder.input_dim:
-                # Project to expected dim (handles cadling 48→129 or vice versa)
-                proj = nn.Linear(
-                    node_features.shape[-1],
-                    self.graph_encoder.input_dim,
-                    device=node_features.device,
-                )
-                node_features = proj(node_features)
+                in_dim = node_features.shape[-1]
+                key = str(in_dim)
+                if key not in self._feature_projs:
+                    self._feature_projs[key] = nn.Linear(
+                        in_dim,
+                        self.graph_encoder.input_dim,
+                    ).to(node_features.device)
+                node_features = self._feature_projs[key](node_features)
 
             # Graph encoding
             graph_features = self.graph_encoder(node_features, adj_matrix)  # [num_nodes, node_dim]

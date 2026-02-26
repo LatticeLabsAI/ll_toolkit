@@ -93,7 +93,11 @@ def _canonical_type(raw_type: str) -> str:
     upper = raw_type.upper()
     if upper in CADLING_PARAM_MAP:
         return upper
-    return _CANONICAL_TYPE_NAMES.get(raw_type, upper)
+    canonical = _CANONICAL_TYPE_NAMES.get(raw_type)
+    if canonical is not None:
+        return canonical
+    _log.warning("Unknown command type '%s', returning upper-cased '%s'", raw_type, upper)
+    return upper
 
 
 # ---------------------------------------------------------------------------
@@ -304,7 +308,7 @@ class CommandFormatConverter:
                 else:
                     deepcad_votes += 1
 
-            elif n <= compact_count or n == compact_count:
+            elif n <= compact_count:
                 deepcad_votes += 1
             else:
                 # Ambiguous — could be either

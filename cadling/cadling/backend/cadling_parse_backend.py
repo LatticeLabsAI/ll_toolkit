@@ -61,7 +61,7 @@ class CADlingParseBackend(DeclarativeCADBackend):
         Returns:
             Set of all InputFormat values (fallback for any format)
         """
-        return set(InputFormat)
+        return {InputFormat.CAD_IMAGE}
 
     def is_valid(self) -> bool:
         """Check if file is valid for this backend.

@@ -31,9 +31,26 @@ from io import BytesIO
 from pathlib import Path
 from typing import List, Optional, Set, Union
 
-from PIL import Image
+try:
+    from PIL import Image
+except ImportError:
+    Image = None
 
 _log = logging.getLogger(__name__)
+
+# Shared camera parameters for all view backends.
+# "isometric_back" is an alias for "isometric2" — both map to the same camera position.
+DEFAULT_CAMERA_PARAMETERS = {
+    "front": {"position": [0, 100, 0], "direction": [0, -1, 0], "up": [0, 0, 1], "fov": 45.0},
+    "back": {"position": [0, -100, 0], "direction": [0, 1, 0], "up": [0, 0, 1], "fov": 45.0},
+    "top": {"position": [0, 0, 100], "direction": [0, 0, -1], "up": [0, 1, 0], "fov": 45.0},
+    "bottom": {"position": [0, 0, -100], "direction": [0, 0, 1], "up": [0, 1, 0], "fov": 45.0},
+    "left": {"position": [-100, 0, 0], "direction": [1, 0, 0], "up": [0, 0, 1], "fov": 45.0},
+    "right": {"position": [100, 0, 0], "direction": [-1, 0, 0], "up": [0, 0, 1], "fov": 45.0},
+    "isometric": {"position": [100, -100, 100], "direction": [-1, 1, -1], "up": [0, 0, 1], "fov": 45.0},
+    "isometric2": {"position": [-100, 100, 100], "direction": [1, -1, -1], "up": [0, 0, 1], "fov": 45.0},
+    "isometric_back": {"position": [-100, 100, 100], "direction": [1, -1, -1], "up": [0, 0, 1], "fov": 45.0},
+}
 
 
 class AbstractCADBackend(ABC):
@@ -66,9 +83,12 @@ class AbstractCADBackend(ABC):
         """
         self.file = in_doc.file
         self.path_or_stream = path_or_stream
-        self.document_hash = in_doc.document_hash
         self.input_format = in_doc.format
         self.options = options or self._get_default_options()
+
+        # Use _compute_hash to set document_hash from file content,
+        # falling back to the hash provided by the input document
+        self.document_hash = self._compute_hash_from_source(path_or_stream) or in_doc.document_hash
 
         _log.debug(
             f"Initialized {self.__class__.__name__} for {self.file.name} "
@@ -140,6 +160,29 @@ class AbstractCADBackend(ABC):
             Default options for this backend, or None.
         """
         return None
+
+    def _compute_hash_from_source(self, path_or_stream: Union[Path, str, BytesIO]) -> Optional[str]:
+        """Compute hash from the source file or stream.
+
+        Reads file content and computes SHA256 hash using _compute_hash.
+
+        Args:
+            path_or_stream: Path to file or byte stream.
+
+        Returns:
+            SHA256 hash as hex string, or None if content cannot be read.
+        """
+        try:
+            if isinstance(path_or_stream, (Path, str)):
+                with open(path_or_stream, "rb") as f:
+                    content = f.read()
+            else:
+                content = path_or_stream.read()
+                path_or_stream.seek(0)
+            return self._compute_hash(content)
+        except Exception as e:
+            _log.debug(f"Could not compute hash from source: {e}")
+            return None
 
     def _compute_hash(self, content: bytes) -> str:
         """Compute hash of file content.

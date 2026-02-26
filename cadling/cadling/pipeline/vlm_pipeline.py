@@ -6,7 +6,7 @@ analysis for hybrid understanding.
 
 Classes:
     CADVlmPipeline: Vision pipeline for optical CAD recognition
-    CADVlmPipelineOptions: Configuration options for VLM pipeline
+    VlmPipelineConfig: Configuration options for VLM pipeline
 """
 
 from __future__ import annotations
@@ -27,6 +27,12 @@ from cadling.datamodel.base_models import (
 from cadling.datamodel.stl import AnnotationItem
 from cadling.models.vlm_model import ApiVlmModel, InlineVlmModel, VlmModel, VlmOptions
 from cadling.pipeline.base_pipeline import BaseCADPipeline
+from cadling.pipeline._vision_shared import (
+    bboxes_overlap,
+    deduplicate_annotations,
+    find_closest_view,
+    group_similar_annotations,
+)
 
 if TYPE_CHECKING:
     from cadling.datamodel.pipeline_options import PipelineOptions
@@ -34,7 +40,7 @@ if TYPE_CHECKING:
 _log = logging.getLogger(__name__)
 
 
-class CADVlmPipelineOptions:
+class VlmPipelineConfig:
     """Options for CAD VLM pipeline.
 
     Attributes:
@@ -113,7 +119,7 @@ class CADVlmPipeline(BaseCADPipeline):
         ))
 
         # Create pipeline
-        pipeline = CADVlmPipeline(CADVlmPipelineOptions(vlm_model=vlm))
+        pipeline = CADVlmPipeline(VlmPipelineConfig(vlm_model=vlm))
 
         # Convert STEP file with vision
         result = converter.convert("part.step", pipeline=pipeline)
@@ -124,7 +130,7 @@ class CADVlmPipeline(BaseCADPipeline):
                 print(f"{item.annotation_type}: {item.value}")
     """
 
-    def __init__(self, vlm_options: CADVlmPipelineOptions):
+    def __init__(self, vlm_options: VlmPipelineConfig):
         """Initialize vision pipeline.
 
         Args:
@@ -192,8 +198,8 @@ class CADVlmPipeline(BaseCADPipeline):
         # Process each view
         for view_name in views_to_render:
             if view_name not in available_views:
-                # Try to find closest available view
-                closest_view = self._find_closest_view(view_name, available_views)
+                # Try to find closest available view using shared utility
+                closest_view = find_closest_view(view_name, available_views)
                 if closest_view:
                     _log.info(
                         f"View '{view_name}' not available, substituting with '{closest_view}'"
@@ -318,10 +324,7 @@ class CADVlmPipeline(BaseCADPipeline):
     ) -> Optional[str]:
         """Find the closest available view when requested view is unavailable.
 
-        Uses view naming conventions to find similar views:
-        - "front_left" → "front" or "left"
-        - "top_iso" → "top" or "iso"
-        - "bottom_right" → "bottom" or "right"
+        Delegates to shared utility function.
 
         Args:
             requested_view: Name of the requested view
@@ -330,55 +333,7 @@ class CADVlmPipeline(BaseCADPipeline):
         Returns:
             Name of closest available view, or None if no match found
         """
-        if not available_views:
-            return None
-
-        requested_lower = requested_view.lower()
-
-        # Define view relationships (ordered by preference)
-        view_relationships = {
-            "front_left": ["front", "left", "iso", "front_right"],
-            "front_right": ["front", "right", "iso", "front_left"],
-            "back_left": ["back", "left", "rear", "back_right"],
-            "back_right": ["back", "right", "rear", "back_left"],
-            "top_front": ["top", "front", "iso"],
-            "top_back": ["top", "back", "rear"],
-            "bottom_front": ["bottom", "front"],
-            "bottom_back": ["bottom", "back"],
-            "top_iso": ["top", "iso", "isometric"],
-            "front_iso": ["front", "iso", "isometric"],
-            "iso": ["isometric", "front", "top"],
-            "isometric": ["iso", "front", "top"],
-            "rear": ["back", "back_left", "back_right"],
-        }
-
-        # Check direct relationships
-        if requested_lower in view_relationships:
-            for candidate in view_relationships[requested_lower]:
-                for available in available_views:
-                    if candidate in available.lower():
-                        return available
-
-        # Try splitting compound view name and matching components
-        components = requested_lower.replace("_", " ").replace("-", " ").split()
-        for component in components:
-            for available in available_views:
-                if component in available.lower():
-                    _log.debug(
-                        f"Matched component '{component}' from '{requested_view}' "
-                        f"to available view '{available}'"
-                    )
-                    return available
-
-        # Last resort: return first available view
-        if available_views:
-            _log.debug(
-                f"No close match for '{requested_view}', using first available: "
-                f"'{available_views[0]}'"
-            )
-            return available_views[0]
-
-        return None
+        return find_closest_view(requested_view, available_views)
 
     def _assemble_document(self, conv_res: ConversionResult) -> ConversionResult:
         """Assemble document with de-duplication and conflict resolution.
@@ -402,21 +357,8 @@ class CADVlmPipeline(BaseCADPipeline):
         if not annotations:
             return conv_res
 
-        _log.info(f"De-duplicating {len(annotations)} annotations")
-
-        # Group similar annotations
-        annotation_groups = self._group_similar_annotations(annotations)
-
-        # Keep best annotation from each group
-        deduplicated = []
-        for group in annotation_groups:
-            best = max(group, key=lambda a: a.confidence or 0.0)
-            deduplicated.append(best)
-
-        _log.info(
-            f"De-duplication: {len(annotations)} → {len(deduplicated)} annotations "
-            f"({len(annotations) - len(deduplicated)} duplicates removed)"
-        )
+        # Use shared de-duplication utility
+        deduplicated = deduplicate_annotations(annotations)
 
         # Replace annotations in document
         conv_res.document.items = [
@@ -430,10 +372,7 @@ class CADVlmPipeline(BaseCADPipeline):
     ) -> List[List[AnnotationItem]]:
         """Group annotations that are likely duplicates.
 
-        Two annotations are considered similar if they have:
-        - Same annotation type
-        - Similar value (normalized text match)
-        - Similar position (if from same view, or overlapping 2D bboxes)
+        Delegates to shared utility function.
 
         Args:
             annotations: List of annotations to group
@@ -441,28 +380,14 @@ class CADVlmPipeline(BaseCADPipeline):
         Returns:
             List of annotation groups (each group contains similar annotations)
         """
-        groups: List[List[AnnotationItem]] = []
-
-        for annotation in annotations:
-            # Try to find an existing group for this annotation
-            found_group = False
-
-            for group in groups:
-                if self._are_annotations_similar(annotation, group[0]):
-                    group.append(annotation)
-                    found_group = True
-                    break
-
-            # Create new group if no match found
-            if not found_group:
-                groups.append([annotation])
-
-        return groups
+        return group_similar_annotations(annotations)
 
     def _are_annotations_similar(
         self, ann1: AnnotationItem, ann2: AnnotationItem
     ) -> bool:
         """Check if two annotations are similar (likely duplicates).
+
+        Delegates to shared utility function.
 
         Args:
             ann1: First annotation
@@ -471,31 +396,14 @@ class CADVlmPipeline(BaseCADPipeline):
         Returns:
             True if annotations are similar
         """
-        # Must have same type
-        if ann1.annotation_type != ann2.annotation_type:
-            return False
+        from cadling.pipeline._vision_shared import _are_annotations_similar
 
-        # Must have similar values (case-insensitive, normalized)
-        val1 = self._normalize_annotation_value(ann1.value or "")
-        val2 = self._normalize_annotation_value(ann2.value or "")
-
-        if val1 != val2:
-            return False
-
-        # If from different views, consider them similar if values match
-        # (same physical annotation visible from multiple views)
-        if ann1.source_view != ann2.source_view:
-            return True
-
-        # If from same view, check spatial proximity
-        if ann1.image_bbox and ann2.image_bbox:
-            return self._bboxes_overlap(ann1.image_bbox, ann2.image_bbox)
-
-        # Default: consider similar if types and values match
-        return True
+        return _are_annotations_similar(ann1, ann2)
 
     def _normalize_annotation_value(self, value: str) -> str:
         """Normalize annotation value for comparison.
+
+        Delegates to shared utility function.
 
         Args:
             value: Raw annotation value
@@ -503,16 +411,14 @@ class CADVlmPipeline(BaseCADPipeline):
         Returns:
             Normalized value (lowercase, whitespace trimmed, special chars removed)
         """
-        # Lowercase and strip whitespace
-        normalized = value.lower().strip()
+        from cadling.pipeline._vision_shared import _normalize_annotation_value
 
-        # Remove common variation characters
-        normalized = normalized.replace(" ", "").replace("-", "").replace("_", "")
-
-        return normalized
+        return _normalize_annotation_value(value)
 
     def _bboxes_overlap(self, bbox1: dict, bbox2: dict, overlap_threshold: float = 0.5) -> bool:
         """Check if two 2D bounding boxes overlap significantly.
+
+        Delegates to shared utility function.
 
         Args:
             bbox1: First bounding box {"x_min", "x_max", "y_min", "y_max"}
@@ -522,35 +428,7 @@ class CADVlmPipeline(BaseCADPipeline):
         Returns:
             True if boxes overlap significantly
         """
-        # Calculate intersection
-        x_min = max(bbox1.get("x_min", 0), bbox2.get("x_min", 0))
-        y_min = max(bbox1.get("y_min", 0), bbox2.get("y_min", 0))
-        x_max = min(bbox1.get("x_max", 0), bbox2.get("x_max", 0))
-        y_max = min(bbox1.get("y_max", 0), bbox2.get("y_max", 0))
-
-        # Check if there's actual intersection
-        if x_max <= x_min or y_max <= y_min:
-            return False
-
-        intersection_area = (x_max - x_min) * (y_max - y_min)
-
-        # Calculate areas
-        bbox1_area = (bbox1.get("x_max", 0) - bbox1.get("x_min", 0)) * (
-            bbox1.get("y_max", 0) - bbox1.get("y_min", 0)
-        )
-        bbox2_area = (bbox2.get("x_max", 0) - bbox2.get("x_min", 0)) * (
-            bbox2.get("y_max", 0) - bbox2.get("y_min", 0)
-        )
-
-        # Calculate IoU (Intersection over Union)
-        union_area = bbox1_area + bbox2_area - intersection_area
-
-        if union_area == 0:
-            return False
-
-        iou = intersection_area / union_area
-
-        return iou >= overlap_threshold
+        return bboxes_overlap(bbox1, bbox2, overlap_threshold)
 
     def _enrich_document(self, conv_res: ConversionResult) -> ConversionResult:
         """Enrich document with additional models.

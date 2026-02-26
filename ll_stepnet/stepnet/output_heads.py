@@ -171,7 +171,7 @@ class CompositeHead(nn.Module):
         # Optional vertex prediction head for direct 3D positions
         self.vertex_head: Optional[nn.Module] = None
         if include_vertex_head:
-            from stepnet.vertex_prediction import VertexPredictionHead
+            from .vertex_prediction import VertexPredictionHead
             self.vertex_head = VertexPredictionHead(
                 embed_dim=embed_dim,
                 max_vertices=max_vertices,

@@ -47,8 +47,38 @@ class CommandSequenceTokenizer:
         self.seq_config = sequence_config or SequenceConfig()
         self.cmd_config = command_config or CommandTokenizationConfig()
 
-        self._param_levels = 2 ** self.cmd_config.parameter_quantization.bits
-        self._coord_levels = 2 ** self.cmd_config.coordinate_quantization.bits
+        # Wire SequenceConfig fields as fallbacks for CommandTokenizationConfig:
+        # If a SequenceConfig is passed but no explicit cmd_config, use
+        # seq_config.max_commands and seq_config.quantization_bits as fallbacks.
+        if sequence_config is not None and command_config is None:
+            _default_cmd = CommandTokenizationConfig()
+            if (self.seq_config.max_commands != 60
+                    and self.cmd_config.max_sequence_length == _default_cmd.max_sequence_length):
+                self.cmd_config.max_sequence_length = self.seq_config.max_commands
+            if (self.seq_config.quantization_bits != 8
+                    and self.cmd_config.parameter_quantization.bits == _default_cmd.parameter_quantization.bits):
+                _bits_to_tier = {6: PrecisionTier.DRAFT, 8: PrecisionTier.STANDARD, 10: PrecisionTier.PRECISION}
+                tier = _bits_to_tier.get(self.seq_config.quantization_bits)
+                if tier is not None:
+                    self.cmd_config.parameter_quantization = tier
+                else:
+                    _log.warning(
+                        "SequenceConfig.quantization_bits=%d does not map to a "
+                        "PrecisionTier; ignoring fallback",
+                        self.seq_config.quantization_bits,
+                    )
+
+        self._param_bits = self.cmd_config.parameter_quantization.bits
+        self._coord_bits = self.cmd_config.coordinate_quantization.bits
+        self._param_levels = 2 ** self._param_bits
+        self._coord_levels = 2 ** self._coord_bits
+        # Use math.log2 to validate bit width is a power-of-two level count
+        _log.debug(
+            "CommandSequenceTokenizer: param_bits=%d (%.1f log2-levels), "
+            "coord_bits=%d (%.1f log2-levels)",
+            self._param_bits, math.log2(self._param_levels),
+            self._coord_bits, math.log2(self._coord_levels),
+        )
         self._norm_range = self.cmd_config.normalization_range
 
     # ------------------------------------------------------------------
@@ -212,12 +242,29 @@ class CommandSequenceTokenizer:
             return False
 
         if cmd_type == CommandType.LINE:
-            # Old format: [x1, y1, 0, x2, y2, 0, ...]
-            # Check if position 2 is 0 and position 5 is 0 (z-interleaved)
-            # while positions 3,4 have values (x2, y2 in old format)
-            if (abs(params[2]) < 1e-10 and abs(params[5]) < 1e-10
-                    and (abs(params[3]) > 1e-10 or abs(params[4]) > 1e-10)):
-                return True
+            # Old cadling format: [x1, y1, 0, x2, y2, 0, 0, 0, 0, ..., 0]
+            # z-interleaved with zeros at indices 2 and 5, active data at 3,4
+            # To avoid false positives on valid compact DeepCAD data, require:
+            #   1. z-positions (2,5) are zero
+            #   2. positions 3,4 have non-zero values (x2,y2 in old format)
+            #      OR the endpoint is at origin (both zero) — detected by
+            #      checking that only indices 0,1 have non-zero values among 0..5
+            #   3. ALL params from index 6 onward are exactly 0.0
+            #      (compact format may have non-zero values at index 2 or 3)
+            if abs(params[2]) < 1e-10 and abs(params[5]) < 1e-10:
+                trailing_zero = all(abs(params[k]) < 1e-10 for k in range(6, 16))
+                if not trailing_zero:
+                    pass  # Not cadling format
+                elif abs(params[3]) > 1e-10 or abs(params[4]) > 1e-10:
+                    # Standard case: x2,y2 at indices 3,4 are non-zero
+                    return True
+                elif abs(params[0]) > 1e-10 or abs(params[1]) > 1e-10:
+                    # Origin-endpoint case: line ends at (0,0) so indices 3,4
+                    # are also zero, but start point is non-zero and the
+                    # z-interleaving pattern (zeros at 2,5) with active data
+                    # only at 0,1 strongly suggests cadling format since compact
+                    # DeepCAD LINE would have 4 active params at indices 0-3
+                    return True
 
         elif cmd_type == CommandType.CIRCLE:
             # Old format: [cx, cy, 0, r, ...] — z at position 2, r at position 3
@@ -288,9 +335,14 @@ class CommandSequenceTokenizer:
             for cmd in group:
                 if cmd["type"] in (CommandType.LINE, CommandType.ARC, CommandType.CIRCLE):
                     params = cmd["params"]
-                    for i in range(0, min(len(params), 6), 2):
-                        if i + 1 < len(params):
-                            points_2d.append([params[i], params[i + 1]])
+                    if cmd["type"] == CommandType.CIRCLE:
+                        # CIRCLE params: (cx, cy, r, ...) — only cx,cy are positions
+                        if len(params) >= 2:
+                            points_2d.append([params[0], params[1]])
+                    else:
+                        for i in range(0, min(len(params), 6), 2):
+                            if i + 1 < len(params):
+                                points_2d.append([params[i], params[i + 1]])
 
             if not points_2d:
                 normalized.extend(group)
@@ -307,10 +359,20 @@ class CommandSequenceTokenizer:
             for cmd in group:
                 if cmd["type"] in (CommandType.LINE, CommandType.ARC, CommandType.CIRCLE):
                     new_params = list(cmd["params"])
-                    for i in range(0, min(len(new_params), 6), 2):
-                        if i + 1 < len(new_params):
-                            new_params[i] = (new_params[i] - centroid[0]) * scale
-                            new_params[i + 1] = (new_params[i + 1] - centroid[1]) * scale
+                    if cmd["type"] == CommandType.CIRCLE:
+                        # CIRCLE params: (cx, cy, r, ...)
+                        # cx, cy are positions — translate and scale
+                        if len(new_params) >= 2:
+                            new_params[0] = (new_params[0] - centroid[0]) * scale
+                            new_params[1] = (new_params[1] - centroid[1]) * scale
+                        # r is a distance — scale only, do NOT translate
+                        if len(new_params) >= 3:
+                            new_params[2] = new_params[2] * scale
+                    else:
+                        for i in range(0, min(len(new_params), 6), 2):
+                            if i + 1 < len(new_params):
+                                new_params[i] = (new_params[i] - centroid[0]) * scale
+                                new_params[i + 1] = (new_params[i + 1] - centroid[1]) * scale
                     cmd = {**cmd, "params": new_params}
                 normalized.append(cmd)
 
@@ -328,7 +390,12 @@ class CommandSequenceTokenizer:
         z_values: list[float] = []
         for cmd in commands:
             if cmd["type"] == CommandType.EXTRUDE:
-                z_values.extend(cmd["params"])
+                # Only use dimensional params: extent_one (index 0) and extent_two (index 1)
+                ext_params = cmd["params"]
+                if len(ext_params) > 0:
+                    z_values.append(ext_params[0])
+                if len(ext_params) > 1:
+                    z_values.append(ext_params[1])
             elif cmd["type"] == CommandType.SOL:
                 # SOL params[0:2] contain sketch plane z-offset and rotation/normal
                 # Collect z-offset (first param) for 3D normalization
@@ -344,7 +411,12 @@ class CommandSequenceTokenizer:
         result: list[dict[str, Any]] = []
         for cmd in commands:
             if cmd["type"] == CommandType.EXTRUDE:
-                new_params = [p * scale for p in cmd["params"]]
+                # Only scale dimensional params (indices 0 and 1); leave flags untouched
+                new_params = list(cmd["params"])
+                if len(new_params) > 0:
+                    new_params[0] = new_params[0] * scale
+                if len(new_params) > 1:
+                    new_params[1] = new_params[1] * scale
                 result.append({**cmd, "params": new_params})
             elif cmd["type"] == CommandType.SOL:
                 # Scale the z-offset parameter (first param) for SOL commands
@@ -487,14 +559,7 @@ class CommandSequenceTokenizer:
                 - max_error: Maximum parameter error
                 - command_preservation_rate: Fraction of commands preserved
         """
-        # Tokenize
-        token_seq = self.tokenize(construction_history)
-        command_tokens = token_seq.command_tokens
-
-        # Dequantize
-        dequantized = self.dequantize_parameters(command_tokens)
-
-        # Parse original for comparison
+        # Parse and normalize once, then reuse for both tokenization and comparison
         if isinstance(construction_history, dict):
             orig_commands = construction_history.get("sequence", [])
         else:
@@ -503,6 +568,13 @@ class CommandSequenceTokenizer:
         parsed_orig = self.parse_construction_history(orig_commands)
         parsed_orig = self.normalize_sketches(parsed_orig)
         parsed_orig = self.normalize_3d(parsed_orig)
+
+        # Quantize and pad using the already-normalized commands
+        command_tokens = self.quantize_parameters(parsed_orig)
+        command_tokens = self.pad_or_truncate(command_tokens)
+
+        # Dequantize
+        dequantized = self.dequantize_parameters(command_tokens)
 
         # Compare parameter values
         errors: list[float] = []
@@ -527,10 +599,17 @@ class CommandSequenceTokenizer:
             }
 
         errors_arr = np.array(errors)
+        # Compute theoretical minimum quantization error based on bit depth
+        theoretical_step = self._norm_range / (self._param_levels - 1)
+        theoretical_max_error = theoretical_step / 2.0
+        actual_max = float(np.max(errors_arr))
+        bits_needed = math.ceil(math.log2(self._norm_range / (actual_max * 2 + 1e-12) + 1)) if actual_max > 0 else self._param_bits
         return {
             "param_mse": float(np.mean(errors_arr ** 2)),
-            "max_error": float(np.max(errors_arr)),
+            "max_error": actual_max,
             "command_preservation_rate": commands_matched / max(total_commands, 1),
+            "theoretical_max_error": theoretical_max_error,
+            "bits_needed_for_actual_precision": bits_needed,
         }
 
     # ------------------------------------------------------------------

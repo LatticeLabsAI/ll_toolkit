@@ -244,36 +244,50 @@ class CoedgeExtractor:
     def _build_loop_pointers(self, coedges: List[Coedge]) -> None:
         """Build next/prev pointers for coedges within the same face loop.
 
+        Groups coedges by (face_id, loop_size) to handle multi-loop faces
+        correctly. Within each loop, coedges are sorted by position_in_loop
+        and linked cyclically in O(n) time.
+
         Args:
             coedges: List of coedges to update in-place
         """
-        # Group coedges by face
-        face_coedges: Dict[str, List[Coedge]] = {}
+        # Group coedges by face, then by loop.
+        # Each wire/loop produces coedges with position_in_loop 0..loop_size-1,
+        # so we use loop_size as a secondary grouping key along with the
+        # starting coedge id range to distinguish loops on the same face.
+        from collections import defaultdict
+
+        # Group by face first
+        face_coedges: Dict[str, List[Coedge]] = defaultdict(list)
         for coedge in coedges:
-            if coedge.face_id not in face_coedges:
-                face_coedges[coedge.face_id] = []
             face_coedges[coedge.face_id].append(coedge)
 
-        # Set next/prev within each face
+        # Within each face, separate coedges into individual loops.
+        # Coedges from the same loop have position_in_loop in [0, loop_size).
+        # When multiple loops exist on a face, position_in_loop resets to 0
+        # for each loop, so we split by detecting resets.
         for face_id, face_ces in face_coedges.items():
-            # Sort by position in loop
-            sorted_ces = sorted(face_ces, key=lambda c: c.position_in_loop)
+            # Sort by the order they were created (stable by coedge.id)
+            face_ces_sorted = sorted(face_ces, key=lambda c: c.id)
 
-            for i, coedge in enumerate(sorted_ces):
-                loop_size = coedge.loop_size
-                if loop_size == 0:
-                    loop_size = len(sorted_ces)
+            # Split into loops: each loop starts at position_in_loop == 0
+            loops: List[List[Coedge]] = []
+            current_loop: List[Coedge] = []
+            for ce in face_ces_sorted:
+                if ce.position_in_loop == 0 and current_loop:
+                    loops.append(current_loop)
+                    current_loop = []
+                current_loop.append(ce)
+            if current_loop:
+                loops.append(current_loop)
 
-                # Cyclic next/prev
-                next_pos = (coedge.position_in_loop + 1) % loop_size
-                prev_pos = (coedge.position_in_loop - 1) % loop_size
-
-                # Find coedges at those positions
-                for other in sorted_ces:
-                    if other.position_in_loop == next_pos:
-                        coedge.next_id = other.id
-                    if other.position_in_loop == prev_pos:
-                        coedge.prev_id = other.id
+            # Link next/prev within each loop
+            for loop in loops:
+                loop_sorted = sorted(loop, key=lambda c: c.position_in_loop)
+                n = len(loop_sorted)
+                for i, ce in enumerate(loop_sorted):
+                    ce.next_id = loop_sorted[(i + 1) % n].id
+                    ce.prev_id = loop_sorted[(i - 1) % n].id
 
     def _build_mate_pointers(
         self,
@@ -294,7 +308,12 @@ class CoedgeExtractor:
             return
 
         try:
-            # Build edge_id -> list of coedge indices
+            # Build coedge ID -> coedge dict for O(1) lookup
+            # (avoids fragile list indexing by coedge.id which assumes
+            # contiguous IDs matching list positions)
+            coedge_by_id: Dict[int, Coedge] = {c.id: c for c in coedges}
+
+            # Build edge_id -> list of coedge IDs
             edge_to_coedges: Dict[str, List[int]] = {}
             for coedge in coedges:
                 if coedge.edge_id not in edge_to_coedges:
@@ -306,17 +325,17 @@ class CoedgeExtractor:
                 if len(coedge_ids) == 2:
                     # These are mates
                     c1_id, c2_id = coedge_ids
-                    coedges[c1_id].mate_id = c2_id
-                    coedges[c2_id].mate_id = c1_id
+                    coedge_by_id[c1_id].mate_id = c2_id
+                    coedge_by_id[c2_id].mate_id = c1_id
                 elif len(coedge_ids) == 1:
                     # Boundary edge (only one face) - mate is self
-                    coedges[coedge_ids[0]].mate_id = coedge_ids[0]
+                    coedge_by_id[coedge_ids[0]].mate_id = coedge_ids[0]
                 else:
                     # Non-manifold edge (>2 faces) - set first two as mates, log warning
                     _log.debug(f"Non-manifold edge {edge_id} with {len(coedge_ids)} faces")
                     if len(coedge_ids) >= 2:
-                        coedges[coedge_ids[0]].mate_id = coedge_ids[1]
-                        coedges[coedge_ids[1]].mate_id = coedge_ids[0]
+                        coedge_by_id[coedge_ids[0]].mate_id = coedge_ids[1]
+                        coedge_by_id[coedge_ids[1]].mate_id = coedge_ids[0]
 
         except Exception as e:
             _log.warning(f"Failed to build mate pointers: {e}")
@@ -354,6 +373,10 @@ class CoedgeExtractor:
                 "coedges": [],
             }
 
+        # Build an explicit id-to-position mapping so that coedge IDs
+        # do not need to be contiguous or start at 0.
+        id_to_pos: Dict[int, int] = {c.id: pos for pos, c in enumerate(coedges)}
+
         # Build index arrays
         next_indices = np.zeros(num_coedges, dtype=np.int64)
         prev_indices = np.zeros(num_coedges, dtype=np.int64)
@@ -361,11 +384,14 @@ class CoedgeExtractor:
         face_indices = np.zeros(num_coedges, dtype=np.int64)
 
         for coedge in coedges:
-            i = coedge.id
-            next_indices[i] = coedge.next_id if coedge.next_id is not None else i
-            prev_indices[i] = coedge.prev_id if coedge.prev_id is not None else i
-            mate_indices[i] = coedge.mate_id if coedge.mate_id is not None else i
-            face_indices[i] = coedge.face_index if coedge.face_index >= 0 else 0
+            pos = id_to_pos[coedge.id]
+            next_pos = id_to_pos.get(coedge.next_id, pos) if coedge.next_id is not None else pos
+            prev_pos = id_to_pos.get(coedge.prev_id, pos) if coedge.prev_id is not None else pos
+            mate_pos = id_to_pos.get(coedge.mate_id, pos) if coedge.mate_id is not None else pos
+            next_indices[pos] = next_pos
+            prev_indices[pos] = prev_pos
+            mate_indices[pos] = mate_pos
+            face_indices[pos] = coedge.face_index if coedge.face_index >= 0 else 0
 
         # Extract features for each coedge
         features = self._extract_coedge_features(coedges, shape, feature_dim)
@@ -410,11 +436,14 @@ class CoedgeExtractor:
         if not OCC_AVAILABLE:
             return features
 
+        # Build id-to-position mapping for safe indexing
+        id_to_pos: Dict[int, int] = {c.id: pos for pos, c in enumerate(coedges)}
+
         # Curve type mapping
         curve_types = ["LINE", "CIRCLE", "ELLIPSE", "BSPLINE", "PARABOLA", "OTHER"]
 
         for coedge in coedges:
-            i = coedge.id
+            i = id_to_pos[coedge.id]
 
             # Get the edge
             edge = self._registry.get_edge(coedge.edge_id)
@@ -474,7 +503,11 @@ class CoedgeExtractor:
         if coedge.mate_id is None or coedge.mate_id == coedge.id:
             return 0.5  # Boundary edge
 
-        mate = all_coedges[coedge.mate_id]
+        # Build id-to-coedge lookup for safe access (IDs may not be contiguous)
+        coedge_by_id = {c.id: c for c in all_coedges}
+        mate = coedge_by_id.get(coedge.mate_id)
+        if mate is None:
+            return 0.5
 
         # Get face normals
         face1 = self._registry.get_face(coedge.face_id)

@@ -35,7 +35,7 @@ from datetime import datetime
 
 import numpy as np
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, PrivateAttr, field_validator
 
 _log = logging.getLogger(__name__)
 
@@ -270,10 +270,14 @@ class TopologyGraph(BaseModel):
     """
 
     num_nodes: int
-    num_edges: int
     adjacency_list: Dict[int, List[int]] = Field(default_factory=dict)
     node_features: Optional[List[List[float]]] = None
     edge_features: Optional[List[List[float]]] = None
+
+    @property
+    def num_edges(self) -> int:
+        """Number of edges derived from adjacency_list."""
+        return sum(len(neighbors) for neighbors in self.adjacency_list.values())
 
     def add_edge(self, from_node: int, to_node: int):
         """Add an edge to the graph.
@@ -285,7 +289,6 @@ class TopologyGraph(BaseModel):
         if from_node not in self.adjacency_list:
             self.adjacency_list[from_node] = []
         self.adjacency_list[from_node].append(to_node)
-        self.num_edges += 1
 
     def get_neighbors(self, node_id: int) -> List[int]:
         """Get neighbors of a node.
@@ -388,7 +391,20 @@ class CADlingDocument(BaseModel):
 
     # Segmentation data (NEW)
     segments: List[Segment] = Field(default_factory=list)
-    segment_index: Dict[str, Segment] = Field(default_factory=dict)
+
+    # Private attributes
+    _segment_index_cache: Optional[Dict[str, "Segment"]] = PrivateAttr(default=None)
+    _backend: Optional[Any] = PrivateAttr(default=None)
+
+    @property
+    def segment_index(self) -> Dict[str, Segment]:
+        """Index of segments by segment_id, derived from segments list."""
+        if self._segment_index_cache is None:
+            self._segment_index_cache = {seg.segment_id: seg for seg in self.segments}
+        return self._segment_index_cache
+
+    def _invalidate_segment_index(self):
+        self._segment_index_cache = None
 
     # CAD-specific data
     topology: Optional[TopologyGraph] = None
@@ -426,7 +442,7 @@ class CADlingDocument(BaseModel):
             doc.add_segment(segment)
         """
         self.segments.append(segment)
-        self.segment_index[segment.segment_id] = segment
+        self._invalidate_segment_index()
         _log.debug(
             f"Added segment {segment.segment_id} (type: {segment.segment_type}) "
             f"to document {self.name}"
@@ -467,7 +483,7 @@ class CADlingDocument(BaseModel):
             with open("output.json", "w") as f:
                 json.dump(json_data, f, indent=2)
         """
-        return {
+        result = {
             "name": self.name,
             "format": self.format.value if self.format else None,
             "origin": self.origin.model_dump(mode='json') if self.origin else None,
@@ -486,7 +502,9 @@ class CADlingDocument(BaseModel):
             "topology": {
                 "num_nodes": self.topology.num_nodes,
                 "num_edges": self.topology.num_edges,
-                "adjacency_list": self.topology.adjacency_list,
+                "adjacency_list": {
+                    str(k): v for k, v in self.topology.adjacency_list.items()
+                },
             }
             if self.topology
             else None,
@@ -494,7 +512,18 @@ class CADlingDocument(BaseModel):
             "processing_history": [
                 step.model_dump(mode='json') for step in self.processing_history
             ],
+            "properties": self.properties,
+            "segments": [
+                {
+                    "segment_id": seg.segment_id,
+                    "segment_type": seg.segment_type,
+                    "properties": seg.properties,
+                }
+                for seg in self.segments
+            ],
+            "bounding_box": self.bounding_box.model_dump(mode='json') if self.bounding_box else None,
         }
+        return result
 
     def export_to_markdown(self) -> str:
         """Export document to Markdown format.
@@ -574,7 +603,8 @@ class CADInputDocument(BaseModel):
     file: Path
     format: InputFormat
     document_hash: str
-    _backend: Optional[Any] = None  # Backend instance (set during conversion)
+    _backend: Optional[Any] = PrivateAttr(default=None)  # Backend instance (set during conversion)
+    _content_cache: Optional[bytes] = PrivateAttr(default=None)  # Cached file content to avoid re-reads
 
 
 class ConversionResult(BaseModel):

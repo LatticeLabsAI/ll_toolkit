@@ -169,7 +169,14 @@ class DeepCADLoader(BaseCADDataset):
                 urllib.request.urlretrieve(url, tmp_path)
 
             with tarfile.open(tmp_path, "r:gz") as tar:
-                tar.extractall(path=str(self.root_dir))
+                safe_members = []
+                for member in tar.getmembers():
+                    member_path = os.path.normpath(os.path.join(str(self.root_dir), member.name))
+                    if not member_path.startswith(os.path.realpath(str(self.root_dir))):
+                        _log.warning("Skipping unsafe tar member: %s", member.name)
+                        continue
+                    safe_members.append(member)
+                tar.extractall(path=str(self.root_dir), members=safe_members)
             os.unlink(tmp_path)
 
             if self._verify_integrity():

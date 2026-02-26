@@ -8,9 +8,16 @@ dimensions, tolerances, and other visual information using Vision-Language Model
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING, Any, List, Optional
 
 from cadling.pipeline.base_pipeline import BaseCADPipeline
+from cadling.pipeline._vision_shared import (
+    create_vlm_prompt,
+    generate_geometry_annotations,
+    parse_vlm_response,
+    process_views_with_vlm,
+    render_views,
+)
 from cadling.datamodel.base_models import CADItem
 
 if TYPE_CHECKING:
@@ -94,31 +101,20 @@ class VisionPipeline(BaseCADPipeline):
             # Create document
             document = CADlingDocument(name=conv_res.input.file.name)
 
-            # Render views
+            # Render views using shared utility
             _log.info(f"Rendering {len(self.views_to_render)} views")
 
-            rendered_views = {}
-            for view_name in self.views_to_render:
-                try:
-                    _log.debug(f"Rendering view: {view_name}")
-                    image = backend.render_view(
-                        view_name,
-                        resolution=self.vlm_options.image_resolution
-                        if self.vlm_options
-                        else 1024,
-                    )
-                    rendered_views[view_name] = image
-
-                    _log.info(
-                        f"Rendered {view_name} view: {image.size[0]}x{image.size[1]}"
-                    )
-
-                except Exception as e:
-                    _log.error(f"Failed to render view {view_name}: {e}")
-                    conv_res.add_error(
-                        component="VisionPipeline._build_document",
-                        error_message=f"Failed to render view {view_name}: {str(e)}",
-                    )
+            rendered_views = render_views(
+                backend=backend,
+                views_to_render=self.views_to_render,
+                resolution=(
+                    self.vlm_options.image_resolution
+                    if self.vlm_options
+                    else 1024
+                ),
+                component_name="VisionPipeline",
+                conv_res=conv_res,
+            )
 
             if not rendered_views:
                 raise ValueError("No views were successfully rendered")
@@ -135,12 +131,12 @@ class VisionPipeline(BaseCADPipeline):
             return conv_res
 
         except Exception as e:
-            _log.exception(f"Build stage failed: {e}")
+            _log.error(f"Build stage failed: {e}")
             conv_res.add_error(
                 component="VisionPipeline._build_document",
                 error_message=f"Failed to build document: {str(e)}",
             )
-            raise
+            return conv_res
 
     def _assemble_document(self, conv_res: ConversionResult) -> ConversionResult:
         """
@@ -172,42 +168,17 @@ class VisionPipeline(BaseCADPipeline):
                 _log.warning("No VLM model configured, using geometry-based annotation fallback")
                 return self._generate_geometry_based_annotations(conv_res)
 
-            _log.info(
-                f"Processing {len(rendered_views)} views with VLM: "
-                f"{vlm_model.__class__.__name__}"
+            # Process views with VLM using shared utility
+            custom_prompt = self.vlm_options.prompt if self.vlm_options else None
+            total = process_views_with_vlm(
+                rendered_views=rendered_views,
+                vlm_model=vlm_model,
+                document=document,
+                custom_prompt=custom_prompt,
+                include_extended_types=False,
+                component_name="VisionPipeline",
+                conv_res=conv_res,
             )
-
-            # Process each view
-            for view_name, image in rendered_views.items():
-                try:
-                    _log.debug(f"Processing view: {view_name}")
-
-                    # Create prompt for VLM
-                    prompt = self._create_vlm_prompt(view_name)
-
-                    # Process image with VLM
-                    response = vlm_model.process_image(image, prompt)
-
-                    # Extract annotations from response
-                    annotations = self._parse_vlm_response(response, view_name)
-
-                    # Add annotations as items to document
-                    for annotation in annotations:
-                        document.add_item(annotation)
-
-                    _log.info(
-                        f"Extracted {len(annotations)} annotations from {view_name}"
-                    )
-
-                except Exception as e:
-                    _log.error(
-                        f"Failed to process view {view_name} with VLM: {e}",
-                        exc_info=True,
-                    )
-                    conv_res.add_error(
-                        component="VisionPipeline._assemble_document",
-                        error_message=f"Failed to process view {view_name}: {str(e)}",
-                    )
 
             _log.info(f"Assembly completed: {len(document.items)} total annotations")
 
@@ -223,80 +194,14 @@ class VisionPipeline(BaseCADPipeline):
 
     def _create_vlm_prompt(self, view_name: str) -> str:
         """Create prompt for VLM based on view name."""
-        # Use custom prompt if provided
-        if self.vlm_options and self.vlm_options.prompt:
-            return self.vlm_options.prompt
-
-        # Default prompt for CAD annotation extraction
-        return f"""
-You are analyzing a {view_name} view of a CAD model. Please extract all visible annotations including:
-
-1. **Dimensions**: Linear, angular, radial dimensions with their values and units
-2. **Tolerances**: Geometric dimensioning and tolerancing (GD&T) symbols and values
-3. **Notes**: Text notes, callouts, and labels
-4. **Part Numbers**: Part identification numbers or labels
-
-For each annotation, provide:
-- Type (dimension, tolerance, note, label)
-- Text content
-- Numeric value (if applicable)
-- Unit (if applicable)
-- Approximate location in image
-
-Format your response as a JSON array of annotations.
-""".strip()
+        custom_prompt = self.vlm_options.prompt if self.vlm_options else None
+        return create_vlm_prompt(view_name, custom_prompt=custom_prompt)
 
     def _parse_vlm_response(
         self, response: Any, view_name: str
     ) -> List[CADItem]:
         """Parse VLM response and create CAD items."""
-        from cadling.datamodel.stl import AnnotationItem
-
-        annotations = []
-
-        # Handle VlmResponse object
-        if hasattr(response, "annotations"):
-            for vlm_annotation in response.annotations:
-                # Create AnnotationItem from VlmAnnotation
-                annotation_item = AnnotationItem(
-                    label={"text": vlm_annotation.text},
-                    text=vlm_annotation.text,
-                    annotation_type=vlm_annotation.annotation_type,
-                    value=str(vlm_annotation.value) if vlm_annotation.value else None,
-                    source_view=view_name,
-                    image_bbox=vlm_annotation.bbox,
-                )
-
-                annotations.append(annotation_item)
-
-        # Handle raw text response
-        elif isinstance(response, str):
-            # Try to parse as JSON
-            import json
-
-            try:
-                parsed = json.loads(response)
-                if isinstance(parsed, list):
-                    for item in parsed:
-                        annotation_item = AnnotationItem(
-                            label={"text": item.get("text", "")},
-                            text=item.get("text", ""),
-                            annotation_type=item.get("type", "note"),
-                            value=item.get("value"),
-                            source_view=view_name,
-                        )
-                        annotations.append(annotation_item)
-            except json.JSONDecodeError:
-                # Treat as single text note
-                annotation_item = AnnotationItem(
-                    label={"text": "VLM Note"},
-                    text=response,
-                    annotation_type="note",
-                    source_view=view_name,
-                )
-                annotations.append(annotation_item)
-
-        return annotations
+        return parse_vlm_response(response, view_name)
 
     def _generate_geometry_based_annotations(
         self, conv_res: ConversionResult
@@ -312,83 +217,13 @@ Format your response as a JSON array of annotations.
         Returns:
             Updated conversion result with geometry-based annotations
         """
-        from cadling.datamodel.stl import AnnotationItem
-
         if not conv_res.document:
             return conv_res
 
-        document = conv_res.document
-        annotations_added = 0
-
-        for item in document.items:
-            # Extract bounding box annotation
-            geometry_analysis = item.properties.get("geometry_analysis", {})
-            bbox = geometry_analysis.get("bounding_box", {})
-
-            if bbox:
-                # Create dimension annotations from bounding box
-                dims = {
-                    "width": bbox.get("size_x", 0),
-                    "height": bbox.get("size_y", 0),
-                    "depth": bbox.get("size_z", 0),
-                }
-
-                for dim_name, dim_value in dims.items():
-                    if dim_value and dim_value > 0:
-                        annotation = AnnotationItem(
-                            label={"text": f"{dim_name.capitalize()}"},
-                            text=f"{dim_name.capitalize()}: {dim_value:.2f}",
-                            annotation_type="dimension",
-                            value=str(dim_value),
-                            source_view="geometry_analysis",
-                        )
-                        document.add_item(annotation)
-                        annotations_added += 1
-
-            # Extract surface type annotations
-            surface_analysis = item.properties.get("surface_analysis", {})
-            surface_type = surface_analysis.get("surface_type")
-
-            if surface_type and surface_type != "UNKNOWN":
-                annotation = AnnotationItem(
-                    label={"text": "Surface"},
-                    text=f"Surface type: {surface_type}",
-                    annotation_type="note",
-                    value=surface_type,
-                    source_view="geometry_analysis",
-                )
-                document.add_item(annotation)
-                annotations_added += 1
-
-            # Extract manufacturing feature annotations
-            mfg_features = item.properties.get("manufacturing_features", [])
-            for feature in mfg_features:
-                feature_type = feature.get("type", "unknown")
-                params = feature.get("parameters", {})
-
-                # Format parameters as readable text
-                param_parts = []
-                if "diameter" in params:
-                    param_parts.append(f"Ø{params['diameter']:.2f}")
-                if "depth" in params:
-                    param_parts.append(f"depth: {params['depth']:.2f}")
-                if "radius" in params:
-                    param_parts.append(f"R{params['radius']:.2f}")
-
-                param_text = ", ".join(param_parts) if param_parts else ""
-                text = f"{feature_type.replace('_', ' ').title()}"
-                if param_text:
-                    text += f": {param_text}"
-
-                annotation = AnnotationItem(
-                    label={"text": feature_type},
-                    text=text,
-                    annotation_type="note",
-                    value=param_text,
-                    source_view="geometry_analysis",
-                )
-                document.add_item(annotation)
-                annotations_added += 1
+        annotations_added = generate_geometry_annotations(
+            document=conv_res.document,
+            source_view="geometry_analysis",
+        )
 
         _log.info(
             f"Geometry-based annotation generated {annotations_added} annotations"

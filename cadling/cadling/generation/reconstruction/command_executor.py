@@ -365,7 +365,6 @@ class CommandExecutor:
             0: CommandType.SOL,
             1: CommandType.EOL,
             2: CommandType.EOS,
-            3: CommandType.EXTRUDE,
             4: CommandType.BOOLEAN,
         }
         command_tokens_map = {

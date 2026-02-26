@@ -462,6 +462,7 @@ class STLBackend(DeclarativeCADBackend, RenderableCADBackend):
             "left",
             "isometric",
             "isometric2",
+            "isometric_back",
         ]
 
     def load_view(self, view_name: str) -> CADViewBackend:
@@ -536,12 +537,16 @@ class STLViewBackend(CADViewBackend):
             camera_dir = np.array(camera_params["direction"])
             camera_up = np.array(camera_params["up"])
 
-            # Apply camera transform
-            # Note: trimesh uses different coordinate system
+            # Apply camera transform using computed parameters
+            # Build rotation angles from camera direction
+            import math
+            dx, dy, dz = camera_dir
+            elevation = math.degrees(math.atan2(dz, math.sqrt(dx * dx + dy * dy)))
+            azimuth = math.degrees(math.atan2(dy, dx))
             scene.set_camera(
-                angles=[0, 0, 0],  # Rotation
-                distance=np.linalg.norm(camera_pos),  # Distance
-                center=mesh.centroid,  # Look at center
+                angles=[elevation, azimuth, 0],
+                distance=np.linalg.norm(camera_pos),
+                center=mesh.centroid,
             )
 
             # Render to PNG
@@ -573,64 +578,8 @@ class STLViewBackend(CADViewBackend):
 
     def get_camera_parameters(self) -> dict:
         """Get camera parameters for this view."""
-        # Same as STEP backend
-        view_params = {
-            "front": {
-                "position": [0, 0, 100],
-                "direction": [0, 0, -1],
-                "up": [0, 1, 0],
-                "fov": 45.0,
-            },
-            "back": {
-                "position": [0, 0, -100],
-                "direction": [0, 0, 1],
-                "up": [0, 1, 0],
-                "fov": 45.0,
-            },
-            "top": {
-                "position": [0, 100, 0],
-                "direction": [0, -1, 0],
-                "up": [0, 0, -1],
-                "fov": 45.0,
-            },
-            "bottom": {
-                "position": [0, -100, 0],
-                "direction": [0, 1, 0],
-                "up": [0, 0, 1],
-                "fov": 45.0,
-            },
-            "right": {
-                "position": [100, 0, 0],
-                "direction": [-1, 0, 0],
-                "up": [0, 1, 0],
-                "fov": 45.0,
-            },
-            "left": {
-                "position": [-100, 0, 0],
-                "direction": [1, 0, 0],
-                "up": [0, 1, 0],
-                "fov": 45.0,
-            },
-            "isometric": {
-                "position": [100, 100, 100],
-                "direction": [-1, -1, -1],
-                "up": [0, 1, 0],
-                "fov": 45.0,
-            },
-            "isometric2": {
-                "position": [-100, 100, 100],
-                "direction": [1, -1, -1],
-                "up": [0, 1, 0],
-                "fov": 45.0,
-            },
-        }
+        from cadling.backend.abstract_backend import DEFAULT_CAMERA_PARAMETERS
 
-        return view_params.get(
-            self.view_name,
-            {
-                "position": [100, 100, 100],
-                "direction": [-1, -1, -1],
-                "up": [0, 1, 0],
-                "fov": 45.0,
-            },
+        return DEFAULT_CAMERA_PARAMETERS.get(
+            self.view_name, DEFAULT_CAMERA_PARAMETERS["front"]
         )

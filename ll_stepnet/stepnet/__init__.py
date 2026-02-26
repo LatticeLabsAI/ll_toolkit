@@ -3,229 +3,220 @@ LL-STEPNet: STEP/B-Rep Neural Network Package
 Clean, separated architecture for processing CAD/STEP files.
 """
 
-from .tokenizer import STEPTokenizer
+from .annotations import (
+    BranchAnnotation,
+    STEPAnnotatedOutput,
+    STEPStructuralAnnotator,
+    StructuralSummary,
+)
+from .conditioning import (
+    AdaptiveLayer,
+    ImageConditioner,
+    MultiModalConditioner,
+    TextConditioner,
+)
+from .config import (
+    ConditioningConfig,
+    DataConfig,
+    DiffusionConfig,
+    LatentGANConfig,
+    STEPAnnotationConfig,
+    STEPCaptioningConfig,
+    STEPClassificationConfig,
+    STEPEncoderConfig,
+    STEPPropertyPredictionConfig,
+    STEPQAConfig,
+    STEPReserializationConfig,
+    STEPSimilarityConfig,
+    StreamingCadlingConfig,
+    TrainingConfig,
+    VAEConfig,
+    get_config,
+)
+from .data import (
+    CadlingDataset,
+    GeoTokenCollator,
+    GeoTokenDataset,
+    STEPCollator,
+    STEPDataset,
+    create_dataloader,
+)
+from .data_requirements import (
+    STEPLearningCurveGenerator,
+    STEPScalingLawAnalyzer,
+    chinchilla_optimal_tokens,
+    count_model_parameters,
+    estimate_data_requirements,
+    inverse_power_law_accuracy,
+    plot_learning_curve_with_scaling_law,
+    power_law_error,
+    power_law_loss,
+    suggest_dataset_size,
+)
+from .diffusion import (
+    CADDenoiser,
+    DDPMScheduler,
+    SinusoidalTimestepEmbedding,
+    StructuredDiffusion,
+)
+from .encoder import (
+    STEPEncoder,
+    STEPGraphEncoder,
+    STEPTransformerDecoder,
+    STEPTransformerEncoder,
+)
 from .features import STEPFeatureExtractor
-from .topology import STEPTopologyBuilder
-from .encoder import STEPEncoder, STEPTransformerEncoder, STEPTransformerDecoder, STEPGraphEncoder
+from .generation_pipeline import CADGenerationPipeline
+from .latent_gan import (
+    LatentDiscriminator,
+    LatentGAN,
+    LatentGenerator,
+)
+from .output_heads import (
+    PARAMETER_MASKS,
+    CommandType,
+    CommandTypeHead,
+    CompositeHead,
+    ParameterHeads,
+)
+from .pretrain import STEPForCausalLM, STEPForHybridLM, STEPForMaskedLM, mask_tokens
+from .reserialization import (
+    STEPDFSSerializer,
+    STEPEntityGraph,
+    STEPEntityNode,
+    STEPReserializedOutput,
+    reserialize_step,
+)
 from .tasks import (
     STEPForCaptioning,
     STEPForClassification,
     STEPForPropertyPrediction,
+    STEPForQA,
     STEPForSimilarity,
-    STEPForQA
 )
-from .pretrain import (
-    STEPForCausalLM,
-    STEPForMaskedLM,
-    STEPForHybridLM,
-    mask_tokens
-)
-from .data import STEPDataset, STEPCollator, GeoTokenDataset, GeoTokenCollator, CadlingDataset, create_dataloader
+from .tokenizer import STEPTokenizer
+from .topology import STEPTopologyBuilder
 from .trainer import STEPTrainer
-from .data_requirements import (
-    STEPLearningCurveGenerator,
-    STEPScalingLawAnalyzer,
-    power_law_loss,
-    power_law_error,
-    inverse_power_law_accuracy,
-    chinchilla_optimal_tokens,
-    plot_learning_curve_with_scaling_law,
-    estimate_data_requirements,
-    count_model_parameters,
-    suggest_dataset_size
-)
-from .config import (
-    STEPEncoderConfig,
-    STEPClassificationConfig,
-    STEPPropertyPredictionConfig,
-    STEPCaptioningConfig,
-    STEPSimilarityConfig,
-    STEPQAConfig,
-    STEPReserializationConfig,
-    STEPAnnotationConfig,
-    TrainingConfig,
-    DataConfig,
-    VAEConfig,
-    LatentGANConfig,
-    DiffusionConfig,
-    ConditioningConfig,
-    StreamingCadlingConfig,
-    get_config,
-)
-from .vae import STEPVAE
-from .output_heads import (
-    CommandType,
-    CommandTypeHead,
-    ParameterHeads,
-    CompositeHead,
-    PARAMETER_MASKS,
-)
-from .latent_gan import (
-    LatentGenerator,
-    LatentDiscriminator,
-    LatentGAN,
-)
-from .diffusion import (
-    DDPMScheduler,
-    SinusoidalTimestepEmbedding,
-    CADDenoiser,
-    StructuredDiffusion,
-)
-from .conditioning import (
-    AdaptiveLayer,
-    TextConditioner,
-    ImageConditioner,
-    MultiModalConditioner,
-)
-from .reserialization import (
-    STEPEntityNode,
-    STEPEntityGraph,
-    STEPDFSSerializer,
-    STEPReserializedOutput,
-    reserialize_step,
-)
-from .annotations import (
-    BranchAnnotation,
-    StructuralSummary,
-    STEPStructuralAnnotator,
-    STEPAnnotatedOutput,
-)
-from .vqvae import (
-    VectorQuantizer,
-    DisentangledCodebooks,
-    CodebookDecoder,
-    VQVAEModel,
-)
 from .training import (
-    VAETrainer,
-    GANTrainer,
     DiffusionTrainer,
-    StreamingVAETrainer,
+    GANTrainer,
     StreamingDiffusionTrainer,
     StreamingGANTrainer,
+    StreamingVAETrainer,
+    VAETrainer,
 )
-from .generation_pipeline import CADGenerationPipeline
+from .vae import STEPVAE
+from .vqvae import (
+    CodebookDecoder,
+    DisentangledCodebooks,
+    VectorQuantizer,
+    VQVAEModel,
+)
 
 __version__ = "0.1.0"
 
 __all__ = [
-    # Core components
-    "STEPTokenizer",
-    "STEPFeatureExtractor",
-    "STEPTopologyBuilder",
-    "STEPEncoder",
-    "STEPTransformerEncoder",
-    "STEPTransformerDecoder",
-    "STEPGraphEncoder",
-
-    # Task models
-    "STEPForCaptioning",
-    "STEPForClassification",
-    "STEPForPropertyPrediction",
-    "STEPForSimilarity",
-    "STEPForQA",
-
-    # Pre-training models (unsupervised)
-    "STEPForCausalLM",
-    "STEPForMaskedLM",
-    "STEPForHybridLM",
-    "mask_tokens",
-
-    # Data utilities
-    "STEPDataset",
-    "STEPCollator",
-    "GeoTokenDataset",
-    "GeoTokenCollator",
-    "CadlingDataset",
-    "create_dataloader",
-
-    # Training
-    "STEPTrainer",
-
-    # Data Requirements Analysis
-    "STEPLearningCurveGenerator",
-    "STEPScalingLawAnalyzer",
-    "power_law_loss",
-    "power_law_error",
-    "inverse_power_law_accuracy",
-    "chinchilla_optimal_tokens",
-    "plot_learning_curve_with_scaling_law",
-    "estimate_data_requirements",
-    "count_model_parameters",
-    "suggest_dataset_size",
-
-    # Configuration
-    "STEPEncoderConfig",
-    "STEPClassificationConfig",
-    "STEPPropertyPredictionConfig",
-    "STEPCaptioningConfig",
-    "STEPSimilarityConfig",
-    "STEPQAConfig",
-    "STEPReserializationConfig",
-    "STEPAnnotationConfig",
-    "TrainingConfig",
-    "DataConfig",
-    "VAEConfig",
-    "LatentGANConfig",
-    "DiffusionConfig",
-    "ConditioningConfig",
-    "StreamingCadlingConfig",
-    "get_config",
-
+    "PARAMETER_MASKS",
     # VAE
     "STEPVAE",
-
+    # Conditioning
+    "AdaptiveLayer",
+    # Annotations
+    "BranchAnnotation",
+    "CADDenoiser",
+    # End-to-end Generation Pipeline
+    "CADGenerationPipeline",
+    "CadlingDataset",
+    "CodebookDecoder",
     # Output Heads
     "CommandType",
     "CommandTypeHead",
-    "ParameterHeads",
     "CompositeHead",
-    "PARAMETER_MASKS",
-
-    # Latent GAN
-    "LatentGenerator",
-    "LatentDiscriminator",
-    "LatentGAN",
-
+    "ConditioningConfig",
     # Diffusion
     "DDPMScheduler",
-    "SinusoidalTimestepEmbedding",
-    "CADDenoiser",
-    "StructuredDiffusion",
-
-    # Conditioning
-    "AdaptiveLayer",
-    "TextConditioner",
+    "DataConfig",
+    "DiffusionConfig",
+    "DiffusionTrainer",
+    "DisentangledCodebooks",
+    "GANTrainer",
+    "GeoTokenCollator",
+    "GeoTokenDataset",
     "ImageConditioner",
+    "LatentDiscriminator",
+    "LatentGAN",
+    "LatentGANConfig",
+    # Latent GAN
+    "LatentGenerator",
     "MultiModalConditioner",
-
+    "ParameterHeads",
+    "STEPAnnotatedOutput",
+    "STEPAnnotationConfig",
+    "STEPCaptioningConfig",
+    "STEPClassificationConfig",
+    "STEPCollator",
+    "STEPDFSSerializer",
+    # Data utilities
+    "STEPDataset",
+    "STEPEncoder",
+    # Configuration
+    "STEPEncoderConfig",
+    "STEPEntityGraph",
     # Reserialization
     "STEPEntityNode",
-    "STEPEntityGraph",
-    "STEPDFSSerializer",
+    "STEPFeatureExtractor",
+    # Task models
+    "STEPForCaptioning",
+    # Pre-training models (unsupervised)
+    "STEPForCausalLM",
+    "STEPForClassification",
+    "STEPForHybridLM",
+    "STEPForMaskedLM",
+    "STEPForPropertyPrediction",
+    "STEPForQA",
+    "STEPForSimilarity",
+    "STEPGraphEncoder",
+    # Data Requirements Analysis
+    "STEPLearningCurveGenerator",
+    "STEPPropertyPredictionConfig",
+    "STEPQAConfig",
+    "STEPReserializationConfig",
     "STEPReserializedOutput",
-    "reserialize_step",
-
-    # Annotations
-    "BranchAnnotation",
-    "StructuralSummary",
+    "STEPScalingLawAnalyzer",
+    "STEPSimilarityConfig",
     "STEPStructuralAnnotator",
-    "STEPAnnotatedOutput",
-
-    # VQ-VAE / CAD Generation
-    "VectorQuantizer",
-    "DisentangledCodebooks",
-    "CodebookDecoder",
-    "VQVAEModel",
-
-    # Generative Training Infrastructure
-    "VAETrainer",
-    "GANTrainer",
-    "DiffusionTrainer",
-    "StreamingVAETrainer",
+    # Core components
+    "STEPTokenizer",
+    "STEPTopologyBuilder",
+    # Training
+    "STEPTrainer",
+    "STEPTransformerDecoder",
+    "STEPTransformerEncoder",
+    "SinusoidalTimestepEmbedding",
+    "StreamingCadlingConfig",
     "StreamingDiffusionTrainer",
     "StreamingGANTrainer",
-
-    # End-to-end Generation Pipeline
-    "CADGenerationPipeline",
+    "StreamingVAETrainer",
+    "StructuralSummary",
+    "StructuredDiffusion",
+    "TextConditioner",
+    "TrainingConfig",
+    "VAEConfig",
+    # Generative Training Infrastructure
+    "VAETrainer",
+    "VQVAEModel",
+    # VQ-VAE / CAD Generation
+    "VectorQuantizer",
+    "chinchilla_optimal_tokens",
+    "count_model_parameters",
+    "create_dataloader",
+    "estimate_data_requirements",
+    "get_config",
+    "inverse_power_law_accuracy",
+    "mask_tokens",
+    "plot_learning_curve_with_scaling_law",
+    "power_law_error",
+    "power_law_loss",
+    "reserialize_step",
+    "suggest_dataset_size",
 ]

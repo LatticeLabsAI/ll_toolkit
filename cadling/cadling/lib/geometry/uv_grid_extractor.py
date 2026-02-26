@@ -18,11 +18,7 @@ from typing import Dict, List, Optional
 
 import numpy as np
 
-# Add resources/occwl to path for imports
-OCCWL_PATH = Path(__file__).parent.parent.parent.parent.parent / "resources" / "occwl" / "src"
-if str(OCCWL_PATH) not in sys.path:
-    sys.path.insert(0, str(OCCWL_PATH))
-
+# Try importing occwl; if not on sys.path, try adding the vendored location
 try:
     from OCC.Core.TopoDS import TopoDS_Face, TopoDS_Edge
     from OCC.Core.TopAbs import TopAbs_IN, TopAbs_OUT
@@ -31,8 +27,23 @@ try:
     from occwl.uvgrid import uvgrid, ugrid
     HAS_OCC = True
 except ImportError:
-    HAS_OCC = False
-    logging.warning("OpenCASCADE (pythonocc-core) not available. UV-grid extraction will be disabled.")
+    # Fallback: try vendored occwl in resources/
+    _occwl_path = Path(__file__).parent.parent.parent.parent.parent / "resources" / "occwl" / "src"
+    if _occwl_path.is_dir() and str(_occwl_path) not in sys.path:
+        sys.path.insert(0, str(_occwl_path))
+        try:
+            from OCC.Core.TopoDS import TopoDS_Face, TopoDS_Edge
+            from OCC.Core.TopAbs import TopAbs_IN, TopAbs_OUT
+            from occwl.face import Face
+            from occwl.edge import Edge
+            from occwl.uvgrid import uvgrid, ugrid
+            HAS_OCC = True
+        except ImportError:
+            HAS_OCC = False
+            logging.warning("OpenCASCADE (pythonocc-core) not available. UV-grid extraction will be disabled.")
+    else:
+        HAS_OCC = False
+        logging.warning("OpenCASCADE (pythonocc-core) not available. UV-grid extraction will be disabled.")
 
 
 logger = logging.getLogger(__name__)
@@ -142,8 +153,9 @@ class FaceUVGridExtractor:
             else:
                 logger.debug(f"Skipping face {idx} - UV-grid extraction failed")
 
+        coverage = (len(uv_grids) / len(occ_faces) * 100) if occ_faces else 0.0
         logger.info(f"Extracted UV-grids for {len(uv_grids)}/{len(occ_faces)} faces "
-                   f"({len(uv_grids)/len(occ_faces)*100:.1f}% coverage)")
+                   f"({coverage:.1f}% coverage)")
 
         return uv_grids
 
@@ -231,7 +243,8 @@ class EdgeUVGridExtractor:
             else:
                 logger.debug(f"Skipping edge {idx} - UV-grid extraction failed")
 
+        coverage = (len(uv_grids) / len(occ_edges) * 100) if occ_edges else 0.0
         logger.info(f"Extracted UV-grids for {len(uv_grids)}/{len(occ_edges)} edges "
-                   f"({len(uv_grids)/len(occ_edges)*100:.1f}% coverage)")
+                   f"({coverage:.1f}% coverage)")
 
         return uv_grids

@@ -20,7 +20,8 @@ class GeometricRelationship:
     relationship_type: str   # "parallel", "perpendicular", "coplanar", "symmetric"
     entity_a: int           # Vertex/face index A
     entity_b: int           # Vertex/face index B
-    confidence: float = 1.0 # Detection confidence [0, 1]
+    confidence: float = field(default=1.0)  # Detection confidence [0, 1]
+    metadata: Optional[dict] = field(default=None)  # Extra relationship metadata
 
     def __hash__(self):
         return hash((self.relationship_type, self.entity_a, self.entity_b))
@@ -42,18 +43,20 @@ class RelationshipDetector:
         self,
         angle_tolerance: float = 1e-3,
         distance_tolerance: float = 1e-4,
-        max_face_pairs: int = 100,
+        max_faces: int = 100,
     ):
         """Initialize relationship detector.
 
         Args:
             angle_tolerance: Tolerance for angle comparisons (radians).
             distance_tolerance: Tolerance for distance comparisons.
-            max_face_pairs: Maximum number of face pairs to check to avoid O(n²).
+            max_faces: Maximum number of faces to sample for pairwise checks
+                to avoid O(n²). Faces are randomly sampled with a fixed seed
+                for reproducibility.
         """
         self.angle_tolerance = angle_tolerance
         self.distance_tolerance = distance_tolerance
-        self.max_face_pairs = max_face_pairs
+        self.max_faces = max_faces
 
     def detect_face_relationships(
         self,
@@ -71,24 +74,29 @@ class RelationshipDetector:
         """
         relationships = []
 
-        # Compute face normals
-        normals = []
-        for face in faces:
-            v0, v1, v2 = vertices[face[0]], vertices[face[1]], vertices[face[2]]
-            normal = np.cross(v1 - v0, v2 - v0)
-            norm = np.linalg.norm(normal)
-            if norm > 1e-12:
-                normal = normal / norm
-            normals.append(normal)
-        normals = np.array(normals)
-
-        # Check pairs (limit to avoid O(n^2) for large meshes)
+        # Sample faces BEFORE computing normals to avoid unnecessary work
         n_faces = len(faces)
-        max_check = min(n_faces, self.max_face_pairs)
+        if n_faces > self.max_faces:
+            rng = np.random.RandomState(42)
+            sampled_indices = np.sort(rng.choice(n_faces, size=self.max_faces, replace=False))
+        else:
+            sampled_indices = np.arange(n_faces)
 
-        for i in range(max_check):
-            for j in range(i + 1, max_check):
-                dot = abs(np.dot(normals[i], normals[j]))
+        # Compute face normals only for sampled faces
+        sampled_faces = faces[sampled_indices]
+        v0 = vertices[sampled_faces[:, 0]]
+        v1 = vertices[sampled_faces[:, 1]]
+        v2 = vertices[sampled_faces[:, 2]]
+        raw_normals = np.cross(v1 - v0, v2 - v0)
+        norms = np.linalg.norm(raw_normals, axis=1, keepdims=True)
+        norms = np.where(norms > 1e-12, norms, 1.0)
+        normals = raw_normals / norms
+
+        for si, i in enumerate(sampled_indices):
+            for sj, j in enumerate(sampled_indices):
+                if j <= i:
+                    continue
+                dot = abs(np.dot(normals[si], normals[sj]))
 
                 # Parallel: dot product ~= 1
                 if abs(dot - 1.0) < self.angle_tolerance:
@@ -115,25 +123,24 @@ class RelationshipDetector:
         original_relationships: list[GeometricRelationship],
         transformed_vertices: np.ndarray,
         transformed_faces: np.ndarray,
-    ) -> Optional[float]:
+    ) -> float:
         """Verify that relationships are preserved after transformation.
 
         Args:
             original_relationships: Relationships detected before transform.
-                Must be non-empty for meaningful verification.
             transformed_vertices: Vertices after transformation.
             transformed_faces: Faces (should be same indices).
 
         Returns:
-            Preservation rate [0, 1], or None if verification cannot be
-            performed (e.g., empty input). Callers must handle None.
+            Preservation rate [0, 1]. Returns 1.0 if baseline is empty
+            (no relationships to violate).
         """
         if not original_relationships:
-            _log.warning(
+            _log.debug(
                 "verify_relationships called with empty baseline; "
-                "cannot compute preservation rate"
+                "returning 1.0 (no relationships to violate)"
             )
-            return None
+            return 1.0
 
         new_relationships = self.detect_face_relationships(
             transformed_vertices, transformed_faces

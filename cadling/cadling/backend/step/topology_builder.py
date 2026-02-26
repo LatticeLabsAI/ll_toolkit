@@ -35,6 +35,7 @@ class TopologyBuilder:
         self.adjacency_list = defaultdict(list)
         self.reverse_adjacency_list = defaultdict(list)
         self.entity_levels = {}
+        self.connected_components = []
 
         # Build adjacency lists
         for entity_id, entity_data in entities.items():

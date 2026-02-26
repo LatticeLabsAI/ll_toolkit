@@ -212,6 +212,11 @@ class VectorQuantizer(nn.Module):
             flat_inputs: Flattened encoder outputs ``(N, D)``.
             encoding_indices: Selected codebook indices ``(N,)``.
         """
+        # Safety check: ensure EMA buffers are on the same device as inputs
+        if self._ema_cluster_size.device != flat_inputs.device:
+            self._ema_cluster_size = self._ema_cluster_size.to(flat_inputs.device)
+            self._ema_embedding_sum = self._ema_embedding_sum.to(flat_inputs.device)
+
         # One-hot assignments: (N, K)
         encodings = F.one_hot(encoding_indices, self.num_embeddings).float()
 
@@ -220,6 +225,10 @@ class VectorQuantizer(nn.Module):
 
         # Sum of inputs assigned to each entry
         new_embedding_sum = encodings.t() @ flat_inputs  # (K, D)
+
+        # Ensure EMA buffers are on the same device as inputs
+        self._ema_cluster_size = self._ema_cluster_size.to(flat_inputs.device)
+        self._ema_embedding_sum = self._ema_embedding_sum.to(flat_inputs.device)
 
         # EMA update
         self._ema_cluster_size.mul_(self.decay).add_(
@@ -346,6 +355,20 @@ class DisentangledCodebooks(nn.Module):
             nn.Linear(code_dim, code_dim),
         )
 
+        # Register cached quantized outputs as buffers so they are moved
+        # by .to() and included in state_dict (non-persistent to avoid
+        # serializing stale training intermediates)
+        self.register_buffer(
+            "_last_topo_quantized", torch.zeros(1, self.TOPOLOGY_NUM_CODES, code_dim), persistent=False
+        )
+        self.register_buffer(
+            "_last_geom_quantized", torch.zeros(1, self.GEOMETRY_NUM_CODES, code_dim), persistent=False
+        )
+        self.register_buffer(
+            "_last_extr_quantized", torch.zeros(1, self.EXTRUSION_NUM_CODES, code_dim), persistent=False
+        )
+        self._encode_called: bool = False
+
         # Accumulated losses from the most recent forward pass
         self._last_commitment_losses: Dict[str, torch.Tensor] = {}
 
@@ -435,10 +458,11 @@ class DisentangledCodebooks(nn.Module):
         extr_quantized, extr_loss, extr_indices = self.extrusion_codebook(extr_seq)
         extr_indices = extr_indices.reshape(batch_size, self.EXTRUSION_NUM_CODES)
 
-        # Cache quantized outputs for decode and commitment losses
+        # Cache quantized outputs in registered buffers for decode
         self._last_topo_quantized = topo_quantized
         self._last_geom_quantized = geom_quantized
         self._last_extr_quantized = extr_quantized
+        self._encode_called = True
 
         self._last_commitment_losses = {
             "topology": topo_loss,
@@ -502,7 +526,7 @@ class DisentangledCodebooks(nn.Module):
         Raises:
             RuntimeError: If called before ``encode``.
         """
-        if not hasattr(self, "_last_topo_quantized"):
+        if not self._encode_called:
             raise RuntimeError(
                 "decode_quantized() called before encode(). "
                 "Call encode() first to cache quantized outputs."

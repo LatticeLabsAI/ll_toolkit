@@ -28,6 +28,13 @@ class TestImpactAnalyzer:
         assert reports["draft"].hausdorff_distance >= 0
         assert reports["precision"].hausdorff_distance >= 0
 
+        # Monotonicity: higher tiers should have lower or equal error
+        precision_error = reports["precision"].hausdorff_distance
+        standard_error = reports["standard"].hausdorff_distance
+        draft_error = reports["draft"].hausdorff_distance
+        assert precision_error <= standard_error + 1e-6
+        assert standard_error <= draft_error + 1e-6
+
     def test_empty_input(self):
         vertices = np.array([]).reshape(0, 3)
         analyzer = QuantizationImpactAnalyzer()

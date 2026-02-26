@@ -58,7 +58,7 @@ def classify_part(model_path: str, step_file: str, class_names: list):
 
     # Load model
     model = STEPForClassification(num_classes=len(class_names))
-    checkpoint = torch.load(model_path, map_location='cpu')
+    checkpoint = torch.load(model_path, map_location='cpu', weights_only=True)
     model.load_state_dict(checkpoint['model_state_dict'])
     model.eval()
 
@@ -93,7 +93,7 @@ def predict_properties(model_path: str, step_file: str, property_names: list):
 
     # Load model
     model = STEPForPropertyPrediction(num_properties=len(property_names))
-    checkpoint = torch.load(model_path, map_location='cpu')
+    checkpoint = torch.load(model_path, map_location='cpu', weights_only=True)
     model.load_state_dict(checkpoint['model_state_dict'])
     model.eval()
 

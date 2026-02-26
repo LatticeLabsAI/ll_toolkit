@@ -99,9 +99,15 @@ class MeshItem(CADItem):
     normals: List[List[float]] = Field(default_factory=list)
     facets: List[List[int]] = Field(default_factory=list)
 
-    # Computed properties
-    num_vertices: int = 0
-    num_facets: int = 0
+    @property
+    def num_vertices(self) -> int:
+        """Number of vertices derived from vertices list."""
+        return len(self.vertices)
+
+    @property
+    def num_facets(self) -> int:
+        """Number of facets derived from facets list."""
+        return len(self.facets)
     is_manifold: Optional[bool] = None
     is_watertight: Optional[bool] = None
     volume: Optional[float] = None
@@ -219,6 +225,9 @@ class STLDocument(CADlingDocument):
         Args:
             mesh: MeshItem to set
         """
+        # Remove old mesh from items if present
+        if self.mesh is not None:
+            self.items = [item for item in self.items if item is not self.mesh]
         self.mesh = mesh
         self.add_item(mesh)
 

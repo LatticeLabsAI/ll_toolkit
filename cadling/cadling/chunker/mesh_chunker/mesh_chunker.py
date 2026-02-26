@@ -462,7 +462,9 @@ class MeshChunker(BaseCADChunker):
     def _segment_by_graph(self, mesh: MeshData) -> List[List[int]]:
         """Segment mesh using graph-based methods.
 
-        Uses normalized cuts approximation.
+        Uses normalized cuts approximation. Ensures no faces are dropped:
+        faces that remain in the BFS queue when a segment reaches
+        max_faces_per_chunk are revisited as seeds for subsequent segments.
 
         Args:
             mesh: Mesh data
@@ -473,7 +475,7 @@ class MeshChunker(BaseCADChunker):
         # Build adjacency graph
         adjacency = self._build_face_adjacency(mesh)
 
-        # Simple connected components
+        # Simple connected components with size limit
         visited = set()
         segments = []
 
@@ -486,7 +488,15 @@ class MeshChunker(BaseCADChunker):
             queue = deque([start_idx])
             visited.add(start_idx)
 
-            while queue and len(component) < self.max_faces_per_chunk:
+            while queue:
+                if len(component) >= self.max_faces_per_chunk:
+                    # Emit the current segment but do NOT discard
+                    # remaining queued faces -- unmark them so they
+                    # become seeds for the next segment.
+                    for remaining in queue:
+                        visited.discard(remaining)
+                    break
+
                 current = queue.popleft()  # O(1) instead of O(n)
                 component.append(current)
 
@@ -495,7 +505,8 @@ class MeshChunker(BaseCADChunker):
                         visited.add(neighbor)
                         queue.append(neighbor)
 
-            segments.append(component)
+            if component:
+                segments.append(component)
 
         return segments
 
@@ -503,6 +514,9 @@ class MeshChunker(BaseCADChunker):
         """Segment mesh using geometric features.
 
         Combines normal similarity, curvature, and spatial proximity.
+        Faces that fail the normal similarity test against all their
+        neighbors are still assigned to their own single-face segments
+        so that no faces are lost.
 
         Args:
             mesh: Mesh data
@@ -530,7 +544,13 @@ class MeshChunker(BaseCADChunker):
             queue = deque([seed_idx])  # Use deque for O(1) popleft
             visited.add(seed_idx)
 
-            while queue and len(region) < self.max_faces_per_chunk:
+            while queue:
+                if len(region) >= self.max_faces_per_chunk:
+                    # Unmark remaining queued faces so they are not lost
+                    for remaining in queue:
+                        visited.discard(remaining)
+                    break
+
                 current_idx = queue.popleft()  # O(1) instead of O(n)
                 region.append(current_idx)
 
@@ -546,7 +566,19 @@ class MeshChunker(BaseCADChunker):
                         visited.add(neighbor_idx)
                         queue.append(neighbor_idx)
 
-            segments.append(region)
+            if region:
+                segments.append(region)
+
+        # Ensure no faces are dropped: any face not yet visited gets its own segment
+        all_face_indices = set(range(mesh.num_faces))
+        assigned = set()
+        for seg in segments:
+            assigned.update(seg)
+        orphans = all_face_indices - assigned
+        if orphans:
+            _log.debug("Assigning %d orphan faces to individual segments", len(orphans))
+            for face_idx in sorted(orphans):
+                segments.append([face_idx])
 
         return segments
 
@@ -649,7 +681,21 @@ class MeshChunker(BaseCADChunker):
 
 
 # Convenience aliases
-OctreeChunker = lambda **kwargs: MeshChunker(strategy="octree", **kwargs)
-KMeansChunker = lambda **kwargs: MeshChunker(strategy="kmeans", **kwargs)
-GraphChunker = lambda **kwargs: MeshChunker(strategy="graph", **kwargs)
-FeatureChunker = lambda **kwargs: MeshChunker(strategy="feature", **kwargs)
+def OctreeChunker(**kwargs) -> MeshChunker:
+    """Create a MeshChunker with octree strategy."""
+    return MeshChunker(strategy="octree", **kwargs)
+
+
+def KMeansChunker(**kwargs) -> MeshChunker:
+    """Create a MeshChunker with kmeans strategy."""
+    return MeshChunker(strategy="kmeans", **kwargs)
+
+
+def GraphChunker(**kwargs) -> MeshChunker:
+    """Create a MeshChunker with graph strategy."""
+    return MeshChunker(strategy="graph", **kwargs)
+
+
+def FeatureChunker(**kwargs) -> MeshChunker:
+    """Create a MeshChunker with feature strategy."""
+    return MeshChunker(strategy="feature", **kwargs)

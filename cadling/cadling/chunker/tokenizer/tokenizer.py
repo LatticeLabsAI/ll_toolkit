@@ -146,6 +146,7 @@ class GPTTokenizer(CADTokenizer):
         """
         self.model = model
         self.encoding = None
+        self.fallback = SimpleTokenizer()  # Initialize fallback unconditionally
 
         try:
             import tiktoken
@@ -246,6 +247,7 @@ class HuggingFaceTokenizer(CADTokenizer):
         """
         self.model_name = model_name
         self.tokenizer = None
+        self.fallback = SimpleTokenizer()
 
         try:
             from transformers import AutoTokenizer
@@ -254,10 +256,8 @@ class HuggingFaceTokenizer(CADTokenizer):
             _log.info(f"Initialized HuggingFace tokenizer: {model_name}")
         except ImportError:
             _log.warning("transformers not installed, falling back to simple tokenizer")
-            self.fallback = SimpleTokenizer()
         except Exception as e:
             _log.warning(f"Failed to load tokenizer {model_name}: {e}, using fallback")
-            self.fallback = SimpleTokenizer()
 
     def count_tokens(self, text: str) -> int:
         """Count tokens using HuggingFace tokenizer.

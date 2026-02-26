@@ -532,16 +532,20 @@ class TopologyVisualizer:
             if chunk.meta and chunk.meta.topology_subgraph:
                 subgraph = chunk.meta.topology_subgraph
 
-                # Add nodes
-                if "nodes" in subgraph:
+                # Add nodes and edges from adjacency_list
+                if "adjacency_list" in subgraph:
+                    for node, neighbors in subgraph["adjacency_list"].items():
+                        G.add_node(node)
+                        for neighbor in neighbors:
+                            G.add_node(neighbor)
+                            G.add_edge(node, neighbor)
+                elif "nodes" in subgraph:
                     for node in subgraph["nodes"]:
                         G.add_node(node)
-
-                # Add edges
-                if "edges" in subgraph:
-                    for edge in subgraph["edges"]:
-                        if len(edge) >= 2:
-                            G.add_edge(edge[0], edge[1])
+                    if "edges" in subgraph:
+                        for edge in subgraph["edges"]:
+                            if len(edge) >= 2:
+                                G.add_edge(edge[0], edge[1])
 
         if G.number_of_nodes() == 0:
             _log.warning("No topology data found in chunks")
@@ -592,22 +596,25 @@ class DistributionVisualizer:
             chunks: List of CAD chunks
         """
         if not chunks:
-            print("No chunks to analyze")
+            _log.info("No chunks to analyze")
             return
 
-        print(f"\n{'=' * 60}")
-        print("CHUNK STATISTICS")
-        print(f"{'=' * 60}\n")
-
-        print(f"Total chunks: {len(chunks)}")
+        lines = [
+            f"\n{'=' * 60}",
+            "CHUNK STATISTICS",
+            f"{'=' * 60}\n",
+            f"Total chunks: {len(chunks)}",
+        ]
 
         # Size statistics
         sizes = [len(chunk.text.split()) for chunk in chunks]
-        print(f"\nChunk sizes (words):")
-        print(f"  Min: {min(sizes)}")
-        print(f"  Max: {max(sizes)}")
-        print(f"  Mean: {np.mean(sizes):.1f}")
-        print(f"  Median: {np.median(sizes):.1f}")
+        lines.extend([
+            f"\nChunk sizes (words):",
+            f"  Min: {min(sizes)}",
+            f"  Max: {max(sizes)}",
+            f"  Mean: {np.mean(sizes):.1f}",
+            f"  Median: {np.median(sizes):.1f}",
+        ])
 
         # Entity statistics
         entity_counts = [
@@ -616,10 +623,12 @@ class DistributionVisualizer:
         ]
 
         if any(entity_counts):
-            print(f"\nEntities per chunk:")
-            print(f"  Min: {min(entity_counts)}")
-            print(f"  Max: {max(entity_counts)}")
-            print(f"  Mean: {np.mean(entity_counts):.1f}")
+            lines.extend([
+                f"\nEntities per chunk:",
+                f"  Min: {min(entity_counts)}",
+                f"  Max: {max(entity_counts)}",
+                f"  Mean: {np.mean(entity_counts):.1f}",
+            ])
 
         # Entity type distribution
         all_types = []
@@ -631,8 +640,9 @@ class DistributionVisualizer:
             from collections import Counter
 
             type_counts = Counter(all_types)
-            print(f"\nEntity type distribution:")
+            lines.append(f"\nEntity type distribution:")
             for entity_type, count in type_counts.most_common(10):
-                print(f"  {entity_type}: {count}")
+                lines.append(f"  {entity_type}: {count}")
 
-        print(f"\n{'=' * 60}\n")
+        lines.append(f"\n{'=' * 60}\n")
+        _log.info("\n".join(lines))

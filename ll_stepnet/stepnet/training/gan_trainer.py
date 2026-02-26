@@ -341,9 +341,10 @@ class GANTrainer:
         self.generator.eval()
         self.discriminator.eval()
 
-        # Collect real latents from training data (limit for efficiency)
+        # Collect real latents from validation data (limit for efficiency)
+        val_loader = getattr(self, 'val_dataloader', None) or self.train_dataloader
         all_real = []
-        for batch in self.train_dataloader:
+        for batch in val_loader:
             if isinstance(batch, torch.Tensor):
                 real = batch.to(self.device)
             elif isinstance(batch, dict):
@@ -462,6 +463,18 @@ class GANTrainer:
                     f"Disc Acc = {val_metrics['disc_accuracy']:.4f}"
                 )
 
+                # Update best wasserstein distance and save checkpoint if improved
+                epoch_wd = epoch_metrics["wasserstein_dist"]
+                if epoch_wd < self.best_wasserstein_dist:
+                    self.best_wasserstein_dist = epoch_wd
+                    if self.checkpoint_dir:
+                        self.save_checkpoint("best_model.pt")
+                        _log.info(
+                            "Saved best model at epoch %d (wasserstein_dist=%.6f)",
+                            epoch,
+                            epoch_wd,
+                        )
+
             # Save periodic checkpoint
             if self.checkpoint_dir and (epoch + 1) % save_every == 0:
                 self.save_checkpoint(f"checkpoint_epoch_{epoch}.pt")
@@ -510,7 +523,7 @@ class GANTrainer:
             )
 
         load_path = self.checkpoint_dir / filename
-        checkpoint = torch.load(load_path, map_location=self.device)
+        checkpoint = torch.load(load_path, map_location=self.device, weights_only=True)
 
         self.generator.load_state_dict(checkpoint["generator_state_dict"])
         self.discriminator.load_state_dict(

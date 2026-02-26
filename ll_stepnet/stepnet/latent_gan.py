@@ -48,7 +48,7 @@ class LatentGenerator(nn.Module):
             layers.extend([
                 nn.Linear(in_dim, h_dim),
                 nn.ReLU(inplace=True),
-                nn.BatchNorm1d(h_dim),
+                nn.LayerNorm(h_dim),
             ])
             in_dim = h_dim
         layers.append(nn.Linear(in_dim, latent_dim))

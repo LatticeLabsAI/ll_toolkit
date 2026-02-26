@@ -13,8 +13,15 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
 
 import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
+
+try:
+    import matplotlib.pyplot as plt
+    import matplotlib.patches as mpatches
+    _has_matplotlib = True
+except ImportError:
+    plt = None
+    mpatches = None
+    _has_matplotlib = False
 
 _log = logging.getLogger(__name__)
 

@@ -2,6 +2,7 @@
 Data loading utilities for STEP files.
 Handles dataset creation and batching.
 """
+from __future__ import annotations
 
 import torch
 from torch.utils.data import Dataset, DataLoader
@@ -86,10 +87,13 @@ class STEPDataset(Dataset):
             content = f.read()
 
         # Find DATA section
-        if 'DATA;' in content and 'ENDSEC;' in content:
+        if 'DATA;' in content:
             data_start = content.index('DATA;') + 5
-            data_end = content.index('ENDSEC;', data_start)
-            chunk_text = content[data_start:data_end].strip()
+            endsec_pos = content.find('ENDSEC;', data_start)
+            if endsec_pos != -1:
+                chunk_text = content[data_start:endsec_pos].strip()
+            else:
+                chunk_text = content[data_start:].strip()
         else:
             chunk_text = content
 

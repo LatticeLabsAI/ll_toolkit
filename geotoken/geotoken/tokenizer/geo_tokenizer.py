@@ -122,7 +122,10 @@ class GeoTokenizer:
             original_bbox_max=np.array(tokens.metadata.get("bbox_max", [0, 0, 0])),
         )
 
-        return self.normalizer.denormalize(normalized, norm_result)
+        # Pass the dequantized floats as both the coordinate data and
+        # inside the NormalizationResult so denormalize uses the correct values.
+        norm_result.normalized_vertices = normalized
+        return self.normalizer.denormalize(norm_result.normalized_vertices, norm_result)
 
     def analyze_impact(
         self,

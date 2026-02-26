@@ -21,7 +21,7 @@ from cadling.pipeline.step_pipeline import STEPPipeline
 from cadling.pipeline.stl_pipeline import STLPipeline
 from cadling.pipeline.vision_pipeline import VisionPipeline
 from cadling.pipeline.hybrid_pipeline import HybridPipeline
-from cadling.pipeline.vlm_pipeline import CADVlmPipeline, CADVlmPipelineOptions
+from cadling.pipeline.vlm_pipeline import CADVlmPipeline, VlmPipelineConfig
 from cadling.pipeline.segnet_pipeline import (
     SegNetPipeline,
     SegNetPipelineResult,
@@ -37,7 +37,7 @@ __all__ = [
     "VisionPipeline",
     "HybridPipeline",
     "CADVlmPipeline",
-    "CADVlmPipelineOptions",
+    "VlmPipelineConfig",
     "SegNetPipeline",
     "SegNetPipelineResult",
     "SegNetTokenizationResult",

@@ -620,7 +620,7 @@ class StreamingGANTrainer:
             raise ValueError("No checkpoint_dir set; cannot load checkpoint.")
 
         load_path = self.checkpoint_dir / filename
-        checkpoint = torch.load(load_path, map_location=self.device)
+        checkpoint = torch.load(load_path, map_location=self.device, weights_only=True)
 
         self.generator.load_state_dict(checkpoint["generator_state_dict"])
         self.critic.load_state_dict(checkpoint["critic_state_dict"])
