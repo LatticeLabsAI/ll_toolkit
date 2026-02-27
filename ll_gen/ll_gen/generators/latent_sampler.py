@@ -277,7 +277,8 @@ class LatentSampler:
 
                     # Trigger decoding
                     with torch.no_grad():
-                        output = self.vae_generator._model.decode(latent)
+                        latent_tensor = torch.from_numpy(latent).float().to(self.device)
+                        output = self.vae_generator._model.decode(latent_tensor)
 
                     command_logits = output.get("command_logits")
                     param_logits = output.get("param_logits")

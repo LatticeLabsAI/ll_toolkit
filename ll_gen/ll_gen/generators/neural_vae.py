@@ -12,6 +12,7 @@ from typing import Any
 import numpy as np
 
 from ll_gen.conditioning.embeddings import ConditioningEmbeddings
+from ll_gen.config import ErrorCategory
 from ll_gen.generators.base import BaseNeuralGenerator
 from ll_gen.proposals.command_proposal import CommandSequenceProposal
 
@@ -156,15 +157,20 @@ class NeuralVAEGenerator(BaseNeuralGenerator):
         if self._model is None:
             self._init_model()
 
-        result_list = self._pipeline.generate(
-            num_samples=num_candidates,
-            reconstruct=False,
-            temperature=self.temperature,
-        )
-
         proposals: list[CommandSequenceProposal] = []
 
-        for result in result_list:
+        for _ in range(num_candidates):
+            result_list = self._pipeline.generate(
+                num_samples=1,
+                reconstruct=False,
+                temperature=self.temperature,
+            )
+
+            if not result_list:
+                _log.warning("VAE pipeline returned empty result for candidate")
+                continue
+
+            result = result_list[0]
             command_dicts: list[dict[str, Any]] = []
             if "commands" in result and result["commands"]:
                 command_dicts = result["commands"]
@@ -250,11 +256,11 @@ class NeuralVAEGenerator(BaseNeuralGenerator):
         error_category = error_context.get("error_category")
         perturbation_scale = 0.1
 
-        if error_category == "topology_error":
+        if error_category == ErrorCategory.TOPOLOGY_ERROR.value:
             perturbation_scale = 0.05
-        elif error_category == "degenerate_shape":
+        elif error_category == ErrorCategory.DEGENERATE_SHAPE.value:
             perturbation_scale = 0.2
-        elif error_category == "self_intersection":
+        elif error_category == ErrorCategory.SELF_INTERSECTION.value:
             perturbation_scale = 0.08
 
         # Perturb latent

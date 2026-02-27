@@ -240,8 +240,9 @@ class BaseNeuralGenerator(ABC):
             command_logits = torch.from_numpy(command_logits)
 
         # Handle batch dimension
-        if command_logits.shape[0] > 0:
-            command_logits = command_logits[0]  # Take first sample
+        if command_logits.ndim == 3:
+            command_logits = command_logits[0]  # strip batch dim
+        # For 2D, leave as-is (already seq_len × vocab)
 
         seq_len = min(command_logits.shape[0], max_seq_len)
 
@@ -271,8 +272,8 @@ class BaseNeuralGenerator(ABC):
                     param_tensor = param_logits[param_idx]
                     if isinstance(param_tensor, np.ndarray):
                         param_tensor = torch.from_numpy(param_tensor)
-                    if param_tensor.shape[0] > 0:
-                        param_tensor = param_tensor[0]
+                    if param_tensor.ndim == 3:
+                        param_tensor = param_tensor[0]  # strip batch dim
                     if len(param_tensor.shape) > 1:
                         param_tensor = param_tensor[pos]
 
@@ -288,15 +289,15 @@ class BaseNeuralGenerator(ABC):
 
                     if isinstance(param_tensor, np.ndarray):
                         param_tensor = torch.from_numpy(param_tensor)
-                    if param_tensor.shape[0] > 0:
-                        param_tensor = param_tensor[0]
+                    if param_tensor.ndim == 3:
+                        param_tensor = param_tensor[0]  # strip batch dim
                     if len(param_tensor.shape) > 1:
                         param_tensor = param_tensor[pos]
 
                     param_val = int(torch.argmax(param_tensor).item())
                     token_ids.append(PARAM_OFFSET + param_val)
 
-        if token_ids[-1] != EOS_TOKEN_ID:
+        if token_ids[-1] not in (EOS_TOKEN_ID, EOS_CMD_TOKEN_ID):
             token_ids.append(EOS_TOKEN_ID)
 
         return token_ids
@@ -329,8 +330,8 @@ class BaseNeuralGenerator(ABC):
         if isinstance(command_logits, np.ndarray):
             command_logits = torch.from_numpy(command_logits)
 
-        if command_logits.shape[0] > 0:
-            command_logits = command_logits[0]
+        if command_logits.ndim == 3:
+            command_logits = command_logits[0]  # strip batch dim
 
         # Compute entropy of command predictions
         probs = functional.softmax(command_logits, dim=-1)

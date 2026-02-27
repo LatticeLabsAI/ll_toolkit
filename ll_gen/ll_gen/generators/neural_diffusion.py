@@ -442,10 +442,11 @@ class NeuralDiffusionGenerator(BaseNeuralGenerator):
 
         _log.warning(
             "Model produced no decodable face grids from latent "
-            "(shape=%s); returning empty geometry.",
+            "(shape=%s); returning zero-valued placeholder grids.",
             latent.shape,
         )
-        return []
+        face_grids = [np.zeros((32, 32, 3), dtype=np.float32) for _ in range(num_faces)]
+        return face_grids
 
     def _compute_confidence(
         self,
