@@ -45,6 +45,7 @@ from ll_gen.config import (
     CodegenConfig,
     CodeLanguage,
     ConditioningConfig,
+    DatasetConfig,
     DisposalConfig,
     ErrorCategory,
     ErrorSeverity,
@@ -99,6 +100,7 @@ from ll_gen.pipeline import GenerationOrchestrator, VisualVerifier
 from ll_gen.feedback import (
     build_code_feedback,
     build_neural_feedback,
+    build_training_feedback,
     compute_reward,
 )
 
@@ -156,6 +158,7 @@ __all__ = [
     "TrainingConfig",
     "ErrorCategory",
     "ErrorSeverity",
+    "DatasetConfig",
     "get_ll_gen_config",
     # Proposals
     "BaseProposal",
@@ -180,6 +183,7 @@ __all__ = [
     # Feedback
     "build_code_feedback",
     "build_neural_feedback",
+    "build_training_feedback",
     "compute_reward",
     # Conditioning
     "ConditioningEmbeddings",

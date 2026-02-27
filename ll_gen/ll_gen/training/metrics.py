@@ -280,7 +280,7 @@ class MetricsComputer:
             kl_qm = np.sum(q * (np.log(q) - np.log(m)))
 
             jsd = 0.5 * (kl_pm + kl_qm)
-            jsd = max(0.0, jsd)  # Numerical safety
+            jsd = min(1.0, max(0.0, jsd))  # Numerical safety
             jsd_values.append(jsd)
 
         # Average across axes and return

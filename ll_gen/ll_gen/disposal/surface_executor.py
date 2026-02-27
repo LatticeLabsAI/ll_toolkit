@@ -55,7 +55,7 @@ try:
 except ImportError:
     _CADLING_TOPOLOGY_MERGER_AVAILABLE = False
 
-logger = logging.getLogger(__name__)
+_log = logging.getLogger(__name__)
 
 
 def execute_latent_proposal(proposal: LatentProposal) -> Any:
@@ -81,51 +81,51 @@ def execute_latent_proposal(proposal: LatentProposal) -> Any:
             "Please install it using: pip install pythonocc-core"
         )
 
-    logger.info("Starting execution of LatentProposal")
+    _log.info("Starting execution of LatentProposal")
 
     # Step 1: Fit B-spline surfaces for each face
-    logger.info("Step 1: Fitting B-spline surfaces for %d faces", len(proposal.face_grids))
+    _log.info("Step 1: Fitting B-spline surfaces for %d faces", len(proposal.face_grids))
     faces = []
     for i, face_grid in enumerate(proposal.face_grids):
         try:
             face = _fit_bspline_surface(face_grid, tolerance=1e-3)
             faces.append(face)
-            logger.debug(f"Fitted B-spline surface for face {i}")
+            _log.debug(f"Fitted B-spline surface for face {i}")
         except Exception as e:
-            logger.error(f"Failed to fit B-spline surface for face {i}: {e}")
+            _log.error(f"Failed to fit B-spline surface for face {i}: {e}")
             raise
 
     # Step 2: Fit B-spline curves for each edge
-    logger.info("Step 2: Fitting B-spline curves for %d edges", len(proposal.edge_points))
+    _log.info("Step 2: Fitting B-spline curves for %d edges", len(proposal.edge_points))
     edges = []
     for i, edge_points in enumerate(proposal.edge_points):
         try:
             edge = _fit_bspline_curve(edge_points)
             edges.append(edge)
-            logger.debug(f"Fitted B-spline curve for edge {i}")
+            _log.debug(f"Fitted B-spline curve for edge {i}")
         except Exception as e:
-            logger.error(f"Failed to fit B-spline curve for edge {i}: {e}")
+            _log.error(f"Failed to fit B-spline curve for edge {i}: {e}")
             raise
 
     # Step 3: Mating deduplication (topology merger)
-    logger.info("Step 3: Deduplicating mating edges")
+    _log.info("Step 3: Deduplicating mating edges")
     if _CADLING_TOPOLOGY_MERGER_AVAILABLE:
-        logger.info("Using cadling TopologyMerger for topology merging")
+        _log.info("Using cadling TopologyMerger for topology merging")
         merger = TopologyMerger()
         edges = merger.merge_edges(edges)
     else:
-        logger.info("Using built-in edge deduplication")
+        _log.info("Using built-in edge deduplication")
         edges = _deduplicate_edges(edges)
 
     # Step 4: Surface trimming (edges bound faces)
-    logger.info("Step 4: Trimming surfaces with deduplicated edges")
+    _log.info("Step 4: Trimming surfaces with deduplicated edges")
     trimmed_faces = _trim_surfaces_with_edges(faces, edges)
 
     # Step 5: Shell sewing
-    logger.info("Step 5: Sewing trimmed faces into a closed solid")
+    _log.info("Step 5: Sewing trimmed faces into a closed solid")
     sewed_shape = _sew_faces(trimmed_faces)
 
-    logger.info("LatentProposal execution completed successfully")
+    _log.info("LatentProposal execution completed successfully")
     return sewed_shape
 
 
@@ -143,7 +143,7 @@ def _fit_bspline_surface(grid: np.ndarray, tolerance: float = 1e-3) -> Any:
         RuntimeError: If surface fitting fails.
     """
     if _CADLING_SURFACE_FITTER_AVAILABLE:
-        logger.debug("Using cadling BSplineSurfaceFitter")
+        _log.debug("Using cadling BSplineSurfaceFitter")
         fitter = BSplineSurfaceFitter()
         return fitter.fit_surface(grid, tolerance=tolerance)
 
@@ -172,11 +172,11 @@ def _fit_bspline_surface(grid: np.ndarray, tolerance: float = 1e-3) -> Any:
         if not face.IsDone():
             raise RuntimeError("Failed to create face from B-spline surface")
 
-        logger.debug("Successfully fitted B-spline surface")
+        _log.debug("Successfully fitted B-spline surface")
         return face.Face()
 
     except Exception as e:
-        logger.error(f"Error fitting B-spline surface: {e}")
+        _log.error(f"Error fitting B-spline surface: {e}")
         raise RuntimeError(f"B-spline surface fitting error: {e}") from e
 
 
@@ -216,11 +216,11 @@ def _fit_bspline_curve(points: np.ndarray) -> Any:
         if not edge_builder.IsDone():
             raise RuntimeError("Failed to create edge from B-spline curve")
 
-        logger.debug("Successfully fitted B-spline curve")
+        _log.debug("Successfully fitted B-spline curve")
         return edge_builder.Edge()
 
     except Exception as e:
-        logger.error(f"Error fitting B-spline curve: {e}")
+        _log.error(f"Error fitting B-spline curve: {e}")
         raise RuntimeError(f"B-spline curve fitting error: {e}") from e
 
 
@@ -240,7 +240,7 @@ def _deduplicate_edges(edges: list[Any]) -> list[Any]:
     if not _OCC_AVAILABLE:
         raise RuntimeError("pythonocc is required for edge deduplication")
 
-    logger.debug(f"Deduplicating {len(edges)} edges")
+    _log.debug(f"Deduplicating {len(edges)} edges")
 
     # Store edge data: (edge_object, bbox_center, sampled_points)
     edge_data = []
@@ -256,7 +256,7 @@ def _deduplicate_edges(edges: list[Any]) -> list[Any]:
                 'merged': False,
             })
         except Exception as e:
-            logger.warning(f"Failed to extract data from edge {i}: {e}")
+            _log.warning(f"Failed to extract data from edge {i}: {e}")
             edge_data.append({
                 'edge': edge,
                 'bbox_center': np.array([0.0, 0.0, 0.0]),
@@ -318,7 +318,7 @@ def _deduplicate_edges(edges: list[Any]) -> list[Any]:
 
                 # Check if edges should be merged
                 if bbox_dist < 0.08 and shape_sim < 0.2:
-                    logger.debug(
+                    _log.debug(
                         f"Merging edges {i} and {j} "
                         f"(bbox_dist={bbox_dist:.6f}, shape_sim={shape_sim:.6f})"
                     )
@@ -346,7 +346,7 @@ def _deduplicate_edges(edges: list[Any]) -> list[Any]:
         else:
             deduplicated_edges.append(data['edge'])
 
-    logger.debug(f"Deduplication reduced {len(edges)} edges to {len(deduplicated_edges)}")
+    _log.debug(f"Deduplication reduced {len(edges)} edges to {len(deduplicated_edges)}")
     return deduplicated_edges
 
 
@@ -483,7 +483,7 @@ def _trim_surfaces_with_edges(faces: list[Any], edges: list[Any]) -> list[Any]:
     if not _OCC_AVAILABLE:
         raise RuntimeError("pythonocc is required")
 
-    logger.debug(f"Trimming {len(faces)} surfaces with {len(edges)} edges")
+    _log.debug(f"Trimming {len(faces)} surfaces with {len(edges)} edges")
 
     trimmed_faces = []
     for i, face in enumerate(faces):
@@ -501,7 +501,7 @@ def _trim_surfaces_with_edges(faces: list[Any], edges: list[Any]) -> list[Any]:
             if not face_edges:
                 # No matching edges; keep original face
                 trimmed_faces.append(face)
-                logger.debug(f"Face {i}: no matching edges, keeping original")
+                _log.debug(f"Face {i}: no matching edges, keeping original")
                 continue
 
             # Build wire from matching edges
@@ -510,7 +510,7 @@ def _trim_surfaces_with_edges(faces: list[Any], edges: list[Any]) -> list[Any]:
                 wire_builder.Add(edge)
 
             if not wire_builder.IsDone():
-                logger.warning(f"Face {i}: wire construction failed, keeping original")
+                _log.warning(f"Face {i}: wire construction failed, keeping original")
                 trimmed_faces.append(face)
                 continue
 
@@ -522,13 +522,13 @@ def _trim_surfaces_with_edges(faces: list[Any], edges: list[Any]) -> list[Any]:
 
             if face_builder.IsDone():
                 trimmed_faces.append(face_builder.Face())
-                logger.debug(f"Face {i}: successfully trimmed with {len(face_edges)} edges")
+                _log.debug(f"Face {i}: successfully trimmed with {len(face_edges)} edges")
             else:
-                logger.warning(f"Face {i}: face construction failed, keeping original")
+                _log.warning(f"Face {i}: face construction failed, keeping original")
                 trimmed_faces.append(face)
 
         except Exception as e:
-            logger.warning(f"Failed to trim face {i}: {e}")
+            _log.warning(f"Failed to trim face {i}: {e}")
             trimmed_faces.append(face)
 
     return trimmed_faces
@@ -552,7 +552,7 @@ def _sew_faces(faces: list[Any]) -> Any:
     if not _OCC_AVAILABLE:
         raise RuntimeError("pythonocc is required")
 
-    logger.debug(f"Sewing {len(faces)} faces")
+    _log.debug(f"Sewing {len(faces)} faces")
 
     try:
         sewer = BRepBuilderAPI_Sewing()
@@ -560,7 +560,7 @@ def _sew_faces(faces: list[Any]) -> Any:
         # Add each face to the sewer
         for i, face in enumerate(faces):
             sewer.Add(face)
-            logger.debug(f"Added face {i} to sewer")
+            _log.debug(f"Added face {i} to sewer")
 
         # Perform sewing
         sewer.Perform()
@@ -571,11 +571,11 @@ def _sew_faces(faces: list[Any]) -> Any:
         # Check for free/degenerated edges
         _check_sewed_shape_quality(sewed_shape)
 
-        logger.info("Successfully sewed faces into a closed solid")
+        _log.info("Successfully sewed faces into a closed solid")
         return sewed_shape
 
     except Exception as e:
-        logger.error(f"Error sewing faces: {e}")
+        _log.error(f"Error sewing faces: {e}")
         raise RuntimeError(f"Face sewing error: {e}") from e
 
 
@@ -612,7 +612,7 @@ def _check_sewed_shape_quality(shape: Any) -> None:
                     idx += 1
                     explorer.Next()
         except Exception as e:
-            logger.debug(f"Free bounds analysis failed: {e}")
+            _log.debug(f"Free bounds analysis failed: {e}")
 
         # Detect degenerated edges
         for i in range(1, edge_map.Extent() + 1):
@@ -621,11 +621,11 @@ def _check_sewed_shape_quality(shape: Any) -> None:
                 degenerated_edges.append(i - 1)
 
         if free_edges:
-            logger.warning(f"Sewed shape has {len(free_edges)} free edges")
+            _log.warning(f"Sewed shape has {len(free_edges)} free edges")
         if degenerated_edges:
-            logger.warning(
+            _log.warning(
                 f"Sewed shape has {len(degenerated_edges)} degenerated edges"
             )
 
     except Exception as e:
-        logger.debug(f"Could not check sewed shape quality: {e}")
+        _log.debug(f"Could not check sewed shape quality: {e}")

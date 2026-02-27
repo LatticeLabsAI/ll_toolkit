@@ -12,7 +12,7 @@ from typing import Dict, List, Optional
 from ll_gen.config import CodegenConfig, CodeLanguage
 from ll_gen.proposals.code_proposal import CodeProposal
 
-logger = logging.getLogger(__name__)
+_log = logging.getLogger(__name__)
 
 # Lazy import cadling
 _CADLING_AVAILABLE = False
@@ -21,7 +21,7 @@ try:
 
     _CADLING_AVAILABLE = True
 except ImportError:
-    logger.debug("cadling not available; OpenSCADProposer will raise on use")
+    _log.debug("cadling not available; OpenSCADProposer will raise on use")
 
 
 class OpenSCADProposer:

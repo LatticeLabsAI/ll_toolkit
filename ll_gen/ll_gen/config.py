@@ -11,6 +11,10 @@ from enum import Enum
 from pathlib import Path
 from typing import Dict, List, Optional
 
+import logging
+
+_log = logging.getLogger(__name__)
+
 
 # ---------------------------------------------------------------------------
 # Enums
@@ -317,6 +321,7 @@ def get_ll_gen_config(**overrides) -> LLGenConfig:
     """
     config = LLGenConfig()
     nested: Dict[str, Dict[str, object]] = {}
+    unknown_keys: List[str] = []
 
     for key, value in overrides.items():
         if "." in key:
@@ -325,12 +330,24 @@ def get_ll_gen_config(**overrides) -> LLGenConfig:
         else:
             if hasattr(config, key):
                 setattr(config, key, value)
+            else:
+                unknown_keys.append(key)
 
     for section, attrs in nested.items():
         sub = getattr(config, section, None)
-        if sub is not None:
+        if sub is None:
+            unknown_keys.extend(f"{section}.{a}" for a in attrs)
+        else:
             for attr, value in attrs.items():
                 if hasattr(sub, attr):
                     setattr(sub, attr, value)
+                else:
+                    unknown_keys.append(f"{section}.{attr}")
+
+    if unknown_keys:
+        _log.warning(
+            "Unknown override keys ignored (possible typos): %s",
+            ", ".join(unknown_keys),
+        )
 
     return config

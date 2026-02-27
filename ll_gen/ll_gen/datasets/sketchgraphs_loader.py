@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional
 
 __all__ = ["SketchGraphsDataset", "load_sketchgraphs"]
 
-logger = logging.getLogger(__name__)
+_log = logging.getLogger(__name__)
 
 # Lazy imports
 _torch = None
@@ -114,7 +114,7 @@ class SketchGraphsDataset:
         if max_samples is not None:
             self.json_files = self.json_files[:max_samples]
 
-        logger.info(
+        _log.info(
             f"Loaded {len(self.json_files)} SketchGraphs samples from {split}"
         )
 
@@ -428,7 +428,7 @@ def load_sketchgraphs(
     """
     # Check if path is a local directory
     if os.path.isdir(path):
-        logger.info(f"Loading SketchGraphs from local directory: {path}")
+        _log.info(f"Loading SketchGraphs from local directory: {path}")
         return SketchGraphsDataset(
             data_dir=path,
             split=split,
@@ -438,7 +438,7 @@ def load_sketchgraphs(
         )
     else:
         # Load from HuggingFace Hub
-        logger.info(f"Loading SketchGraphs from HuggingFace Hub: {path}")
+        _log.info(f"Loading SketchGraphs from HuggingFace Hub: {path}")
         datasets = _get_datasets()
 
         hf_dataset = datasets.load_dataset(

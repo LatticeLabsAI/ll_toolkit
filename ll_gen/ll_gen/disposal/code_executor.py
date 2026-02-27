@@ -24,7 +24,7 @@ from typing import Any
 from ll_gen.config import CodeLanguage
 from ll_gen.proposals.code_proposal import CodeProposal
 
-logger = logging.getLogger(__name__)
+_log = logging.getLogger(__name__)
 
 # Lazy imports for optional dependencies
 _OCC_AVAILABLE = False
@@ -407,12 +407,12 @@ def _run_in_subprocess(
                 shape = _TopoDS_Shape()
                 builder = BRep_Builder()
                 if breptools.Read(shape, brep_path, builder):
-                    logger.debug("Reloaded TopoDS_Shape from BREP file")
+                    _log.debug("Reloaded TopoDS_Shape from BREP file")
                     return shape
                 else:
-                    logger.warning("Failed to read BREP file; returning metadata dict")
+                    _log.warning("Failed to read BREP file; returning metadata dict")
             except Exception as exc:
-                logger.warning("BREP reload failed: %s", exc)
+                _log.warning("BREP reload failed: %s", exc)
 
         return result
 
