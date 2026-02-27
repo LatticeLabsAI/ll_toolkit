@@ -6,10 +6,10 @@ multiple tiers:
 ==========================  =======  ===================================
 Component                   Weight   Condition
 ==========================  =======  ===================================
-Base validity               +1.0     Shape passes all BRepCheck tests
-Shape constructed           +0.3     TopoDS_Shape exists (even if invalid)
-Repairable                  +0.2     ShapeFix repaired it successfully
-Per-tier bonus              +0.1     Each passing validation tier
+Base validity               +0.8     Shape passes all BRepCheck tests
+Shape constructed           +0.16    TopoDS_Shape exists (even if invalid)
+Repairable                  +0.0     ShapeFix repaired it successfully
+Per-tier bonus              +0.16    Each passing validation tier
 Semantic match              +0.2     Bbox matches target dimensions
 Critical error penalty      −0.1     Per critical-severity finding
 ==========================  =======  ===================================
@@ -39,16 +39,16 @@ def compute_reward(
     contributing a signed delta.  The components are:
 
     1. **Base validity** (``config.validity_reward``):
-       +1.0 if the shape is completely valid, else 0.0.
+       +0.8 if the shape is completely valid, else 0.0.
 
     2. **Shape constructed** (``config.shape_constructed_reward``):
-       +0.3 if a TopoDS_Shape was produced at all (even if invalid).
+       +0.16 if a TopoDS_Shape was produced at all (even if invalid).
 
     3. **Repairable** (``config.repairable_reward``):
-       +0.2 if deterministic repair succeeded.
+       +0.0 if deterministic repair succeeded.
 
     4. **Per-tier bonus** (``config.per_tier_reward``):
-       +0.1 for each passing validation tier:
+       +0.16 for each passing validation tier:
        manifold, watertight, euler, no-self-intersection.
 
     5. **Semantic match** (``config.semantic_match_reward``):

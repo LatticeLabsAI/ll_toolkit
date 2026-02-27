@@ -402,9 +402,35 @@ def _check_watertight(result: DisposalResult) -> bool:
 
 
 def _check_euler(result: DisposalResult) -> bool:
-    """Check if Euler characteristic is valid (V - E + F = 2 for genus-0)."""
+    """Check if Euler characteristic is valid.
+
+    For genus-0 closed solids (no through-holes), the expected Euler
+    characteristic is V - E + F = 2.  However, shapes with cylindrical
+    through-holes (common in CAD) have non-genus-0 topology where
+    χ = 2 - 2g (g = number of handles/holes).  When the geometry report
+    indicates cylindrical surfaces are present, we accept χ != 2 as
+    valid since the shape likely has intentional through-holes.
+    """
     if result.geometry_report and result.geometry_report.euler_characteristic is not None:
-        return result.geometry_report.euler_characteristic == 2
+        ec = result.geometry_report.euler_characteristic
+        if ec == 2:
+            return True
+        # Shapes with cylindrical through-holes have χ < 2; accept if
+        # surface_types indicates cylinders are present (likely holes).
+        surface_types = getattr(result.geometry_report, "surface_types", None)
+        if surface_types and "Cylinder" in surface_types:
+            _log.debug(
+                "Euler characteristic %d != 2 but shape has cylindrical "
+                "surfaces — accepting non-genus-0 topology",
+                ec,
+            )
+            return True
+        _log.debug(
+            "Euler characteristic %d != 2 (genus-0 assumption); no "
+            "cylindrical surfaces detected to justify higher genus",
+            ec,
+        )
+        return False
     return False  # Missing report means shape failed validation
 
 

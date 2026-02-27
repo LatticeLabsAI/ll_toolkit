@@ -456,9 +456,21 @@ def map_brep_errors(
     # Build a lookup of known BRepCheck/BOPAlgo status enums once
     import OCC.Core.BRepCheck as brep_mod
 
+    try:
+        import OCC.Core.BOPAlgo as bopalgo_mod
+    except ImportError:
+        bopalgo_mod = None
+
     known_statuses: List[Tuple[str, Any]] = []
     for code_name in OCC_ERROR_MAP:
-        enum_obj = getattr(brep_mod, code_name, None)
+        # BOPAlgo-prefixed codes live in OCC.Core.BOPAlgo, not BRepCheck
+        if code_name.startswith("BOPAlgo_"):
+            if bopalgo_mod is not None:
+                enum_obj = getattr(bopalgo_mod, code_name, None)
+            else:
+                enum_obj = None
+        else:
+            enum_obj = getattr(brep_mod, code_name, None)
         if enum_obj is not None:
             known_statuses.append((code_name, enum_obj))
 
