@@ -160,8 +160,9 @@ class RLAlignmentTrainer:
         assert self._optimizer is not None
         assert self._disposal_engine is not None
 
-        # 1. Generate proposal
-        proposal = self.generator.generate(prompt)
+        # 1. Generate proposal (no_grad: avoid building graph during sampling)
+        with torch.no_grad():
+            proposal = self.generator.generate(prompt)
 
         # 2. Dispose (deterministic execution + validation)
         result = self._disposal_engine.dispose(proposal, export=False)
@@ -173,11 +174,14 @@ class RLAlignmentTrainer:
             target_dimensions=target_dimensions,
         )
 
-        # 4. Update baseline (EMA)
-        self._baseline = (
-            self.baseline_decay * self._baseline +
-            (1.0 - self.baseline_decay) * reward
-        )
+        # 4. Update baseline (EMA), seeding with first observed reward
+        if self._step_count == 0:
+            self._baseline = reward
+        else:
+            self._baseline = (
+                self.baseline_decay * self._baseline +
+                (1.0 - self.baseline_decay) * reward
+            )
 
         # 5. Compute advantage
         advantage = reward - self._baseline
@@ -199,6 +203,9 @@ class RLAlignmentTrainer:
                 token_ids = self._extract_token_ids(proposal)
 
             if token_ids is not None and len(token_ids) > 0:
+                # Zero gradients before teacher-forcing forward pass
+                self._optimizer.zero_grad()
+
                 # Teacher-forcing: run model with token_ids to get log_probs
                 log_probs, entropy_value = self._get_log_probs(token_ids)
 
@@ -211,7 +218,6 @@ class RLAlignmentTrainer:
                     total_loss = policy_loss + entropy_bonus
 
                     # Backward pass
-                    self._optimizer.zero_grad()
                     total_loss.backward()
 
                     # Gradient clipping
