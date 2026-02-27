@@ -365,10 +365,10 @@ class TestFeedbackConfigDefaults:
     def test_default_initialization(self) -> None:
         """Test FeedbackConfig initializes with all defaults."""
         config = FeedbackConfig()
-        assert config.validity_reward == 1.0
-        assert config.shape_constructed_reward == 0.3
-        assert config.repairable_reward == 0.2
-        assert config.per_tier_reward == 0.1
+        assert config.validity_reward == 0.8
+        assert config.shape_constructed_reward == 0.16
+        assert config.repairable_reward == 0.0
+        assert config.per_tier_reward == 0.16
         assert config.semantic_match_reward == 0.2
         assert config.critical_error_penalty == -0.1
         assert config.dimension_tolerance_pct == 0.10
