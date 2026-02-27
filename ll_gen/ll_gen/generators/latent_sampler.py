@@ -54,7 +54,6 @@ class LatentSampler:
         latent1: np.ndarray,
         latent2: np.ndarray,
         steps: int = 5,
-        seed: int | None = None,
     ) -> list[np.ndarray]:
         """Interpolate between two latent vectors via spherical linear interpolation.
 
@@ -65,7 +64,6 @@ class LatentSampler:
             latent1: First latent vector (shape: (latent_dim,)).
             latent2: Second latent vector (shape: (latent_dim,)).
             steps: Number of interpolation steps (including endpoints).
-            seed: Optional random seed for reproducibility.
 
         Returns:
             List of interpolated latent vectors, from latent1 to latent2.

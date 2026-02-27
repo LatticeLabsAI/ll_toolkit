@@ -10,36 +10,7 @@ __all__ = ["Text2CADDataset", "load_text2cad"]
 
 _log = logging.getLogger(__name__)
 
-# Lazy imports
-_torch = None
-_datasets = None
-_geotoken = None
-
-
-def _get_torch():
-    global _torch
-    if _torch is None:
-        import torch
-        _torch = torch
-    return _torch
-
-
-def _get_datasets():
-    global _datasets
-    if _datasets is None:
-        import datasets
-        _datasets = datasets
-    return _datasets
-
-
-def _get_geotoken():
-    global _geotoken
-    if _geotoken is None:
-        import geotoken
-        _geotoken = geotoken
-    return _geotoken
-
-
+from ll_gen.datasets._imports import _get_datasets, _get_geotoken, _get_torch
 from ll_gen.datasets._tokenization import (
     PAD_TOKEN_ID,
     BOS_TOKEN_ID,

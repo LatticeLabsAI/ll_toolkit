@@ -10,34 +10,7 @@ __all__ = ["SketchGraphsDataset", "load_sketchgraphs"]
 
 _log = logging.getLogger(__name__)
 
-# Lazy imports
-_torch = None
-_datasets = None
-_numpy = None
-
-
-def _get_torch():
-    global _torch
-    if _torch is None:
-        import torch
-        _torch = torch
-    return _torch
-
-
-def _get_datasets():
-    global _datasets
-    if _datasets is None:
-        import datasets
-        _datasets = datasets
-    return _datasets
-
-
-def _get_numpy():
-    global _numpy
-    if _numpy is None:
-        import numpy as np
-        _numpy = np
-    return _numpy
+from ll_gen.datasets._imports import _get_datasets, _get_numpy, _get_torch
 
 
 # Entity type encodings

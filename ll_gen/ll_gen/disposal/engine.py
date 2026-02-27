@@ -154,11 +154,13 @@ class DisposalEngine:
             )
         except ImportError:
             _log.warning("pythonocc not available; skipping validation")
-            result.is_valid = True  # Assume valid if we can't check
+            result.is_valid = False
+            result.error_message = "validation unavailable"
             val_report = None
         except Exception as exc:
             _log.warning("Validation failed: %s", exc)
-            result.is_valid = True  # Assume valid if validation can't run
+            result.is_valid = False
+            result.error_message = "validation unavailable"
             val_report = None
 
         # ----------------------------------------------------------

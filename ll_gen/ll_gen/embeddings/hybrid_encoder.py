@@ -367,10 +367,6 @@ class HybridShapeEncoder(_Base):
         graph_embedding = self._encode_graph(graph_data)
         return graph_embedding.detach().cpu().numpy()
 
-    # ------------------------------------------------------------------
-    # Override nn.Module methods to maintain backward-compatible formats
-    # ------------------------------------------------------------------
-
     def to(self, device: str) -> HybridShapeEncoder:
         """Move all parameters to device.
 
@@ -384,57 +380,3 @@ class HybridShapeEncoder(_Base):
         # Delegate to nn.Module.to which moves all registered sub-modules.
         self._nn.Module.to(self, device)
         return self
-
-    def state_dict(self) -> dict[str, Any]:
-        """Return state dictionary for all components.
-
-        Returns a nested dictionary mapping component names to their own
-        state dicts, preserving backward compatibility with existing
-        checkpoints.
-
-        Returns:
-            Dictionary mapping component names to their state dicts.
-        """
-        state: dict[str, Any] = {}
-        if self._input_projection is not None:
-            state["input_projection"] = self._input_projection.state_dict()
-        if self._transformer_encoder is not None:
-            state["transformer_encoder"] = self._transformer_encoder.state_dict()
-        if self._transformer_output_projection is not None:
-            state["transformer_output_projection"] = (
-                self._transformer_output_projection.state_dict()
-            )
-        if self._fusion_projection is not None:
-            state["fusion_projection"] = self._fusion_projection.state_dict()
-        if hasattr(self, "_gnn_encoder") and self._gnn_encoder is not None:
-            state["gnn_encoder"] = self._gnn_encoder.state_dict()
-        return state
-
-    def load_state_dict(self, state_dict: dict[str, Any], strict: bool = True) -> None:
-        """Load state dictionary.
-
-        Args:
-            state_dict: Dictionary mapping component names to state dicts.
-            strict: Ignored; kept for nn.Module API compatibility.
-        """
-        if "input_projection" in state_dict and self._input_projection is not None:
-            self._input_projection.load_state_dict(state_dict["input_projection"])
-        if "transformer_encoder" in state_dict and self._transformer_encoder is not None:
-            self._transformer_encoder.load_state_dict(
-                state_dict["transformer_encoder"]
-            )
-        if (
-            "transformer_output_projection" in state_dict
-            and self._transformer_output_projection is not None
-        ):
-            self._transformer_output_projection.load_state_dict(
-                state_dict["transformer_output_projection"]
-            )
-        if "fusion_projection" in state_dict and self._fusion_projection is not None:
-            self._fusion_projection.load_state_dict(state_dict["fusion_projection"])
-        if (
-            "gnn_encoder" in state_dict
-            and hasattr(self, "_gnn_encoder")
-            and self._gnn_encoder is not None
-        ):
-            self._gnn_encoder.load_state_dict(state_dict["gnn_encoder"])

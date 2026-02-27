@@ -5,6 +5,7 @@ using disposal engine feedback and reward signals for RL optimization.
 """
 from __future__ import annotations
 
+import json
 import logging
 import time
 from pathlib import Path
@@ -415,6 +416,8 @@ class RLAlignmentTrainer:
         """
         epoch_start = time.time()
 
+        # Copy to avoid mutating the caller's list
+        dataset = list(dataset)
         if shuffle:
             np.random.shuffle(dataset)
 
@@ -539,7 +542,6 @@ class RLAlignmentTrainer:
         checkpoint = {
             "step_count": self._step_count,
             "baseline": self._baseline,
-            "train_history": self._train_history,
         }
 
         # Save model and optimizer state
@@ -552,6 +554,12 @@ class RLAlignmentTrainer:
             )
 
         torch.save(checkpoint, path)
+
+        # Save train_history as separate JSON (avoids weights_only=True issues)
+        history_path = str(path).replace(".pt", "_history.json")
+        with open(history_path, "w") as f:
+            json.dump(self._train_history, f)
+
         _log.info("Checkpoint saved to %s", path)
 
     def load_checkpoint(self, path: Path) -> None:
@@ -576,7 +584,15 @@ class RLAlignmentTrainer:
 
         self._step_count = checkpoint.get("step_count", 0)
         self._baseline = checkpoint.get("baseline", 0.0)
-        self._train_history = checkpoint.get("train_history", [])
+
+        # Load train_history from separate JSON file
+        history_path = str(path).replace(".pt", "_history.json")
+        try:
+            with open(history_path, "r") as f:
+                self._train_history = json.load(f)
+        except FileNotFoundError:
+            _log.warning("No history file found at %s; starting fresh", history_path)
+            self._train_history = checkpoint.get("train_history", [])
 
         # Load model and optimizer state
         if "model_state_dict" in checkpoint and self.generator._model is not None:

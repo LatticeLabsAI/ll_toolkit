@@ -537,20 +537,22 @@ class TestStateDictManagement:
     def test_state_dict_contains_expected_keys(self, default_encoder):
         """Test that state_dict contains expected component keys."""
         state = default_encoder.state_dict()
-        # Should have at least input and transformer projections
-        expected_keys = {
-            "input_projection",
-            "transformer_encoder",
-            "transformer_output_projection",
+        # nn.Module state_dict uses dotted keys like "_input_projection.weight"
+        key_prefixes = {k.split(".")[0] for k in state.keys()}
+        expected_prefixes = {
+            "_input_projection",
+            "_transformer_encoder",
+            "_transformer_output_projection",
         }
-        assert expected_keys.issubset(state.keys())
+        assert expected_prefixes.issubset(key_prefixes)
 
     @pytest.mark.unit
-    def test_state_dict_values_are_dicts(self, default_encoder):
-        """Test that state_dict values are themselves dicts."""
+    def test_state_dict_values_are_tensors(self, default_encoder):
+        """Test that state_dict values are tensors (standard nn.Module format)."""
+        import torch
         state = default_encoder.state_dict()
         for _key, value in state.items():
-            assert isinstance(value, dict)
+            assert isinstance(value, torch.Tensor)
 
     @pytest.mark.unit
     def test_load_state_dict_roundtrip(self, default_encoder, sample_conditioning):
@@ -585,17 +587,20 @@ class TestStateDictManagement:
     def test_load_state_dict_partial(self, default_encoder):
         """Test loading partial state dict (only some components)."""
         state = default_encoder.state_dict()
-        # Create dict with only input_projection
-        partial_state = {"input_projection": state["input_projection"]}
-        # Should not raise
-        default_encoder.load_state_dict(partial_state)
+        # Create dict with only _input_projection keys
+        partial_state = {
+            k: v for k, v in state.items()
+            if k.startswith("_input_projection")
+        }
+        # Should not raise with strict=False
+        default_encoder.load_state_dict(partial_state, strict=False)
 
     @pytest.mark.unit
     def test_state_dict_preserves_weights(self, default_encoder):
         """Test that state_dict preserves weight values."""
         state1 = default_encoder.state_dict()
-        # Verify we can extract actual weight values
-        input_proj_weights = state1["input_projection"]["weight"]
+        # Verify we can extract actual weight values (standard nn.Module dotted keys)
+        input_proj_weights = state1["_input_projection.weight"]
         assert input_proj_weights.shape[0] == default_encoder.transformer_dim
         assert input_proj_weights.shape[1] == default_encoder.input_dim
 
