@@ -548,14 +548,22 @@ class TestSubprocessIPC:
     def test_run_in_subprocess_success(self) -> None:
         """Test _run_in_subprocess returns parsed JSON on success."""
         from ll_gen.disposal.code_executor import _run_in_subprocess
+        import os
 
-        success_json = json.dumps({"success": True, "shape_type": "TopoDS_Shape"})
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_result.stdout = success_json
-        mock_result.stderr = ""
+        success_data = {"success": True, "shape_type": "TopoDS_Shape"}
 
-        with patch("subprocess.run", return_value=mock_result):
+        def _fake_run(cmd, **kwargs):
+            # Write result.json in the tmpdir (same dir as user_code.py)
+            tmpdir = os.path.dirname(cmd[2])  # cmd[2] is code_path
+            with open(os.path.join(tmpdir, "result.json"), "w") as f:
+                f.write(json.dumps(success_data))
+            mock_result = MagicMock()
+            mock_result.returncode = 0
+            mock_result.stdout = ""
+            mock_result.stderr = ""
+            return mock_result
+
+        with patch("subprocess.run", side_effect=_fake_run):
             result = _run_in_subprocess(
                 "print('hello')", "result = 42", 30, "Test"
             )
@@ -576,14 +584,21 @@ class TestSubprocessIPC:
     def test_run_in_subprocess_failure_json(self) -> None:
         """Test _run_in_subprocess raises RuntimeError on failure JSON."""
         from ll_gen.disposal.code_executor import _run_in_subprocess
+        import os
 
-        fail_json = json.dumps({"success": False, "error": "Something went wrong"})
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_result.stdout = fail_json
-        mock_result.stderr = ""
+        fail_data = {"success": False, "error": "Something went wrong"}
 
-        with patch("subprocess.run", return_value=mock_result):
+        def _fake_run(cmd, **kwargs):
+            tmpdir = os.path.dirname(cmd[2])
+            with open(os.path.join(tmpdir, "result.json"), "w") as f:
+                f.write(json.dumps(fail_data))
+            mock_result = MagicMock()
+            mock_result.returncode = 0
+            mock_result.stdout = ""
+            mock_result.stderr = ""
+            return mock_result
+
+        with patch("subprocess.run", side_effect=_fake_run):
             with pytest.raises(RuntimeError, match="Something went wrong"):
                 _run_in_subprocess("print('hello')", "bad code", 30, "Test")
 
@@ -603,12 +618,18 @@ class TestSubprocessIPC:
     def test_run_in_subprocess_invalid_json(self) -> None:
         """Test _run_in_subprocess raises RuntimeError on invalid JSON."""
         from ll_gen.disposal.code_executor import _run_in_subprocess
+        import os
 
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_result.stdout = "not json at all"
-        mock_result.stderr = ""
+        def _fake_run(cmd, **kwargs):
+            tmpdir = os.path.dirname(cmd[2])
+            with open(os.path.join(tmpdir, "result.json"), "w") as f:
+                f.write("not json at all")
+            mock_result = MagicMock()
+            mock_result.returncode = 0
+            mock_result.stdout = ""
+            mock_result.stderr = ""
+            return mock_result
 
-        with patch("subprocess.run", return_value=mock_result):
+        with patch("subprocess.run", side_effect=_fake_run):
             with pytest.raises(RuntimeError, match="invalid JSON"):
                 _run_in_subprocess("print('hello')", "x = 1", 30, "Test")

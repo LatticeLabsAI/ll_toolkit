@@ -19,7 +19,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
-from typing import Any
+from typing import Any, Union
 
 from ll_gen.config import CodeLanguage
 from ll_gen.proposals.code_proposal import CodeProposal
@@ -90,15 +90,26 @@ _CADQUERY_WRAPPER = textwrap.dedent("""\
         "numpy": numpy,
     }
 
+    import os as _os_init
+    def _write_result_and_exit(meta_dict):
+        _rp = _os_init.path.join(_os_init.path.dirname(sys.argv[1]), "result.json")
+        with open(_rp, 'w') as _f:
+            _f.write(json.dumps(meta_dict))
+        sys.exit(0)
+
     code = open(sys.argv[1]).read()
+    # Redirect stdout so user print() calls don't interfere with IPC
+    _orig_stdout = sys.stdout
+    sys.stdout = sys.stderr
     try:
         exec(code, namespace)
     except Exception as exc:
-        print(json.dumps({
+        _write_result_and_exit({
             "success": False,
             "error": f"CadQuery execution failed: {type(exc).__name__}: {exc}",
-        }))
-        sys.exit(0)
+        })
+    finally:
+        sys.stdout = _orig_stdout
 
     result_obj = None
     for var_name in ("result", "part", "model", "shape", "body", "solid"):
@@ -107,12 +118,11 @@ _CADQUERY_WRAPPER = textwrap.dedent("""\
             break
 
     if result_obj is None:
-        print(json.dumps({
+        _write_result_and_exit({
             "success": False,
             "error": ("CadQuery execution did not produce a result. "
                       "Expected one of: result, part, model, shape, body, solid"),
-        }))
-        sys.exit(0)
+        })
 
     # Extract metadata from the CadQuery result
     meta = {"success": True, "shape_type": type(result_obj).__name__}
@@ -180,7 +190,10 @@ _CADQUERY_WRAPPER = textwrap.dedent("""\
         except Exception:
             pass
 
-    print(json.dumps(meta))
+    import os as _os2
+    _result_path = _os2.path.join(_os2.path.dirname(sys.argv[1]), "result.json")
+    with open(_result_path, 'w') as _rf:
+        _rf.write(json.dumps(meta))
 """)
 
 
@@ -210,15 +223,26 @@ _PYTHONOCC_WRAPPER = textwrap.dedent("""\
     except Exception:
         pass
 
+    import os as _os_init
+    def _write_result_and_exit(meta_dict):
+        _rp = _os_init.path.join(_os_init.path.dirname(sys.argv[1]), "result.json")
+        with open(_rp, 'w') as _f:
+            _f.write(json.dumps(meta_dict))
+        sys.exit(0)
+
     code = open(sys.argv[1]).read()
+    # Redirect stdout so user print() calls don't interfere with IPC
+    _orig_stdout = sys.stdout
+    sys.stdout = sys.stderr
     try:
         exec(code, namespace)
     except Exception as exc:
-        print(json.dumps({
+        _write_result_and_exit({
             "success": False,
             "error": f"pythonocc execution failed: {type(exc).__name__}: {exc}",
-        }))
-        sys.exit(0)
+        })
+    finally:
+        sys.stdout = _orig_stdout
 
     result_obj = None
     for var_name in ("result", "part", "model", "shape", "body", "solid"):
@@ -227,19 +251,17 @@ _PYTHONOCC_WRAPPER = textwrap.dedent("""\
             break
 
     if result_obj is None:
-        print(json.dumps({
+        _write_result_and_exit({
             "success": False,
             "error": ("pythonocc execution did not produce a result. "
                       "Expected one of: result, part, model, shape, body, solid"),
-        }))
-        sys.exit(0)
+        })
 
     if not isinstance(result_obj, TopoDS_Shape):
-        print(json.dumps({
+        _write_result_and_exit({
             "success": False,
             "error": f"pythonocc result is not a TopoDS_Shape, got: {type(result_obj)}",
-        }))
-        sys.exit(0)
+        })
 
     meta = {"success": True, "shape_type": type(result_obj).__name__}
     try:
@@ -289,7 +311,10 @@ _PYTHONOCC_WRAPPER = textwrap.dedent("""\
     except Exception:
         pass
 
-    print(json.dumps(meta))
+    import os as _os2
+    _result_path = _os2.path.join(_os2.path.dirname(sys.argv[1]), "result.json")
+    with open(_result_path, 'w') as _rf:
+        _rf.write(json.dumps(meta))
 """)
 
 
@@ -329,7 +354,7 @@ def execute_code_proposal(
 
 def _run_in_subprocess(
     wrapper_script: str, code: str, timeout: int, language_label: str
-) -> dict[str, Any]:
+) -> Union[dict[str, Any], Any]:
     """Write code to a temp file, run wrapper_script in a subprocess, parse JSON.
 
     Args:
@@ -371,24 +396,28 @@ def _run_in_subprocess(
                 f"{type(e).__name__}: {str(e)}"
             ) from e
 
-        stdout = completed.stdout.strip()
-        if completed.returncode != 0 and not stdout:
+        # Read result from file-based IPC (immune to user print() pollution)
+        result_path = os.path.join(tmpdir, "result.json")
+        if os.path.isfile(result_path):
+            with open(result_path, "r") as rf:
+                result_text = rf.read()
+            try:
+                result = json.loads(result_text)
+            except json.JSONDecodeError as e:
+                raise RuntimeError(
+                    f"{language_label} execution produced invalid JSON: {result_text[:200]}"
+                ) from e
+        else:
+            # Fallback: no result file written (e.g. early exit or crash)
             stderr = completed.stderr.strip()
-            raise RuntimeError(
-                f"{language_label} execution failed: {stderr}"
-            )
-
-        if not stdout:
+            stdout = completed.stdout.strip()
+            if completed.returncode != 0:
+                raise RuntimeError(
+                    f"{language_label} execution failed: {stderr or stdout}"
+                )
             raise RuntimeError(
                 f"{language_label} execution produced no output"
             )
-
-        try:
-            result = json.loads(stdout)
-        except json.JSONDecodeError as e:
-            raise RuntimeError(
-                f"{language_label} execution produced invalid JSON: {stdout[:200]}"
-            ) from e
 
         if not result.get("success", False):
             error_msg = result.get("error", "Unknown error")
@@ -441,7 +470,12 @@ def _execute_cadquery(code: str, timeout: int) -> Any:
             "pythonocc is not available. Install it with: pip install pythonocc"
         )
 
-    return _run_in_subprocess(_CADQUERY_WRAPPER, code, timeout, "CadQuery")
+    result = _run_in_subprocess(_CADQUERY_WRAPPER, code, timeout, "CadQuery")
+    if isinstance(result, dict):
+        _log.debug("CadQuery returned metadata dict with keys: %s", list(result.keys()))
+    else:
+        _log.debug("CadQuery returned TopoDS_Shape object")
+    return result
 
 
 def _convert_ocp_to_occ(ocp_shape: Any) -> Any:
@@ -599,4 +633,9 @@ def _execute_pythonocc(code: str, timeout: int) -> Any:
             "pythonocc is not available. Install it with: pip install pythonocc"
         )
 
-    return _run_in_subprocess(_PYTHONOCC_WRAPPER, code, timeout, "pythonocc")
+    result = _run_in_subprocess(_PYTHONOCC_WRAPPER, code, timeout, "pythonocc")
+    if isinstance(result, dict):
+        _log.debug("pythonocc returned metadata dict with keys: %s", list(result.keys()))
+    else:
+        _log.debug("pythonocc returned TopoDS_Shape object")
+    return result
