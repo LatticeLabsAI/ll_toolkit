@@ -63,21 +63,26 @@ def quantize_parameter(
 ) -> int:
     """Quantize a continuous parameter to a discrete token level.
 
-    The parameter is first normalized to [0, 1] by dividing by
-    ``normalization_range`` and clamping, then mapped to an integer
-    in ``[0, 2**quantization_bits - 1]``.
+    The parameter is first mapped from the symmetric range
+    ``[-normalization_range, +normalization_range]`` to ``[0, 1]`` via::
+
+        normalized = (value + normalization_range) / (2 * normalization_range)
+
+    then quantized to an integer in ``[0, 2**quantization_bits - 1]``.
+    This preserves negative coordinates (e.g. DeepCAD's ``[-1, 1]`` range).
 
     Args:
         value: Raw parameter value (numeric or convertible to float).
         quantization_bits: Number of quantization bits.
-        normalization_range: Divisor for normalization (default 2.0).
+        normalization_range: Half-extent of the symmetric range (default 2.0,
+            meaning values in ``[-2, 2]`` are representable).
 
     Returns:
         Integer quantized value in ``[0, 2**quantization_bits - 1]``.
     """
     quantization_levels = 2**quantization_bits
     try:
-        normalized = float(value) / normalization_range
+        normalized = (float(value) + normalization_range) / (2.0 * normalization_range)
         normalized = max(0.0, min(1.0, normalized))
     except (ValueError, TypeError):
         normalized = 0.0

@@ -203,19 +203,19 @@ class CommandSequenceProposal(BaseProposal):
         """Dequantize command parameters to continuous float values.
 
         Maps quantized integer parameters back to continuous coordinates
-        using linear interpolation within the normalization range::
+        using the inverse of the symmetric quantization::
 
-            value = (param / (levels - 1)) * range - (range / 2)
+            value = (param / (levels - 1)) * 2 * range - range
 
         where ``levels = 2 ** quantization_bits`` and
-        ``range = normalization_range``.
+        ``range = normalization_range``.  This maps ``[0, levels-1]``
+        back to ``[-range, +range]``.
 
         Returns:
             List of dicts with ``command_type`` (str), ``parameters``
             (list of floats), and ``parameter_mask`` (list of bools).
         """
         levels = 2 ** self.quantization_bits
-        half_range = self.normalization_range / 2.0
         result = []
 
         source = self.command_dicts
@@ -237,7 +237,7 @@ class CommandSequenceProposal(BaseProposal):
             params_float = []
             for p, m in zip(params_int, mask):
                 if m:
-                    val = (p / (levels - 1)) * self.normalization_range - half_range
+                    val = (p / (levels - 1)) * 2.0 * self.normalization_range - self.normalization_range
                     params_float.append(float(val))
                 else:
                     params_float.append(0.0)

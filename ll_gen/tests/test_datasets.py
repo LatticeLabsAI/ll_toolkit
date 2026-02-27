@@ -223,10 +223,10 @@ class TestDeepCADTokenization:
             normalization_range=2.0,
         )
 
-        # For value 0.5 with range 2.0 and 8-bit:
-        # normalized = 0.5 / 2.0 = 0.25
-        # quantized = round(0.25 * (256 - 1)) = round(63.75) = 64
-        assert result["command_tokens"][1]["parameters"][0] == 64
+        # For value 0.5 with range 2.0 and 8-bit (symmetric normalization):
+        # normalized = (0.5 + 2.0) / (2 * 2.0) = 2.5 / 4.0 = 0.625
+        # quantized = round(0.625 * (256 - 1)) = round(159.375) = 159
+        assert result["command_tokens"][1]["parameters"][0] == 159
 
     def test_quantization_clamping(self):
         """Test that quantized values are clamped to valid range."""

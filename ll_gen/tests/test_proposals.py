@@ -579,16 +579,16 @@ class TestCommandSequenceProposalDequantize:
                 assert isinstance(p, float)
 
     def test_dequantize_range_mapping(self, command_proposal):
-        """dequantize() maps quantized values to [-range/2, range/2]."""
-        # For 8-bit quantization: levels = 256
-        # 0 maps to: (0/255) * 2.0 - 1.0 = -1.0
-        # 255 maps to: (255/255) * 2.0 - 1.0 = 1.0
-        # 128 (middle) maps to: (128/255) * 2.0 - 1.0 ≈ 0.003
+        """dequantize() maps quantized values to [-range, +range]."""
+        # For 8-bit quantization with normalization_range=2.0: levels = 256
+        # 0 maps to: (0/255) * 4.0 - 2.0 = -2.0
+        # 255 maps to: (255/255) * 4.0 - 2.0 = 2.0
+        # 128 (middle) maps to: (128/255) * 4.0 - 2.0 ≈ 0.008
         dequant = command_proposal.dequantize()
-        # Check that at least one parameter is close to expected range
+        # Check that all parameters are within [-range, +range]
         for cmd in dequant:
             for param in cmd["parameters"]:
-                assert -1.1 < param < 1.1  # Slightly wider for floating point
+                assert -2.1 < param < 2.1  # Slightly wider for floating point
 
     def test_dequantize_128_middle_value(self):
         """dequantize() 128 with 8-bit quantization ≈ 0."""
@@ -606,8 +606,8 @@ class TestCommandSequenceProposalDequantize:
             normalization_range=2.0,
         )
         dequant = prop.dequantize()
-        # 128/255 * 2.0 - 1.0 ≈ 0.00392
-        assert abs(dequant[0]["parameters"][0] - 0.004) < 0.01
+        # 128/255 * 4.0 - 2.0 ≈ 0.00784
+        assert abs(dequant[0]["parameters"][0] - 0.008) < 0.01
 
     def test_dequantize_255_max_value(self):
         """dequantize() 255 with 8-bit quantization ≈ 1.0."""
@@ -625,8 +625,8 @@ class TestCommandSequenceProposalDequantize:
             normalization_range=2.0,
         )
         dequant = prop.dequantize()
-        # 255/255 * 2.0 - 1.0 = 1.0
-        assert abs(dequant[0]["parameters"][0] - 1.0) < 0.01
+        # 255/255 * 4.0 - 2.0 = 2.0
+        assert abs(dequant[0]["parameters"][0] - 2.0) < 0.01
 
     def test_dequantize_respects_mask(self):
         """dequantize() only converts masked parameters."""
