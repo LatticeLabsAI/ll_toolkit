@@ -11,6 +11,7 @@ import logging
 
 import numpy as np
 
+from ll_gen.conditioning._utils import safe_no_grad as _safe_no_grad
 from ll_gen.conditioning.embeddings import ConditioningEmbeddings
 
 _log = logging.getLogger(__name__)
@@ -84,7 +85,7 @@ class TextConditioningEncoder:
             )
             tokens = {k: v.to(self.device) for k, v in tokens.items()}
 
-            with self._safe_no_grad():
+            with _safe_no_grad():
                 outputs = self._conditioner.model(**tokens, output_hidden_states=True)
 
             # Extract last hidden state for token embeddings
@@ -124,7 +125,57 @@ class TextConditioningEncoder:
         Returns:
             List of ConditioningEmbeddings.
         """
-        return [self.encode(prompt) for prompt in prompts]
+        if not _STEPNET_AVAILABLE:
+            return [self.encode(prompt) for prompt in prompts]
+
+        try:
+            if self._conditioner is None:
+                self._init_conditioner()
+
+            # Tokenize all prompts at once
+            tokens = self._conditioner.tokenizer(
+                prompts,
+                return_tensors="pt",
+                max_length=512,
+                truncation=True,
+                padding=True,
+            )
+            tokens = {k: v.to(self.device) for k, v in tokens.items()}
+
+            with _safe_no_grad():
+                outputs = self._conditioner.model(**tokens, output_hidden_states=True)
+
+            token_emb_all = outputs.last_hidden_state.detach().cpu().numpy()
+            attention_mask = tokens.get("attention_mask")
+
+            results = []
+            for i in range(len(prompts)):
+                token_emb_i = token_emb_all[i]
+                if attention_mask is not None:
+                    mask_i = attention_mask[i].float().unsqueeze(-1).cpu().numpy()
+                    pooled_i = (token_emb_i * mask_i).sum(axis=0) / (
+                        mask_i.sum(axis=0) + 1e-9
+                    )
+                else:
+                    pooled_i = token_emb_i.mean(axis=0)
+
+                results.append(
+                    ConditioningEmbeddings(
+                        token_embeddings=token_emb_i,
+                        pooled_embedding=pooled_i,
+                        source_type="text",
+                        source_model=self.model_name,
+                        embed_dim=self.conditioning_dim,
+                        metadata={
+                            "prompt": prompts[i],
+                            "seq_len": token_emb_i.shape[0],
+                        },
+                    )
+                )
+            return results
+        except Exception as e:
+            _log.warning(f"Error batch encoding with ll_stepnet: {e}; using fallback loop")
+            return [self.encode(prompt) for prompt in prompts]
 
     def _init_conditioner(self) -> None:
         """Lazy-initialize the TextConditioner.
@@ -200,20 +251,4 @@ class TextConditioningEncoder:
         Returns:
             torch.no_grad() context manager or a no-op context manager.
         """
-        try:
-            import torch
-
-            return torch.no_grad()
-        except ImportError:
-
-            class NoOp:
-                """No-op context manager when torch unavailable."""
-
-                def __enter__(self):
-                    return self
-
-                def __exit__(self, *args):
-                    """Exit context, doing nothing."""
-                    return False
-
-            return NoOp()
+        return _safe_no_grad()

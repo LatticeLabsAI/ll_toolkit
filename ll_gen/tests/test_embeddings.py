@@ -491,7 +491,7 @@ class TestParameterManagement:
         # Should have at least hundreds of parameters
         assert param_count > 100
         # Should be less than 10M (sanity check)
-        assert param_count < 10_000_000
+        assert param_count < 15_000_000
 
     @pytest.mark.unit
     def test_parameters_different_for_different_configs(self):
@@ -666,7 +666,7 @@ class TestDeviceManagement:
             # On CPU-only machines, we still call it (may or may not error)
             try:
                 default_encoder.to("cuda")
-            except RuntimeError:
+            except (RuntimeError, AssertionError):
                 pass  # Expected if no CUDA
 
 

@@ -94,6 +94,7 @@ class ConstraintPredictor:
         self.embedding_dim = embedding_dim
         self._learned_model = None
         self._learned_model_initialized = False
+        self.use_learned_model = False
 
     def predict_from_prompt(self, prompt: str) -> list[ConstraintPrediction]:
         """Extract constraints from natural language prompt.
@@ -312,9 +313,19 @@ class ConstraintPredictor:
         weights: dict[str, float] = {}
         for pred in predictions:
             constraint_name = pred.constraint_type.value
-            weights[constraint_name] = pred.confidence
+            if constraint_name in weights:
+                weights[constraint_name] = max(weights[constraint_name], pred.confidence)
+            else:
+                weights[constraint_name] = pred.confidence
 
         return weights
+
+    def initialize_learned_model(self) -> None:
+        """Public entry point for initializing the learned constraint model.
+
+        Delegates to ``_init_learned_model`` which creates the MLP.
+        """
+        self._init_learned_model()
 
     def _init_learned_model(self) -> None:
         """Initialize the learned constraint prediction MLP.

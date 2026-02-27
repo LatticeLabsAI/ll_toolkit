@@ -12,8 +12,17 @@ import numpy as np
 
 _log = logging.getLogger(__name__)
 
+# Dynamically resolve nn.Module as base class so that
+# parameters(), train(), eval(), to() etc. work natively.
+try:
+    import torch.nn as _nn
 
-class HybridShapeEncoder:
+    _Base = _nn.Module
+except ImportError:
+    _Base = object
+
+
+class HybridShapeEncoder(_Base):
     """Fused Transformer + GNN encoder for shape understanding.
 
     Combines conditioning embeddings (text/image) processed through
@@ -22,6 +31,10 @@ class HybridShapeEncoder:
 
     The two branches produce fixed-dimension embeddings that are fused
     via concatenation + linear projection.
+
+    Inherits from ``torch.nn.Module`` so that ``parameters()``,
+    ``state_dict()``, ``load_state_dict()``, ``train()``, ``eval()``,
+    and ``to()`` work automatically via the standard PyTorch machinery.
 
     Args:
         input_dim: Dimension of input conditioning embeddings. Defaults to 768.
@@ -75,34 +88,7 @@ class HybridShapeEncoder:
             graph_encoder_type: Type of graph encoder.
             device: Target device.
         """
-        self.input_dim = input_dim
-        self.transformer_dim = transformer_dim
-        self.graph_dim = graph_dim
-        self.output_dim = output_dim
-        self.num_transformer_layers = num_transformer_layers
-        self.num_heads = num_heads
-        self.dropout = dropout
-        self.graph_encoder_type = graph_encoder_type
-        self.device = device
-
-        # Lazy-initialized torch components
-        self._torch = None
-        self._nn = None
-        self._input_projection = None
-        self._transformer_encoder = None
-        self._transformer_output_projection = None
-        self._fusion_projection = None
-        self._gnn_encoder = None
-        self._has_gnn = False
-
-        self._initialize_torch_components()
-
-    def _initialize_torch_components(self) -> None:
-        """Initialize torch components (lazy import).
-
-        Sets up transformer and GNN branches. GNN branch is optional and
-        only initialized if cadling is available.
-        """
+        # Lazy-import torch — must succeed before we call super().__init__().
         try:
             import torch
             import torch.nn as nn
@@ -115,33 +101,61 @@ class HybridShapeEncoder:
                 "'conda install pytorch::pytorch -c conda-forge'"
             ) from exc
 
-        # Input projection
-        self._input_projection = self._nn.Linear(self.input_dim, self.transformer_dim)
+        # Initialise nn.Module base class.
+        super().__init__()
+
+        self.input_dim = input_dim
+        self.transformer_dim = transformer_dim
+        self.graph_dim = graph_dim
+        self.output_dim = output_dim
+        self.num_transformer_layers = num_transformer_layers
+        self.num_heads = num_heads
+        self.dropout = dropout
+        self.graph_encoder_type = graph_encoder_type
+        self.device = device
+
+        self._has_gnn = False
+
+        self._initialize_torch_components()
+
+    def _initialize_torch_components(self) -> None:
+        """Initialize torch components.
+
+        Sets up transformer and GNN branches. GNN branch is optional and
+        only initialized if cadling is available.  Sub-modules are registered
+        via normal attribute assignment so ``nn.Module`` tracks them.
+        """
+        nn = self._nn
+
+        # Input projection — registered as a submodule automatically.
+        self._input_projection = nn.Linear(self.input_dim, self.transformer_dim)
 
         # Transformer encoder
-        encoder_layer = self._nn.TransformerEncoderLayer(
+        encoder_layer = nn.TransformerEncoderLayer(
             d_model=self.transformer_dim,
             nhead=self.num_heads,
             dim_feedforward=self.transformer_dim * 4,
             dropout=self.dropout,
             batch_first=True,
         )
-        self._transformer_encoder = self._nn.TransformerEncoder(
+        self._transformer_encoder = nn.TransformerEncoder(
             encoder_layer, num_layers=self.num_transformer_layers
         )
 
         # Determine output projection size based on graph availability
         has_graph = self._try_initialize_gnn()
         transformer_out_dim = self.output_dim // 2 if has_graph else self.output_dim
-        self._transformer_output_projection = self._nn.Linear(
+        self._transformer_output_projection = nn.Linear(
             self.transformer_dim, transformer_out_dim
         )
 
         # Fusion projection (only if graph is available)
         if has_graph:
-            self._fusion_projection = self._nn.Linear(
+            self._fusion_projection = nn.Linear(
                 transformer_out_dim + self.graph_dim, self.output_dim
             )
+        else:
+            self._fusion_projection = None
 
         # Move to device
         self.to(self.device)
@@ -353,6 +367,10 @@ class HybridShapeEncoder:
         graph_embedding = self._encode_graph(graph_data)
         return graph_embedding.detach().cpu().numpy()
 
+    # ------------------------------------------------------------------
+    # Override nn.Module methods to maintain backward-compatible formats
+    # ------------------------------------------------------------------
+
     def to(self, device: str) -> HybridShapeEncoder:
         """Move all parameters to device.
 
@@ -363,74 +381,21 @@ class HybridShapeEncoder:
             Self for chaining.
         """
         self.device = device
-        if self._input_projection is not None:
-            self._input_projection = self._input_projection.to(device)
-        if self._transformer_encoder is not None:
-            self._transformer_encoder = self._transformer_encoder.to(device)
-        if self._transformer_output_projection is not None:
-            self._transformer_output_projection = (
-                self._transformer_output_projection.to(device)
-            )
-        if self._fusion_projection is not None:
-            self._fusion_projection = self._fusion_projection.to(device)
-        if self._gnn_encoder is not None:
-            self._gnn_encoder = self._gnn_encoder.to(device)
+        # Delegate to nn.Module.to which moves all registered sub-modules.
+        self._nn.Module.to(self, device)
         return self
-
-    def eval(self) -> None:
-        """Set all submodules to evaluation mode."""
-        if self._input_projection is not None:
-            self._input_projection.eval()
-        if self._transformer_encoder is not None:
-            self._transformer_encoder.eval()
-        if self._transformer_output_projection is not None:
-            self._transformer_output_projection.eval()
-        if self._fusion_projection is not None:
-            self._fusion_projection.eval()
-        if self._gnn_encoder is not None:
-            self._gnn_encoder.eval()
-
-    def train(self, mode: bool = True) -> None:
-        """Set all submodules to training mode.
-
-        Args:
-            mode: Whether to enable training mode. Defaults to True.
-        """
-        if self._input_projection is not None:
-            self._input_projection.train(mode)
-        if self._transformer_encoder is not None:
-            self._transformer_encoder.train(mode)
-        if self._transformer_output_projection is not None:
-            self._transformer_output_projection.train(mode)
-        if self._fusion_projection is not None:
-            self._fusion_projection.train(mode)
-        if self._gnn_encoder is not None:
-            self._gnn_encoder.train(mode)
-
-    def parameters(self):
-        """Yield all trainable parameters.
-
-        Yields:
-            torch.nn.Parameter instances.
-        """
-        if self._input_projection is not None:
-            yield from self._input_projection.parameters()
-        if self._transformer_encoder is not None:
-            yield from self._transformer_encoder.parameters()
-        if self._transformer_output_projection is not None:
-            yield from self._transformer_output_projection.parameters()
-        if self._fusion_projection is not None:
-            yield from self._fusion_projection.parameters()
-        if self._gnn_encoder is not None:
-            yield from self._gnn_encoder.parameters()
 
     def state_dict(self) -> dict[str, Any]:
         """Return state dictionary for all components.
 
+        Returns a nested dictionary mapping component names to their own
+        state dicts, preserving backward compatibility with existing
+        checkpoints.
+
         Returns:
             Dictionary mapping component names to their state dicts.
         """
-        state = {}
+        state: dict[str, Any] = {}
         if self._input_projection is not None:
             state["input_projection"] = self._input_projection.state_dict()
         if self._transformer_encoder is not None:
@@ -441,15 +406,16 @@ class HybridShapeEncoder:
             )
         if self._fusion_projection is not None:
             state["fusion_projection"] = self._fusion_projection.state_dict()
-        if self._gnn_encoder is not None:
+        if hasattr(self, "_gnn_encoder") and self._gnn_encoder is not None:
             state["gnn_encoder"] = self._gnn_encoder.state_dict()
         return state
 
-    def load_state_dict(self, state_dict: dict[str, Any]) -> None:
+    def load_state_dict(self, state_dict: dict[str, Any], strict: bool = True) -> None:
         """Load state dictionary.
 
         Args:
             state_dict: Dictionary mapping component names to state dicts.
+            strict: Ignored; kept for nn.Module API compatibility.
         """
         if "input_projection" in state_dict and self._input_projection is not None:
             self._input_projection.load_state_dict(state_dict["input_projection"])
@@ -466,5 +432,9 @@ class HybridShapeEncoder:
             )
         if "fusion_projection" in state_dict and self._fusion_projection is not None:
             self._fusion_projection.load_state_dict(state_dict["fusion_projection"])
-        if "gnn_encoder" in state_dict and self._gnn_encoder is not None:
+        if (
+            "gnn_encoder" in state_dict
+            and hasattr(self, "_gnn_encoder")
+            and self._gnn_encoder is not None
+        ):
             self._gnn_encoder.load_state_dict(state_dict["gnn_encoder"])

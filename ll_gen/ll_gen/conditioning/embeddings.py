@@ -158,30 +158,32 @@ class ConditioningEmbeddings:
         # Check pooled embedding
         if self.pooled_embedding is not None:
             if self.pooled_embedding.ndim != 1:
-                _log.error(
-                    f"pooled_embedding has wrong shape: {self.pooled_embedding.shape}, "
-                    "expected 1D array"
+                _log.warning(
+                    f"Validation failed: pooled_embedding has wrong shape: "
+                    f"{self.pooled_embedding.shape}, expected 1D array"
                 )
                 return False
             if self.pooled_embedding.shape[0] != self.embed_dim:
-                _log.error(
-                    f"pooled_embedding shape {self.pooled_embedding.shape[0]} does not "
-                    f"match embed_dim {self.embed_dim}"
+                _log.warning(
+                    f"Validation failed: pooled_embedding shape "
+                    f"{self.pooled_embedding.shape[0]} does not match embed_dim "
+                    f"{self.embed_dim}"
                 )
                 return False
 
         # Check token embeddings
         if self.token_embeddings is not None:
             if self.token_embeddings.ndim != 2:
-                _log.error(
-                    f"token_embeddings has wrong shape: {self.token_embeddings.shape}, "
-                    "expected 2D array"
+                _log.warning(
+                    f"Validation failed: token_embeddings has wrong shape: "
+                    f"{self.token_embeddings.shape}, expected 2D array"
                 )
                 return False
             if self.token_embeddings.shape[1] != self.embed_dim:
-                _log.error(
-                    f"token_embeddings shape[1] {self.token_embeddings.shape[1]} does "
-                    f"not match embed_dim {self.embed_dim}"
+                _log.warning(
+                    f"Validation failed: token_embeddings shape[1] "
+                    f"{self.token_embeddings.shape[1]} does not match embed_dim "
+                    f"{self.embed_dim}"
                 )
                 return False
 

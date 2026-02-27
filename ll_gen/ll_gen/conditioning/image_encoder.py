@@ -13,6 +13,7 @@ from pathlib import Path
 
 import numpy as np
 
+from ll_gen.conditioning._utils import safe_no_grad as _safe_no_grad
 from ll_gen.conditioning.embeddings import ConditioningEmbeddings
 
 _log = logging.getLogger(__name__)
@@ -140,22 +141,23 @@ class ImageConditioningEncoder:
             if not _PIL_AVAILABLE:
                 raise ImportError("PIL not available")
 
-            # Normalize if needed
-            if image.max() <= 1.0:
+            # Normalize based on dtype — checking dtype is more robust than
+            # checking max value (which fails for all-black images).
+            if np.issubdtype(image.dtype, np.floating):
                 image = (image * 255).astype(np.uint8)
             else:
                 image = image.astype(np.uint8)
 
-            # Convert to PIL and save to temp file
+            # Convert to PIL and save to temp file, ensuring cleanup on error.
             pil_image = Image.fromarray(image)
-            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
-                temp_path = Path(f.name)
-                pil_image.save(temp_path)
-
+            temp_path = None
             try:
+                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+                    temp_path = Path(f.name)
+                    pil_image.save(temp_path)
                 result = self.encode(temp_path)
             finally:
-                if temp_path.exists():
+                if temp_path is not None and temp_path.exists():
                     temp_path.unlink()
 
             return result
@@ -265,20 +267,4 @@ class ImageConditioningEncoder:
         Returns:
             torch.no_grad() context manager or a no-op context manager.
         """
-        try:
-            import torch
-
-            return torch.no_grad()
-        except ImportError:
-
-            class NoOp:
-                """No-op context manager when torch unavailable."""
-
-                def __enter__(self):
-                    return self
-
-                def __exit__(self, *args):
-                    """Exit context, doing nothing."""
-                    return False
-
-            return NoOp()
+        return _safe_no_grad()

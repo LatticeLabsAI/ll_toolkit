@@ -201,7 +201,7 @@ class TestConditioningEmbeddings:
         # Should return None if torch is not available, or a tensor if available
         if tensor is not None:
             assert tensor.shape == (768,)
-            assert tensor.dtype.name.startswith("float")
+            assert "float" in str(tensor.dtype)
 
     @pytest.mark.unit
     def test_to_tensor_no_pooled(self):
@@ -220,7 +220,7 @@ class TestConditioningEmbeddings:
 
         if tensor is not None:
             assert tensor.shape == (10, 768)
-            assert tensor.dtype.name.startswith("float")
+            assert "float" in str(tensor.dtype)
 
     @pytest.mark.unit
     def test_to_token_tensor_no_tokens(self):
