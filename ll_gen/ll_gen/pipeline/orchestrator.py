@@ -189,12 +189,20 @@ class GenerationOrchestrator:
                 })
                 continue
 
-            # Dispose
+            # Dispose — validate first, then export on success or final attempt
             result = self.disposal_engine.dispose(
                 proposal=proposal,
-                export=export and (attempt == retries),
-                render=render and (attempt == retries),
+                export=False,
+                render=False,
             )
+            should_export = export and (result.is_valid or attempt == retries)
+            should_render = render and (result.is_valid or attempt == retries)
+            if should_export or should_render:
+                result = self.disposal_engine.dispose(
+                    proposal=proposal,
+                    export=should_export,
+                    render=should_render,
+                )
 
             history.attempts.append({
                 "attempt": attempt,

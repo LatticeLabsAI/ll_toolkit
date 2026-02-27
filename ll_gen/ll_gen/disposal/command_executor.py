@@ -340,8 +340,8 @@ def _create_line_edge(params: dict[str, Any]) -> TopoDS_Shape | None:
         x2 = float(params.get("x2", 0.0))
         y2 = float(params.get("y2", 0.0))
         
-        p1 = gp_Pnt2d(x1, y1)
-        p2 = gp_Pnt2d(x2, y2)
+        p1 = gp_Pnt(x1, y1, 0.0)
+        p2 = gp_Pnt(x2, y2, 0.0)
         
         edge_maker = BRepBuilderAPI_MakeEdge(p1, p2)
         
@@ -541,7 +541,7 @@ def _apply_boolean_operation(
             return base_shape
         
         # Extract operation type from parameters
-        parameters = extrude_command.get("parameters", [])
+        parameters = extrude_command.get("params", [])
 
         if len(parameters) > 13:
             # Parameter index 13 is the boolean operation type

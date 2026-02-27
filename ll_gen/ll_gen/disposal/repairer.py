@@ -359,6 +359,7 @@ def _apply_shell_fixes(
         (repaired_shape, list of RepairActions)
     """
     actions: List[RepairAction] = []
+    reshaper = ShapeBuild_ReShape()
     shell_explorer = TopExp_Explorer(shape, TopAbs_SHELL)
     shells_fixed = 0
 
@@ -371,11 +372,15 @@ def _apply_shell_fixes(
 
             if fixer.FixFaceOrientation(shell):
                 shells_fixed += 1
+                fixed_shell = fixer.Shell()
+                reshaper.Replace(shell, fixed_shell)
 
         except Exception as exc:
             _log.debug("Shell fix failed: %s", exc)
 
         shell_explorer.Next()
+
+    result = reshaper.Apply(shape)
 
     if shells_fixed > 0:
         actions.append(RepairAction(
@@ -386,7 +391,7 @@ def _apply_shell_fixes(
             entities_affected=shells_fixed,
         ))
 
-    return shape, actions
+    return result, actions
 
 
 def _apply_solid_fix(shape: Any) -> tuple:

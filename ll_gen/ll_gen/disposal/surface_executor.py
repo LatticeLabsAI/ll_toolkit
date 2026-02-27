@@ -27,10 +27,10 @@ try:
         BRepBuilderAPI_MakeEdge,
         BRepBuilderAPI_Sewing,
     )
-    from OCC.Core.BRepBndLib import brepbndlib_Add
+    from OCC.Core.BRepBndLib import brepbndlib
     from OCC.Core.Bnd import Bnd_Box
     from OCC.Core.BRepLProp import BRepLProp_CLProps
-    from OCC.Core.TopExp import topexp_MapShapes, TopExp_Explorer
+    from OCC.Core.TopExp import topexp, TopExp_Explorer
     from OCC.Core.TopTools import TopTools_IndexedMapOfShape
     from OCC.Core.TopAbs import TopAbs_EDGE, TopAbs_VERTEX
     from OCC.Core.BRepBuilderAPI import BRepBuilderAPI_MakeWire
@@ -363,7 +363,7 @@ def _compute_edge_bbox_center(edge: Any) -> np.ndarray:
         raise RuntimeError("pythonocc is required")
 
     bbox = Bnd_Box()
-    brepbndlib_Add(edge, bbox)
+    brepbndlib.Add(edge, bbox)
 
     xmin, ymin, zmin, xmax, ymax, zmax = bbox.Get()
     center = np.array([
@@ -593,7 +593,7 @@ def _check_sewed_shape_quality(shape: Any) -> None:
     try:
         # Map all edges in the shape
         edge_map = TopTools_IndexedMapOfShape()
-        topexp_MapShapes(shape, TopAbs_EDGE, edge_map)
+        topexp.MapShapes(shape, TopAbs_EDGE, edge_map)
 
         free_edges = []
         degenerated_edges = []
