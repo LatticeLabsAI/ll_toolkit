@@ -150,8 +150,11 @@ class TestAdjacencyMatrix:
         graph = builder.build_reference_graph(entities)
         adj = builder.build_adjacency_matrix(graph)
 
+        # Convert sparse to dense for value checking
+        adj_dense = adj.to_dense() if adj.is_sparse else adj
+
         # Should only contain 0s and 1s
-        assert ((adj == 0) | (adj == 1)).all()
+        assert ((adj_dense == 0) | (adj_dense == 1)).all()
 
     def test_adjacency_matrix_directed_edges(self) -> None:
         """Test adjacency matrix represents directed edges correctly."""
@@ -166,15 +169,16 @@ class TestAdjacencyMatrix:
 
         graph = builder.build_reference_graph(entities)
         adj = builder.build_adjacency_matrix(graph)
+        adj_dense = adj.to_dense() if adj.is_sparse else adj
 
         id_to_idx = graph["id_to_idx"]
         idx_1 = id_to_idx[1]
         idx_2 = id_to_idx[2]
 
         # Edge 1 -> 2 should exist
-        assert adj[idx_1, idx_2] == 1.0
+        assert adj_dense[idx_1, idx_2] == 1.0
         # No reverse edge
-        assert adj[idx_2, idx_1] == 0.0
+        assert adj_dense[idx_2, idx_1] == 0.0
 
     def test_adjacency_matrix_empty_graph(self) -> None:
         """Test adjacency matrix for graph with no edges."""
@@ -769,3 +773,48 @@ class TestEdgeCases:
         # Should handle self-reference
         assert graph is not None
         assert (1, 1) in graph["edge_list"]
+
+
+class TestNonManifoldCoedge:
+    """Test coedge prev/next pointers with duplicate edges (non-manifold geometry)."""
+
+    def test_duplicate_edge_in_face_produces_correct_prev_next(self) -> None:
+        """When the same edge appears twice in a face loop, prev/next must
+        follow positional order, not collapse to the same coedge index."""
+        from stepnet.topology import STEPTopologyBuilder
+
+        builder = STEPTopologyBuilder()
+
+        # ADVANCED_FACE #10 directly references 3 EDGE_CURVEs: [100, 200, 100].
+        # Edge 100 appears at positions 0 AND 2 — non-manifold / seam edge.
+        entities = [
+            {"entity_id": 10, "entity_type": "ADVANCED_FACE", "references": [100, 200, 100]},
+            {"entity_id": 100, "entity_type": "EDGE_CURVE", "references": [], "numeric_params": [1.0]},
+            {"entity_id": 200, "entity_type": "EDGE_CURVE", "references": [], "numeric_params": [2.0]},
+        ]
+
+        structure = builder.build_coedge_structure(entities)
+
+        n = structure["num_coedges"]
+        assert n == 3, f"Expected 3 coedges, got {n}"
+
+        next_idx = structure["next_indices"]
+        prev_idx = structure["prev_indices"]
+
+        # Each coedge must have distinct prev and next (no self-loops in a 3-edge loop)
+        for i in range(n):
+            assert next_idx[i].item() != i, (
+                f"Coedge {i} next points to itself"
+            )
+            assert prev_idx[i].item() != i, (
+                f"Coedge {i} prev points to itself"
+            )
+
+        # Verify cyclic consistency: following next 3 times returns to start
+        visited = set()
+        cur = 0
+        for _ in range(n):
+            visited.add(cur)
+            cur = next_idx[cur].item()
+        assert cur == 0, "next chain is not a proper cycle"
+        assert len(visited) == n, "next chain does not visit all coedges"

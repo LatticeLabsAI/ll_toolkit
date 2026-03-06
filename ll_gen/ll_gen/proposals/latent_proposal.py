@@ -228,11 +228,8 @@ class LatentProposal(BaseProposal):
         Preserves stage_latents so the diffusion model can re-denoise
         from an intermediate stage, but clears decoded geometry.
         """
-        new = copy.deepcopy(self)
-        new.proposal_id = uuid.uuid4().hex
-        new.attempt = self.next_attempt()
-        new.error_context = error
-        new.timestamp = datetime.now(timezone.utc).isoformat()
+        # Delegate to base which uses shallow copy to preserve tensor grad_fn
+        new = super().with_error_context(error)
         new.face_grids = []
         new.edge_points = []
         new.face_bboxes = None
@@ -240,7 +237,7 @@ class LatentProposal(BaseProposal):
         new.vertex_positions = None
         new.face_edge_adjacency = None
         new.confidence = 0.0
-        # Keep stage_latents for partial re-generation
+        # Keep stage_latents for partial re-generation (shallow ref preserved)
         return new
 
     def summary(self) -> Dict[str, Any]:

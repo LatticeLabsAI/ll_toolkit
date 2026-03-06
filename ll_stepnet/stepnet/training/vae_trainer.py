@@ -91,6 +91,11 @@ class VAETrainer:
         else:
             self.optimizer = optimizer
 
+        # Track optimizer param ids for detecting lazily-added parameters
+        self._optimizer_param_ids: set = {
+            id(p) for group in self.optimizer.param_groups for p in group['params']
+        }
+
         # Checkpoint directory
         self.checkpoint_dir = Path(checkpoint_dir) if checkpoint_dir else None
         if self.checkpoint_dir:
@@ -164,6 +169,26 @@ class VAETrainer:
         """
         kl = -0.5 * torch.sum(1 + log_var - mu.pow(2) - log_var.exp(), dim=-1)
         return kl.mean()
+
+    def _sync_optimizer_params(self) -> None:
+        """Add any lazily-created model parameters to the optimizer.
+
+        Some modules (e.g. ``STEPEncoder._feature_projs``) create
+        ``nn.Linear`` layers during ``forward()`` which are not present
+        when the optimizer is first constructed.  This method detects new
+        parameters and adds them to the optimizer so they receive gradient
+        updates.
+        """
+        new_params = [
+            p for p in self.model.parameters()
+            if id(p) not in self._optimizer_param_ids and p.requires_grad
+        ]
+        if new_params:
+            self.optimizer.add_param_group({'params': new_params})
+            self._optimizer_param_ids.update(id(p) for p in new_params)
+            _log.info(
+                "Added %d lazily-created parameters to optimizer", len(new_params)
+            )
 
     def _unpack_model_output(
         self,
@@ -269,6 +294,9 @@ class VAETrainer:
                 self._unpack_model_output(output, target_ids)
             )
             total_loss = recon_loss + beta * kl_loss
+
+            # Sync lazily-created parameters before backward pass
+            self._sync_optimizer_params()
 
             # Backward pass
             self.optimizer.zero_grad()
@@ -551,14 +579,6 @@ class VAETrainer:
                 self.history["param_mse"].append(
                     val_metrics.get("param_mse", 0.0)
                 )
-            else:
-                # Append NaN placeholders to keep history lists aligned
-                self.history["val_loss"].append(float("nan"))
-                self.history["val_recon_loss"].append(float("nan"))
-                self.history["val_kl_loss"].append(float("nan"))
-                self.history["command_accuracy"].append(float("nan"))
-                self.history["param_mse"].append(float("nan"))
-
                 print(
                     f"Val Loss = {val_metrics['val_loss']:.4f}, "
                     f"Cmd Acc = {val_metrics['command_accuracy']:.4f}, "
@@ -575,6 +595,13 @@ class VAETrainer:
 
                 # Visualize latent space
                 self.visualize_latent_space(epoch)
+            else:
+                # Append NaN placeholders to keep history lists aligned
+                self.history["val_loss"].append(float("nan"))
+                self.history["val_recon_loss"].append(float("nan"))
+                self.history["val_kl_loss"].append(float("nan"))
+                self.history["command_accuracy"].append(float("nan"))
+                self.history["param_mse"].append(float("nan"))
 
             # Save periodic checkpoint
             if self.checkpoint_dir and (epoch + 1) % save_every == 0:

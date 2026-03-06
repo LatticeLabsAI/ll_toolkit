@@ -4,9 +4,13 @@ Extracts high-level semantic shape features from full mesh context.
 Based on Point-BERT / Point-MAE transformer architecture.
 """
 
+import logging
+
 import torch
 import torch.nn as nn
 import numpy as np
+
+_log = logging.getLogger(__name__)
 
 
 class PointPatchEmbedding(nn.Module):
@@ -69,9 +73,29 @@ class PointPatchEmbedding(nn.Module):
             num_patches = N
 
         # Reshape into patches and max pool within each patch
-        patches = feature[:, :, :num_patches * patch_size].view(B, self.embed_dim, num_patches, patch_size)
-        patch_tokens = torch.max(patches, dim=-1)[0]  # [B, embed_dim, num_patches]
-        patch_tokens = patch_tokens.transpose(1, 2)  # [B, num_patches, embed_dim]
+        remainder = N - num_patches * patch_size
+        aligned = feature[:, :, :num_patches * patch_size].view(
+            B, self.embed_dim, num_patches, patch_size
+        )
+        patch_tokens = torch.max(aligned, dim=-1)[0]  # [B, embed_dim, num_patches]
+
+        if remainder > 0:
+            _log.debug(
+                "PointPatchEmbedding: %d/%d tail vertices form partial patch "
+                "(patch_size=%d, num_patches=%d)",
+                remainder, N, patch_size, num_patches,
+            )
+            # Pad the leftover points to a full patch and append as extra patch
+            tail = feature[:, :, num_patches * patch_size:]  # [B, embed_dim, remainder]
+            pad = torch.zeros(
+                B, self.embed_dim, patch_size - remainder,
+                device=feature.device, dtype=feature.dtype,
+            )
+            tail_padded = torch.cat([tail, pad], dim=2)  # [B, embed_dim, patch_size]
+            tail_token = torch.max(tail_padded, dim=-1)[0].unsqueeze(2)  # [B, embed_dim, 1]
+            patch_tokens = torch.cat([patch_tokens, tail_token], dim=2)
+
+        patch_tokens = patch_tokens.transpose(1, 2)  # [B, num_patches(+1), embed_dim]
 
         return patch_tokens
 

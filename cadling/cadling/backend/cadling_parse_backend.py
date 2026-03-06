@@ -111,8 +111,10 @@ class CADlingParseBackend(DeclarativeCADBackend):
             hash=self.document_hash,
         )
 
-        # Read file content
-        if isinstance(self.path_or_stream, Path):
+        # Read file content, using converter cache when available
+        if self.in_doc._content_cache is not None:
+            content = self.in_doc._content_cache
+        elif isinstance(self.path_or_stream, Path):
             with open(self.path_or_stream, "rb") as f:
                 content = f.read()
         else:

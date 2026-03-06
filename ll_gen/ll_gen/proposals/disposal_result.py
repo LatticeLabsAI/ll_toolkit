@@ -195,6 +195,10 @@ class DisposalResult:
         execution_time_ms: Wall-clock time for disposal in milliseconds.
         proposal_id: ID of the proposal that produced this result.
         proposal_type: Class name of the proposal ("CodeProposal", etc.).
+        generation_history: ``GenerationHistory`` from the orchestrator retry
+            loop, capturing routing decisions, per-attempt telemetry, and
+            total wall-clock time.  ``None`` when the result comes from a
+            single ``DisposalEngine.dispose()`` call outside the orchestrator.
     """
 
     shape: Any = None
@@ -214,6 +218,7 @@ class DisposalResult:
     execution_time_ms: float = 0.0
     proposal_id: str = ""
     proposal_type: str = ""
+    generation_history: Any = None
 
     # ------------------------------------------------------------------
     # Derived properties

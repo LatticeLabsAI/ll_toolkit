@@ -23,10 +23,29 @@ class STLContentChunker:
         self.chunk_size = chunk_size
 
     def is_ascii_stl(self, file_path: str) -> bool:
-        """Check if STL file is ASCII or binary."""
+        """Check if STL file is ASCII or binary.
+
+        Many binary STL files begin with 'solid' in the header, so a naive
+        check on the first 5 bytes is unreliable. Instead, read the facet
+        count from the binary header and validate:
+            expected size = 84 + facet_count * 50
+        If the actual file size matches, it is binary; otherwise ASCII.
+        """
+        file_size = Path(file_path).stat().st_size
+
+        # A valid binary STL must have at least 84 bytes (header + count)
+        if file_size < 84:
+            return True  # Too small for binary; treat as ASCII
+
         with open(file_path, 'rb') as f:
-            header = f.read(80)
-            return b'solid' in header[:5]
+            f.seek(80)
+            facet_count = struct.unpack('<I', f.read(4))[0]
+
+        expected_binary_size = 84 + facet_count * 50
+        if file_size == expected_binary_size:
+            return False  # Binary STL
+
+        return True  # ASCII STL
 
     def chunk_ascii_stl(self, file_path: str) -> List[Dict]:
         """
@@ -186,7 +205,10 @@ class STEPContentChunker:
 
     def chunk_step(self, file_path: str) -> List[Dict]:
         """
-        Chunk STEP file by entity definitions.
+        Chunk STEP file by entity definitions using streaming I/O.
+
+        Reads the file line-by-line to avoid loading multi-GB STEP files
+        entirely into memory.
 
         STEP format:
         - Header section: ISO-10303-21;HEADER;...ENDSEC;
@@ -198,60 +220,70 @@ class STEPContentChunker:
         - start_entity: Starting entity number
         - end_entity: Ending entity number
         """
-        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-            content = f.read()
+        chunks = []
+        current_chunk_entities = []  # raw text per entity
+        in_data_section = False
+        current_entity_lines = []  # lines of the current multi-line entity
 
-        # Split into header and data sections
-        parts = content.split('DATA;')
-        if len(parts) < 2:
+        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+            for line in f:
+                # Scan for DATA; marker to enter data section
+                if not in_data_section:
+                    if 'DATA;' in line:
+                        in_data_section = True
+                    continue
+
+                stripped = line.rstrip('\n\r')
+                stripped_clean = stripped.strip()
+
+                # End of data section
+                if stripped_clean.startswith('ENDSEC;') or stripped_clean == 'ENDSEC;':
+                    break
+
+                if stripped_clean.startswith('#'):
+                    # New entity — flush previous entity
+                    if current_entity_lines:
+                        current_chunk_entities.append('\n'.join(current_entity_lines))
+                        if len(current_chunk_entities) >= self.chunk_size:
+                            chunks.append(self._build_step_chunk(
+                                current_chunk_entities, len(chunks) * self.chunk_size
+                            ))
+                            current_chunk_entities = []
+                    current_entity_lines = [stripped]
+                elif stripped_clean:
+                    # Continuation line of current entity
+                    current_entity_lines.append(stripped)
+
+        # Flush final entity
+        if current_entity_lines:
+            current_chunk_entities.append('\n'.join(current_entity_lines))
+
+        # Flush final chunk
+        if current_chunk_entities:
+            chunks.append(self._build_step_chunk(
+                current_chunk_entities, len(chunks) * self.chunk_size
+            ))
+
+        if not chunks:
             raise ValueError("Invalid STEP file: no DATA section found")
 
-        header = parts[0]
-        data_section = parts[1].split('ENDSEC;')[0]
-
-        # Extract entities (lines starting with #)
-        # Preserve EXACT original formatting including newlines and whitespace
-        entity_lines = []
-        current_entity_lines = []
-
-        for line in data_section.split('\n'):
-            # Check if line starts with # (new entity) - don't strip yet
-            stripped = line.strip()
-
-            if stripped.startswith('#'):
-                # Save previous entity with original formatting
-                if current_entity_lines:
-                    entity_lines.append('\n'.join(current_entity_lines))
-                current_entity_lines = [line]
-            elif stripped:  # Non-empty continuation line
-                current_entity_lines.append(line)
-            # Skip completely empty lines between entities
-
-        # Add final entity
-        if current_entity_lines:
-            entity_lines.append('\n'.join(current_entity_lines))
-
-        # Chunk entities
-        chunks = []
-        for i in range(0, len(entity_lines), self.chunk_size):
-            chunk_entities = entity_lines[i:i + self.chunk_size]
-
-            # Parse entities
-            parsed_entities = []
-            for entity_line in chunk_entities:
-                parsed = self._parse_entity(entity_line)
-                if parsed:
-                    parsed_entities.append(parsed)
-
-            chunks.append({
-                'raw_content': '\n'.join(chunk_entities),
-                'entities': parsed_entities,
-                'start_entity': parsed_entities[0]['id'] if parsed_entities else i,
-                'end_entity': parsed_entities[-1]['id'] if parsed_entities else i + len(chunk_entities),
-                'format': 'step'
-            })
-
         return chunks
+
+    def _build_step_chunk(self, entity_lines: List[str], offset: int) -> Dict:
+        """Build a chunk dict from a list of raw entity strings."""
+        parsed_entities = []
+        for entity_text in entity_lines:
+            parsed = self._parse_entity(entity_text)
+            if parsed:
+                parsed_entities.append(parsed)
+
+        return {
+            'raw_content': '\n'.join(entity_lines),
+            'entities': parsed_entities,
+            'start_entity': parsed_entities[0]['id'] if parsed_entities else offset,
+            'end_entity': parsed_entities[-1]['id'] if parsed_entities else offset + len(entity_lines),
+            'format': 'step'
+        }
 
     def _parse_entity(self, entity_text: str) -> Dict:
         """
@@ -316,6 +348,75 @@ class OBJContentChunker:
         """
         self.chunk_size = chunk_size
 
+    @staticmethod
+    def _parse_face_indices(face_lines: List[str]):
+        """Parse OBJ face lines and return sets of referenced vertex, texcoord, and normal indices (1-based)."""
+        vert_indices = set()
+        tex_indices = set()
+        norm_indices = set()
+        for line in face_lines:
+            parts = line.strip().split()
+            for token in parts[1:]:  # skip 'f'
+                components = token.split('/')
+                if len(components) >= 1 and components[0]:
+                    vert_indices.add(int(components[0]))
+                if len(components) >= 2 and components[1]:
+                    tex_indices.add(int(components[1]))
+                if len(components) >= 3 and components[2]:
+                    norm_indices.add(int(components[2]))
+        return vert_indices, tex_indices, norm_indices
+
+    @staticmethod
+    def _build_reindexed_chunk(face_lines: List[str], vertices: List[str],
+                               normals: List[str], texcoords: List[str],
+                               vert_indices, tex_indices, norm_indices) -> str:
+        """Build chunk content with only referenced vertices/normals/texcoords, re-indexed so faces remain valid."""
+        # Build old-index -> new-index maps (1-based)
+        sorted_verts = sorted(vert_indices)
+        sorted_texs = sorted(tex_indices)
+        sorted_norms = sorted(norm_indices)
+        vert_map = {old: new for new, old in enumerate(sorted_verts, 1)}
+        tex_map = {old: new for new, old in enumerate(sorted_texs, 1)}
+        norm_map = {old: new for new, old in enumerate(sorted_norms, 1)}
+
+        # Collect referenced lines
+        chunk_parts = []
+        for idx in sorted_verts:
+            if idx <= len(vertices):
+                chunk_parts.append(vertices[idx - 1])
+        for idx in sorted_norms:
+            if idx <= len(normals):
+                chunk_parts.append(normals[idx - 1])
+        for idx in sorted_texs:
+            if idx <= len(texcoords):
+                chunk_parts.append(texcoords[idx - 1])
+
+        # Re-index face lines
+        for line in face_lines:
+            parts = line.strip().split()
+            new_tokens = ['f']
+            for token in parts[1:]:
+                components = token.split('/')
+                new_comp = []
+                if len(components) >= 1 and components[0]:
+                    new_comp.append(str(vert_map.get(int(components[0]), int(components[0]))))
+                else:
+                    new_comp.append('')
+                if len(components) >= 2:
+                    if components[1]:
+                        new_comp.append(str(tex_map.get(int(components[1]), int(components[1]))))
+                    else:
+                        new_comp.append('')
+                if len(components) >= 3:
+                    if components[2]:
+                        new_comp.append(str(norm_map.get(int(components[2]), int(components[2]))))
+                    else:
+                        new_comp.append('')
+                new_tokens.append('/'.join(new_comp))
+            chunk_parts.append(' '.join(new_tokens))
+
+        return '\n'.join(chunk_parts)
+
     def chunk_obj(self, file_path: str) -> List[Dict]:
         """
         Chunk OBJ file by face definitions.
@@ -325,6 +426,9 @@ class OBJContentChunker:
         - vn x y z (normal)
         - vt u v (texture coordinate)
         - f v1/vt1/vn1 v2/vt2/vn2 v3/vt3/vn3 (face)
+
+        Each chunk only includes vertices/normals/texcoords referenced by its
+        faces (re-indexed), avoiding O(num_chunks * num_vertices) memory.
 
         Returns list of chunks with vertices and faces.
         """
@@ -359,17 +463,17 @@ class OBJContentChunker:
                 face_count += 1
 
                 if face_count >= self.chunk_size:
-                    # Include relevant vertices/normals for this chunk
-                    chunk_content = (
-                        '\n'.join(vertices) + '\n' +
-                        '\n'.join(normals) + '\n' +
-                        '\n'.join(current_chunk_lines)
+                    # Extract only referenced vertices/normals for this chunk
+                    vi, ti, ni = self._parse_face_indices(current_chunk_lines)
+                    chunk_content = self._build_reindexed_chunk(
+                        current_chunk_lines, vertices, normals, texcoords,
+                        vi, ti, ni
                     )
 
                     chunks.append({
                         'raw_content': chunk_content,
-                        'num_vertices': len(vertices),
-                        'num_normals': len(normals),
+                        'num_vertices': len(vi),
+                        'num_normals': len(ni),
                         'num_faces': len(current_chunk_lines),
                         'start_face': chunk_start,
                         'end_face': chunk_start + face_count,
@@ -382,19 +486,20 @@ class OBJContentChunker:
 
         # Add remaining faces
         if current_chunk_lines:
-            chunk_content = (
-                '\n'.join(vertices) + '\n' +
-                '\n'.join(normals) + '\n' +
-                '\n'.join(current_chunk_lines)
+            remaining = len(current_chunk_lines)
+            vi, ti, ni = self._parse_face_indices(current_chunk_lines)
+            chunk_content = self._build_reindexed_chunk(
+                current_chunk_lines, vertices, normals, texcoords,
+                vi, ti, ni
             )
 
             chunks.append({
                 'raw_content': chunk_content,
-                'num_vertices': len(vertices),
-                'num_normals': len(normals),
-                'num_faces': len(current_chunk_lines),
+                'num_vertices': len(vi),
+                'num_normals': len(ni),
+                'num_faces': remaining,
                 'start_face': chunk_start,
-                'end_face': chunk_start + face_count,
+                'end_face': chunk_start + remaining,
                 'format': 'obj'
             })
 
@@ -415,7 +520,7 @@ class UnifiedCADContentChunker:
     MIN_TOKENS_PER_CHUNK = 64
     MAX_TOTAL_CHUNKS = 64
 
-    def __init__(self, chunk_size: int = None):
+    def __init__(self, chunk_size: int | None = None):
         """
         Args:
             chunk_size: Optional fixed chunk size. If None, size is determined dynamically per file.
@@ -444,10 +549,15 @@ class UnifiedCADContentChunker:
         ext = path.suffix.lower()
 
         if ext in ['.stl']:
-            # Count facets
-            with open(file_path, 'rb') as f:
-                header = f.read(80)
-                is_ascii = b'solid' in header[:5]
+            # Count facets — detect ASCII vs binary using file-size validation
+            file_size = path.stat().st_size
+            if file_size >= 84:
+                with open(file_path, 'rb') as f:
+                    f.seek(80)
+                    count = struct.unpack('<I', f.read(4))[0]
+                is_ascii = file_size != 84 + count * 50
+            else:
+                is_ascii = True
 
             if is_ascii:
                 with open(file_path, 'r') as f:
@@ -462,14 +572,17 @@ class UnifiedCADContentChunker:
             file_format = 'stl'
 
         elif ext in ['.step', '.stp']:
-            # Count entities
+            # Count entities and complexity via streaming to avoid loading GB files
+            total_entities = 0
+            complex_count = 0
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                content = f.read()
+                for line in f:
+                    stripped = line.strip()
+                    if stripped.startswith('#'):
+                        total_entities += 1
+                    if 'BREP' in line or 'NURBS' in line or 'B_SPLINE' in line:
+                        complex_count += 1
 
-            total_entities = content.count('\n#')
-
-            # Analyze complexity
-            complex_count = content.count('BREP') + content.count('NURBS') + content.count('B_SPLINE')
             complexity_ratio = complex_count / max(total_entities, 1)
 
             tokens_per_entity = 8 if complexity_ratio > 0.3 else 4

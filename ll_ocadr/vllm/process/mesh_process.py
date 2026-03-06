@@ -4,32 +4,27 @@ Handles loading, chunking, and tokenization of 3D meshes.
 Mirrors DeepSeek-OCR's image_process.py for 3D geometry.
 """
 
-import math
-from dataclasses import dataclass
-from typing import List, Dict, Tuple, Optional
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Optional
+
 import numpy as np
 import torch
 import trimesh
-from transformers import BatchFeature, LlamaTokenizerFast
-from transformers.processing_utils import ProcessorMixin
-
-from file_content_chunker import UnifiedCADContentChunker
+from .file_content_chunker import UnifiedCADContentChunker
 
 
 @dataclass
 class BRepData:
     """B-Rep (Boundary Representation) data for STEP/CAD files."""
-    surfaces: List[Dict]  # Analytical surfaces (cylinders, planes, cones, etc.)
-    curves: List[Dict]    # Parametric curves (circles, ellipses, lines, splines)
-    faces: List[Dict]     # Topological faces with surface references
-    edges: List[Dict]     # Topological edges with curve references
-    vertices: List[Dict]  # Topological vertices (not tessellation vertices!)
-    bbox: Tuple[np.ndarray, np.ndarray]
-    metadata: Dict = None
-
-    def __post_init__(self):
-        if self.metadata is None:
-            self.metadata = {}
+    surfaces: list[dict]  # Analytical surfaces (cylinders, planes, cones, etc.)
+    curves: list[dict]    # Parametric curves (circles, ellipses, lines, splines)
+    faces: list[dict]     # Topological faces with surface references
+    edges: list[dict]     # Topological edges with curve references
+    vertices: list[dict]  # Topological vertices (not tessellation vertices!)
+    bbox: tuple[np.ndarray, np.ndarray]
+    metadata: dict = field(default_factory=dict)
 
     @property
     def num_surfaces(self) -> int:
@@ -54,13 +49,10 @@ class MeshData:
     vertices: np.ndarray  # [N, 3] - vertex coordinates
     faces: np.ndarray     # [F, 3] - face indices
     normals: np.ndarray   # [N, 3] - vertex normals
-    bbox: Tuple[np.ndarray, np.ndarray]  # (min_xyz, max_xyz)
-    metadata: Dict = None
+    bbox: tuple[np.ndarray, np.ndarray]  # (min_xyz, max_xyz)
+    metadata: dict = field(default_factory=dict)
 
     def __post_init__(self):
-        if self.metadata is None:
-            self.metadata = {}
-
         # Calculate bbox if not provided
         if self.bbox is None and self.vertices is not None:
             self.bbox = (
@@ -83,7 +75,7 @@ class MeshData:
             return 0.0
         min_xyz, max_xyz = self.bbox
         dimensions = max_xyz - min_xyz
-        return np.prod(dimensions)
+        return float(np.prod(dimensions))
 
 
 @dataclass
@@ -92,8 +84,8 @@ class MeshChunk:
     vertices: np.ndarray  # [M, 3] - local vertex coordinates
     faces: np.ndarray     # [K, 3] - face indices (reindexed to local vertices)
     normals: np.ndarray   # [M, 3] - vertex normals
-    bbox: Tuple[np.ndarray, np.ndarray]  # Spatial bounding box
-    chunk_id: Tuple[int, int, int]  # (x, y, z) position in grid
+    bbox: tuple[np.ndarray, np.ndarray]  # Spatial bounding box
+    chunk_id: tuple[int, int, int]  # (x, y, z) position in grid
 
     @property
     def num_vertices(self) -> int:
@@ -104,11 +96,11 @@ class MeshChunk:
         return len(self.faces) if self.faces is not None else 0
 
 
-def compute_bbox_volume(bbox: Tuple[np.ndarray, np.ndarray]) -> float:
+def compute_bbox_volume(bbox: tuple[np.ndarray, np.ndarray]) -> float:
     """Calculate volume of a bounding box."""
     min_xyz, max_xyz = bbox
     dimensions = max_xyz - min_xyz
-    return np.prod(dimensions)
+    return float(np.prod(dimensions))
 
 
 def vertices_in_bbox(vertices: np.ndarray,
@@ -125,8 +117,7 @@ def vertices_in_bbox(vertices: np.ndarray,
     Returns:
         mask: [N] boolean mask of vertices inside bbox
     """
-    mask = np.all((vertices >= bbox_min) & (vertices <= bbox_max), axis=1)
-    return mask
+    return np.all((vertices >= bbox_min) & (vertices <= bbox_max), axis=1)
 
 
 def extract_faces_in_region(faces: np.ndarray, vertex_mask: np.ndarray) -> np.ndarray:
@@ -144,21 +135,18 @@ def extract_faces_in_region(faces: np.ndarray, vertex_mask: np.ndarray) -> np.nd
     face_mask = np.all(vertex_mask[faces], axis=1)
     selected_faces = faces[face_mask]
 
-    # Reindex faces to local vertex indices
+    # Reindex faces to local vertex indices using vectorized searchsorted
+    # vertex_indices is sorted (from np.where), so searchsorted maps
+    # old global indices to new local indices in O(K log N) without Python loops
     vertex_indices = np.where(vertex_mask)[0]
-    index_map = {old_idx: new_idx for new_idx, old_idx in enumerate(vertex_indices)}
-
-    local_faces = np.array([
-        [index_map[selected_faces[i, 0]], index_map[selected_faces[i, 1]], index_map[selected_faces[i, 2]]]
-        for i in range(len(selected_faces))
-    ], dtype=np.int32)
+    local_faces = np.searchsorted(vertex_indices, selected_faces).astype(np.int32)
 
     return local_faces
 
 
 def dynamic_mesh_partition(mesh: MeshData,
-                          min_chunk_size: Optional[int] = None,
-                          max_chunks: int = 27) -> List[MeshChunk]:
+                          min_chunk_size: int | None = None,
+                          max_chunks: int = 27) -> list[MeshChunk]:
     """
     Octree-based spatial subdivision similar to image tiling.
     Automatically determines optimal chunk size if not specified.
@@ -176,7 +164,7 @@ def dynamic_mesh_partition(mesh: MeshData,
     # Determine optimal min_chunk_size based on total faces
     # Similar to DeepSeek-OCR's dynamic tile sizing
     if min_chunk_size is None:
-        # Target ~384 tokens per chunk (96 faces × 4 tokens)
+        # Target ~384 tokens per chunk (96 faces x 4 tokens)
         # Scales with complexity: more faces = larger chunks to limit total chunks
         if total_faces < 500:
             min_chunk_size = total_faces  # Single chunk for small meshes
@@ -260,31 +248,12 @@ def create_global_view(mesh: MeshData, target_faces: int = 4096) -> MeshData:
     # Try quadric decimation first, fall back to simple face sampling
     try:
         simplified_mesh = tmesh.simplify_quadric_decimation(target_faces)
-    except (ImportError, AttributeError, ModuleNotFoundError):
-        # Fall back to simple uniform face sampling
-        # This is fast and doesn't require extra dependencies
-        face_indices = np.random.choice(
-            len(tmesh.faces),
-            size=min(target_faces, len(tmesh.faces)),
-            replace=False
-        )
-        # Keep only selected faces and their vertices
-        selected_faces = tmesh.faces[face_indices]
-        # Get unique vertices used by selected faces
-        used_vertices = np.unique(selected_faces.flatten())
-        vertex_map = {old: new for new, old in enumerate(used_vertices)}
-        # Reindex faces
-        new_faces = np.array([[vertex_map[f[0]], vertex_map[f[1]], vertex_map[f[2]]]
-                              for f in selected_faces], dtype=np.int32)
-        simplified_mesh = trimesh.Trimesh(
-            vertices=tmesh.vertices[used_vertices],
-            faces=new_faces,
-            process=False
-        )
+    except (ImportError, AttributeError):
+        simplified_mesh = _sample_faces_from_mesh(tmesh, target_faces)
 
-    # Ensure normals are computed
+    # Recompute normals if missing after decimation
     if simplified_mesh.vertex_normals is None or len(simplified_mesh.vertex_normals) == 0:
-        simplified_mesh.vertex_normals = simplified_mesh.vertex_normals
+        simplified_mesh.fix_normals()
 
     return MeshData(
         vertices=simplified_mesh.vertices,
@@ -294,7 +263,27 @@ def create_global_view(mesh: MeshData, target_faces: int = 4096) -> MeshData:
             np.min(simplified_mesh.vertices, axis=0),
             np.max(simplified_mesh.vertices, axis=0)
         ),
-        metadata={'downsampled': True, 'original_faces': mesh.num_faces}
+        metadata={"downsampled": True, "original_faces": mesh.num_faces}
+    )
+
+
+def _sample_faces_from_mesh(tmesh, target_faces):
+    """Fall back to simple uniform face sampling for mesh decimation."""
+    face_indices = np.random.choice(
+        len(tmesh.faces),
+        size=min(target_faces, len(tmesh.faces)),
+        replace=False
+    )
+    # Keep only selected faces and their vertices
+    selected_faces = tmesh.faces[face_indices]
+    # Get unique vertices used by selected faces
+    used_vertices = np.unique(selected_faces.flatten())
+    vertex_map = {old: new for new, old in enumerate(used_vertices)}
+    # Reindex faces
+    new_faces = np.array([[vertex_map[f[0]], vertex_map[f[1]], vertex_map[f[2]]]
+                          for f in selected_faces], dtype=np.int32)
+    return trimesh.Trimesh(
+        vertices=tmesh.vertices[used_vertices], faces=new_faces, process=False
     )
 
 
@@ -303,11 +292,11 @@ class CADLoader:
 
     def __init__(self):
         self.loaders = {
-            '.step': self._load_step,
-            '.stp': self._load_step,
-            '.stl': self._load_stl_obj,
-            '.obj': self._load_stl_obj,
-            '.ply': self._load_stl_obj,
+            ".step": self._load_step,
+            ".stp": self._load_step,
+            ".stl": self._load_stl_obj,
+            ".obj": self._load_stl_obj,
+            ".ply": self._load_stl_obj,
         }
 
     def load(self, file_path: str):
@@ -338,16 +327,16 @@ class CADLoader:
         if not mesh.is_watertight:
             mesh.fill_holes()
 
-        # Compute vertex normals if missing
+        # Recompute vertex normals if missing
         if mesh.vertex_normals is None or len(mesh.vertex_normals) == 0:
-            mesh.vertex_normals = mesh.vertex_normals
+            mesh.fix_normals()
 
         return MeshData(
             vertices=mesh.vertices,
             faces=mesh.faces,
             normals=mesh.vertex_normals,
             bbox=tuple(mesh.bounds),
-            metadata={'file_type': 'mesh', 'watertight': mesh.is_watertight}
+            metadata={"file_type": "mesh", "watertight": mesh.is_watertight}
         )
 
     def _load_step(self, step_file: str) -> BRepData:
@@ -355,19 +344,28 @@ class CADLoader:
         Load STEP file as B-Rep (preserves parametric surfaces, not tessellated).
         """
         try:
-            from OCC.Core.STEPControl import STEPControl_Reader
-            from OCC.Core.TopExp import TopExp_Explorer
-            from OCC.Core.TopAbs import TopAbs_FACE, TopAbs_EDGE, TopAbs_VERTEX
             from OCC.Core.BRep import BRep_Tool
-            from OCC.Core.GeomAbs import GeomAbs_Plane, GeomAbs_Cylinder, GeomAbs_Cone, GeomAbs_Sphere, GeomAbs_Torus
-            from OCC.Core.BRepAdaptor import BRepAdaptor_Surface, BRepAdaptor_Curve
-            from OCC.Extend.TopologyUtils import TopologyExplorer
+            from OCC.Core.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Surface
+            from OCC.Core.GeomAbs import (
+                GeomAbs_Circle,
+                GeomAbs_Cone,
+                GeomAbs_Cylinder,
+                GeomAbs_Ellipse,
+                GeomAbs_Line,
+                GeomAbs_Plane,
+                GeomAbs_Sphere,
+                GeomAbs_Torus,
+            )
             from OCC.Core.gp import gp_Pnt
-        except ImportError:
+            from OCC.Core.STEPControl import STEPControl_Reader
+            from OCC.Core.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_VERTEX
+            from OCC.Core.TopExp import TopExp_Explorer
+            from OCC.Extend.TopologyUtils import TopologyExplorer
+        except ImportError as exc:
             raise ImportError(
                 "pythonocc-core is required for STEP file support. "
                 "Install with: conda install -c conda-forge pythonocc-core"
-            )
+            ) from exc
 
         # Read STEP file
         reader = STEPControl_Reader()
@@ -382,62 +380,70 @@ class CADLoader:
         # Extract B-Rep data (NO tessellation!)
         explorer = TopologyExplorer(shape)
 
-        surfaces = []
-        curves = []
-        faces_topo = []
-        edges_topo = []
-        vertices_topo = []
+        surfaces: list[dict] = []
+        curves: list[dict] = []
+        faces_topo: list[dict] = []
+        edges_topo: list[dict] = []
+        vertices_topo: list[dict] = []
 
-        all_points = []
+        all_points: list[list[float]] = []
 
         # Extract topological faces with their analytical surfaces
         for idx, face in enumerate(explorer.faces()):
             adaptor = BRepAdaptor_Surface(face)
             surface_type = adaptor.GetType()
 
-            surface_info = {'face_id': idx}
+            surface_info: dict = {"face_id": idx}
 
             if surface_type == GeomAbs_Plane:
                 pln = adaptor.Plane()
-                surface_info.update({
-                    'type': 'PLANE',
-                    'location': [pln.Location().X(), pln.Location().Y(), pln.Location().Z()],
-                    'normal': [pln.Axis().Direction().X(), pln.Axis().Direction().Y(), pln.Axis().Direction().Z()]
-                })
+                surface_info |= {
+                    "type": "PLANE",
+                    "location": [pln.Location().X(), pln.Location().Y(), pln.Location().Z()],
+                    "normal": [pln.Axis().Direction().X(), pln.Axis().Direction().Y(), pln.Axis().Direction().Z()]
+                }
             elif surface_type == GeomAbs_Cylinder:
                 cyl = adaptor.Cylinder()
-                surface_info.update({
-                    'type': 'CYLINDER',
-                    'radius': cyl.Radius(),
-                    'axis_location': [cyl.Location().X(), cyl.Location().Y(), cyl.Location().Z()],
-                    'axis_direction': [cyl.Axis().Direction().X(), cyl.Axis().Direction().Y(), cyl.Axis().Direction().Z()]
-                })
+                surface_info |= {
+                    "type": "CYLINDER",
+                    "radius": cyl.Radius(),
+                    "axis_location": [
+                        cyl.Location().X(),
+                        cyl.Location().Y(),
+                        cyl.Location().Z(),
+                    ],
+                    "axis_direction": [
+                        cyl.Axis().Direction().X(),
+                        cyl.Axis().Direction().Y(),
+                        cyl.Axis().Direction().Z(),
+                    ],
+                }
             elif surface_type == GeomAbs_Cone:
                 cone = adaptor.Cone()
-                surface_info.update({
-                    'type': 'CONE',
-                    'radius': cone.RefRadius(),
-                    'semi_angle': cone.SemiAngle()
-                })
+                surface_info |= {
+                    "type": "CONE",
+                    "radius": cone.RefRadius(),
+                    "semi_angle": cone.SemiAngle(),
+                }
             elif surface_type == GeomAbs_Sphere:
                 sphere = adaptor.Sphere()
-                surface_info.update({
-                    'type': 'SPHERE',
-                    'radius': sphere.Radius(),
-                    'center': [sphere.Location().X(), sphere.Location().Y(), sphere.Location().Z()]
-                })
+                surface_info |= {
+                    "type": "SPHERE",
+                    "radius": sphere.Radius(),
+                    "center": [sphere.Location().X(), sphere.Location().Y(), sphere.Location().Z()]
+                }
             elif surface_type == GeomAbs_Torus:
                 torus = adaptor.Torus()
-                surface_info.update({
-                    'type': 'TORUS',
-                    'major_radius': torus.MajorRadius(),
-                    'minor_radius': torus.MinorRadius()
-                })
+                surface_info |= {
+                    "type": "TORUS",
+                    "major_radius": torus.MajorRadius(),
+                    "minor_radius": torus.MinorRadius()
+                }
             else:
-                surface_info.update({'type': 'NURBS'})
+                surface_info["type"] = "NURBS"
 
             surfaces.append(surface_info)
-            faces_topo.append({'surface_id': len(surfaces) - 1, 'face_id': idx})
+            faces_topo.append({"surface_id": len(surfaces) - 1, "face_id": idx})
 
         # Extract edges with curves
         for idx, edge in enumerate(explorer.edges()):
@@ -452,22 +458,60 @@ class CADLoader:
             curve_adaptor.D0(first_param, start_pnt)
             curve_adaptor.D0(last_param, end_pnt)
 
+            # Build parametric curve record
+            curve_info: dict = {
+                "curve_id": idx,
+                "start": [start_pnt.X(), start_pnt.Y(), start_pnt.Z()],
+                "end": [end_pnt.X(), end_pnt.Y(), end_pnt.Z()],
+            }
+            if curve_type == GeomAbs_Line:
+                curve_info["type"] = "LINE"
+            elif curve_type == GeomAbs_Circle:
+                circ = curve_adaptor.Circle()
+                curve_info |= {
+                    "type": "CIRCLE",
+                    "radius": circ.Radius(),
+                    "center": [circ.Location().X(), circ.Location().Y(), circ.Location().Z()],
+                }
+            elif curve_type == GeomAbs_Ellipse:
+                elps = curve_adaptor.Ellipse()
+                curve_info |= {
+                    "type": "ELLIPSE",
+                    "major_radius": elps.MajorRadius(),
+                    "minor_radius": elps.MinorRadius(),
+                }
+            else:
+                curve_info["type"] = "BSPLINE"
+            curves.append(curve_info)
+
             edge_info = {
-                'edge_id': idx,
-                'start': [start_pnt.X(), start_pnt.Y(), start_pnt.Z()],
-                'end': [end_pnt.X(), end_pnt.Y(), end_pnt.Z()]
+                "edge_id": idx,
+                "curve_id": idx,
+                "curve_type": curve_info["type"],
+                "start": curve_info["start"],
+                "end": curve_info["end"],
             }
             edges_topo.append(edge_info)
 
             all_points.extend([[start_pnt.X(), start_pnt.Y(), start_pnt.Z()],
                              [end_pnt.X(), end_pnt.Y(), end_pnt.Z()]])
 
+        # Store topology constants as serializable ints for downstream
+        # face/edge/vertex type filtering. Raw SWIG objects (C++ pointers)
+        # cannot survive pickle/deepcopy across vLLM process boundaries.
+        _topology_constants = {
+            "TopAbs_EDGE": int(TopAbs_EDGE),
+            "TopAbs_FACE": int(TopAbs_FACE),
+            "TopAbs_VERTEX": int(TopAbs_VERTEX),
+            "TopExp_Explorer": "OCC.Core.TopExp.TopExp_Explorer",
+        }
+
         # Extract vertices
         for idx, vertex in enumerate(explorer.vertices()):
             pnt = BRep_Tool.Pnt(vertex)
             vertices_topo.append({
-                'vertex_id': idx,
-                'point': [pnt.X(), pnt.Y(), pnt.Z()]
+                "vertex_id": idx,
+                "point": [pnt.X(), pnt.Y(), pnt.Z()]
             })
             all_points.append([pnt.X(), pnt.Y(), pnt.Z()])
 
@@ -485,7 +529,11 @@ class CADLoader:
             edges=edges_topo,
             vertices=vertices_topo,
             bbox=bbox,
-            metadata={'file_type': 'step', 'num_topo_faces': len(faces_topo)}
+            metadata={
+                "file_type": "step",
+                "num_topo_faces": len(faces_topo),
+                "topology_constants": _topology_constants,
+            }
         )
 
 
@@ -495,16 +543,25 @@ class LLOCADRProcessor:
     Processes actual file format content (like OCR processes document text).
     """
 
-    def __init__(self, tokenizer, mesh_token_id: int, chunk_size: Optional[int] = None):
+    def __init__(self, tokenizer, mesh_token_id: int, chunk_size: int | None = None,
+                 min_chunk_size: int | None = None, max_chunks: int = 27,
+                 target_global_faces: int = 4096):
         self.tokenizer = tokenizer
         self.mesh_token_id = mesh_token_id  # From vocab: "<mesh>"
+        self.min_chunk_size = min_chunk_size
+        self.max_chunks = max_chunks
+        self.target_global_faces = target_global_faces
         self.loader = CADLoader()
         # chunk_size=None enables dynamic chunking based on file analysis
         self.content_chunker = UnifiedCADContentChunker(chunk_size=chunk_size)
 
-    def _chunk_brep(self, brep: BRepData, max_surfaces_per_chunk: int = 10) -> List[Dict]:
+    def _chunk_brep(self, brep: BRepData, max_surfaces_per_chunk: int = 10) -> list[dict]:
         """
-        Chunk BRepData by grouping surfaces.
+        Chunk BRepData by grouping surfaces and their associated faces.
+
+        Faces reference surfaces via ``surface_id``; this method uses that
+        reference to build correct face-to-surface associations rather than
+        assuming positional alignment between the two lists.
 
         Args:
             brep: BRepData object
@@ -513,24 +570,36 @@ class LLOCADRProcessor:
         Returns:
             List of BRep chunks
         """
+        # Build a mapping from surface index -> list of faces
+        surface_to_faces: dict[int, list[dict]] = {}
+        for face in brep.faces:
+            sid = face.get("surface_id")
+            if sid is not None:
+                surface_to_faces.setdefault(sid, []).append(face)
+
         chunks = []
         num_surfaces = len(brep.surfaces)
 
         for i in range(0, num_surfaces, max_surfaces_per_chunk):
             end_idx = min(i + max_surfaces_per_chunk, num_surfaces)
 
+            # Collect all faces that reference surfaces in this chunk's range
+            chunk_faces = []
+            for sid in range(i, end_idx):
+                chunk_faces.extend(surface_to_faces.get(sid, []))
+
             chunk = {
-                'surfaces': brep.surfaces[i:end_idx],
-                'faces': brep.faces[i:end_idx],  # Assume faces align with surfaces
-                'chunk_id': len(chunks),
-                'start_surface': i,
-                'end_surface': end_idx
+                "surfaces": brep.surfaces[i:end_idx],
+                "faces": chunk_faces,
+                "chunk_id": len(chunks),
+                "start_surface": i,
+                "end_surface": end_idx,
             }
             chunks.append(chunk)
 
         return chunks
 
-    def get_chunks(self, file_path: str, chunk_type: str = 'both') -> Dict:
+    def get_chunks(self, file_path: str, chunk_type: str = "both") -> dict:
         """
         Generate and return all chunks for a CAD file.
 
@@ -541,63 +610,61 @@ class LLOCADRProcessor:
         Returns:
             Dictionary with chunk information
         """
-        result = {
-            'file_path': file_path,
-            'file_content_chunks': None,
-            'spatial_chunks': None,
-            'data_type': None
-        }
-
         # Load CAD file
         data = self.loader.load(file_path)
-        result['data_type'] = type(data).__name__
-
+        result = {
+            "file_path": file_path,
+            "file_content_chunks": None,
+            "spatial_chunks": None,
+            "data_type": type(data).__name__,
+        }
         # Get file content chunks
-        if chunk_type in ['file', 'both']:
+        if chunk_type in {"file", "both"}:
             file_chunks = self.content_chunker.chunk_file(file_path)
-            result['file_content_chunks'] = {
-                'num_chunks': len(file_chunks),
-                'chunks': file_chunks,
-                'stats': self.content_chunker.get_chunk_statistics(file_chunks)
+            result["file_content_chunks"] = {
+                "num_chunks": len(file_chunks),
+                "chunks": file_chunks,
+                "stats": self.content_chunker.get_chunk_statistics(file_chunks)
             }
 
         # Get spatial/topological chunks
-        if chunk_type in ['spatial', 'both']:
+        if chunk_type in {"spatial", "both"}:
             if isinstance(data, BRepData):
                 spatial_chunks = self._chunk_brep(data)
-                result['spatial_chunks'] = {
-                    'type': 'brep_topology',
-                    'num_chunks': len(spatial_chunks),
-                    'chunks': spatial_chunks,
-                    'total_surfaces': data.num_surfaces,
-                    'total_faces': data.num_faces,
-                    'total_edges': data.num_edges
+                result["spatial_chunks"] = {
+                    "type": "brep_topology",
+                    "num_chunks": len(spatial_chunks),
+                    "chunks": spatial_chunks,
+                    "total_surfaces": data.num_surfaces,
+                    "total_faces": data.num_faces,
+                    "total_edges": data.num_edges
                 }
             elif isinstance(data, MeshData):
-                spatial_chunks = dynamic_mesh_partition(data)
-                result['spatial_chunks'] = {
-                    'type': 'mesh_octree',
-                    'num_chunks': len(spatial_chunks),
-                    'chunks': [
+                spatial_chunks = dynamic_mesh_partition(data, min_chunk_size=self.min_chunk_size,
+                                                            max_chunks=self.max_chunks)
+                result["spatial_chunks"] = {
+                    "type": "mesh_octree",
+                    "num_chunks": len(spatial_chunks),
+                    "chunks": [
                         {
-                            'chunk_id': i,
-                            'num_vertices': chunk.num_vertices,
-                            'num_faces': chunk.num_faces,
-                            'bbox': chunk.bbox,
-                            'grid_position': chunk.chunk_id
+                            "chunk_id": i,
+                            "num_vertices": chunk.num_vertices,
+                            "num_faces": chunk.num_faces,
+                            "bbox": chunk.bbox,
+                            "grid_position": chunk.chunk_id
                         }
                         for i, chunk in enumerate(spatial_chunks)
                     ],
-                    'total_vertices': data.num_vertices,
-                    'total_faces': data.num_faces
+                    "total_vertices": data.num_vertices,
+                    "total_faces": data.num_faces
                 }
 
         return result
 
     def tokenize_with_meshes(self,
-                            mesh_files: List[str],
+                            mesh_files: list[str],
                             conversation: str,
-                            cropping: bool = True) -> Dict[str, torch.Tensor]:
+                            cropping: bool = True) -> dict[str, torch.Tensor]:
         """
         Full preprocessing pipeline:
         1. Load CAD files (BRep or Mesh)
@@ -638,7 +705,8 @@ class LLOCADRProcessor:
             elif isinstance(data, MeshData):
                 # STL/OBJ file - spatial chunking
                 if cropping:
-                    chunks = dynamic_mesh_partition(data)
+                    chunks = dynamic_mesh_partition(data, min_chunk_size=self.min_chunk_size,
+                                                        max_chunks=self.max_chunks)
                     chunks_list.append(chunks)
 
                     # Determine subdivision from chunks
@@ -654,10 +722,10 @@ class LLOCADRProcessor:
                     spatial_partitions.append((1, 1, 1))
 
                 # Create global view for meshes
-                global_mesh = create_global_view(data, target_faces=4096)
+                global_mesh = create_global_view(data, target_faces=self.target_global_faces)
                 cad_data.append(global_mesh)
             else:
-                raise ValueError(f"Unknown data type: {type(data)}")
+                raise TypeError(f"Unknown data type: {type(data)}")
 
         # Convert to tensors (handles both BRepData and MeshData)
         vertex_coords, vertex_normals = self._cad_to_tensors(cad_data)
@@ -667,16 +735,16 @@ class LLOCADRProcessor:
         tokenized = self._create_token_sequence(conversation, cad_data, chunks_list)
 
         return {
-            'input_ids': tokenized['input_ids'],
-            'vertex_coords': vertex_coords,
-            'vertex_normals': vertex_normals,
-            'chunks_coords': chunks_coords,
-            'chunks_normals': chunks_normals,
-            'mesh_spatial_partition': torch.tensor(spatial_partitions, dtype=torch.long),
-            'num_mesh_tokens': tokenized['num_mesh_tokens']
+            "input_ids": tokenized["input_ids"],
+            "vertex_coords": vertex_coords,
+            "vertex_normals": vertex_normals,
+            "chunks_coords": chunks_coords,
+            "chunks_normals": chunks_normals,
+            "mesh_spatial_partition": torch.tensor(spatial_partitions, dtype=torch.long),
+            "num_mesh_tokens": tokenized["num_mesh_tokens"]
         }
 
-    def _cad_to_tensors(self, cad_data: List) -> Tuple[torch.Tensor, torch.Tensor]:
+    def _cad_to_tensors(self, cad_data: list) -> tuple[torch.Tensor, torch.Tensor]:
         """Convert list of CAD data (BRep or Mesh) to batched tensors."""
         coords_batch = []
         normals_batch = []
@@ -685,9 +753,7 @@ class LLOCADRProcessor:
             if isinstance(data, BRepData):
                 # For BRep, extract representative points from topology
                 points = []
-                for vertex in data.vertices:
-                    points.append(vertex['point'])
-
+                points.extend(vertex["point"] for vertex in data.vertices)
                 # Convert to arrays
                 if points:
                     coords = np.array(points, dtype=np.float32)
@@ -727,7 +793,7 @@ class LLOCADRProcessor:
             torch.from_numpy(np.stack(padded_normals_batch))
         )
 
-    def _chunks_to_tensors(self, chunks_list: List[List]) -> Tuple[torch.Tensor, torch.Tensor]:
+    def _chunks_to_tensors(self, chunks_list: list[list]) -> tuple[torch.Tensor, torch.Tensor]:
         """Convert list of chunk lists (BRep or Mesh) to batched tensors."""
         if not chunks_list or not chunks_list[0]:
             # No chunks, return empty tensors
@@ -753,14 +819,14 @@ class LLOCADRProcessor:
                 chunk_features = []
                 for chunk in chunks:
                     # Use first surface location as representative point
-                    if chunk['surfaces']:
-                        surf = chunk['surfaces'][0]
-                        if 'location' in surf:
-                            chunk_features.append(surf['location'])
-                        elif 'center' in surf:
-                            chunk_features.append(surf['center'])
-                        elif 'axis_location' in surf:
-                            chunk_features.append(surf['axis_location'])
+                    if chunk["surfaces"]:
+                        surf = chunk["surfaces"][0]
+                        if "location" in surf:
+                            chunk_features.append(surf["location"])
+                        elif "center" in surf:
+                            chunk_features.append(surf["center"])
+                        elif "axis_location" in surf:
+                            chunk_features.append(surf["axis_location"])
                         else:
                             chunk_features.append([0.0, 0.0, 0.0])
                     else:
@@ -807,18 +873,18 @@ class LLOCADRProcessor:
         )
 
     def _create_token_sequence(self, conversation: str,
-                              cad_data: List,
-                              chunks_list: List[List]) -> Dict:
+                              cad_data: list,
+                              chunks_list: list[list]) -> dict:
         """Create token sequence with mesh placeholders replaced."""
         # Split conversation by <mesh> markers
-        parts = conversation.split('<mesh>')
+        parts = conversation.split("<mesh>")
 
         # Calculate tokens per CAD file
         num_mesh_tokens = []
-        for i, (data, chunks) in enumerate(zip(cad_data, chunks_list)):
-            # Global tokens: fixed ~384
-            global_tokens = 384
+        # Global tokens: fixed ~384
+        global_tokens = 384
 
+        for _idx, (_data, chunks) in enumerate(zip(cad_data, chunks_list)):
             # Local tokens: depends on chunks
             if len(chunks) > 1:
                 local_tokens = len(chunks) * 128
@@ -843,6 +909,11 @@ class LLOCADRProcessor:
                 token_ids.extend([self.mesh_token_id] * num_mesh_tokens[i])
 
         return {
-            'input_ids': torch.tensor([token_ids], dtype=torch.long),
-            'num_mesh_tokens': num_mesh_tokens
+            "input_ids": torch.tensor([token_ids], dtype=torch.long),
+            "num_mesh_tokens": num_mesh_tokens
         }
+
+
+# Public alias — external modules (run_ll_ocadr.py, latticelabs_ocadr.py) import
+# this name for unified CAD/mesh loading.
+MeshLoader = CADLoader

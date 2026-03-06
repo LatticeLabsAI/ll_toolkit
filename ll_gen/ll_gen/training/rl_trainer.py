@@ -52,6 +52,7 @@ class RLAlignmentTrainer:
         max_grad_norm: float = 1.0,
         device: str = "cpu",
         output_dir: str = "training_output",
+        seed: int | None = None,
     ) -> None:
         """Initialize the RL alignment trainer.
 
@@ -65,6 +66,7 @@ class RLAlignmentTrainer:
             max_grad_norm: Gradient clipping threshold.
             device: Target device ("cpu" or "cuda").
             output_dir: Directory for saving checkpoints and logs.
+            seed: Random seed for reproducible shuffling. None for non-deterministic.
         """
         self.generator = generator
         self.disposal_config = disposal_config or DisposalConfig()
@@ -84,6 +86,7 @@ class RLAlignmentTrainer:
         self._train_history: list[dict[str, Any]] = []
         self._step_count: int = 0
         self._metrics_computer = MetricsComputer()
+        self._rng = np.random.default_rng(seed)
 
     def _init_training(self) -> None:
         """Initialize training components lazily.
@@ -158,24 +161,28 @@ class RLAlignmentTrainer:
         import torch
 
         self._init_training()
-        assert self._optimizer is not None
-        assert self._disposal_engine is not None
+        if self._optimizer is None:
+            raise RuntimeError("Optimizer not initialized — call _init_training() first")
+        if self._disposal_engine is None:
+            raise RuntimeError("Disposal engine not initialized — call _init_training() first")
 
-        # 1. Generate proposal (no_grad: avoid building graph during sampling)
-        with torch.no_grad():
-            proposal = self.generator.generate(prompt)
+        # 1. Generate proposal WITH gradients (log-probs on the sampled trajectory)
+        proposal = self.generator.generate_for_training(prompt)
 
-        # 2. Dispose (deterministic execution + validation)
+        # 2. Dispose (deterministic execution + validation — no grad needed)
         result = self._disposal_engine.dispose(proposal, export=False)
 
-        # 3. Compute reward
+        # 3. Compute reward (scalar, non-differentiable)
         reward = compute_reward(
             result,
             config=self.feedback_config,
             target_dimensions=target_dimensions,
         )
 
-        # 4. Update baseline (EMA), seeding with first observed reward
+        # 4. Compute advantage BEFORE updating baseline so step-0 is not wasted
+        advantage = reward - self._baseline
+
+        # 5. Update baseline (EMA), seeding with first observed reward
         if self._step_count == 0:
             self._baseline = reward
         else:
@@ -184,58 +191,63 @@ class RLAlignmentTrainer:
                 (1.0 - self.baseline_decay) * reward
             )
 
-        # 5. Compute advantage
-        advantage = reward - self._baseline
-
-        # 6. Policy gradient loss
-        # Re-run the model with the generated token sequence to get log_probs
-        # This is the key: we need log probabilities for the generated tokens
-
+        # 6. Policy gradient loss using log-probs from the SAME trajectory
         loss_value = 0.0
-        entropy_value = 0.0
+        step_failed = False
+        entropy_value = proposal.entropy if proposal.entropy is not None else 0.0
 
         try:
-            # Extract token IDs from proposal if available
-            token_ids = None
-            if hasattr(proposal, "token_ids"):
-                token_ids = proposal.token_ids
-            elif hasattr(proposal, "command_sequence"):
-                # For command-based proposals, extract or synthesize token IDs
-                token_ids = self._extract_token_ids(proposal)
-
-            if token_ids is not None and len(token_ids) > 0:
-                # Zero gradients before teacher-forcing forward pass
+            if proposal.log_probs is not None:
                 self._optimizer.zero_grad()
 
-                # Teacher-forcing: run model with token_ids to get log_probs
-                log_probs, entropy_value = self._get_log_probs(token_ids)
+                # REINFORCE: -advantage * log_prob(sampled trajectory)
+                policy_loss = -advantage * proposal.log_probs
+                entropy_bonus = -self.entropy_coeff * entropy_value
 
-                if log_probs is not None:
-                    # Policy gradient: -advantage * log_probs - entropy_bonus
-                    # (negative because we want to maximize reward)
-                    policy_loss = -advantage * log_probs.sum()
-                    entropy_bonus = -self.entropy_coeff * entropy_value
+                total_loss = policy_loss + entropy_bonus
 
-                    total_loss = policy_loss + entropy_bonus
+                # Backward pass
+                total_loss.backward()
 
-                    # Backward pass
-                    total_loss.backward()
+                # Gradient clipping
+                torch.nn.utils.clip_grad_norm_(
+                    self.generator._model.parameters(),
+                    self.max_grad_norm,
+                )
 
-                    # Gradient clipping
-                    torch.nn.utils.clip_grad_norm_(
-                        self.generator._model.parameters(),
-                        self.max_grad_norm,
-                    )
+                # Optimizer step
+                self._optimizer.step()
 
-                    # Optimizer step
-                    self._optimizer.step()
-
-                    loss_value = float(total_loss.detach().cpu())
+                loss_value = float(total_loss.detach().cpu())
             else:
-                _log.warning("Could not extract token_ids from proposal")
+                _log.warning(
+                    "Proposal has no log_probs — generator may not support "
+                    "generate_for_training(); skipping gradient update"
+                )
 
-        except Exception as e:
-            _log.error("Error during policy gradient computation: %s", e)
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except RuntimeError as e:
+            err_msg = str(e).lower()
+            if "out of memory" in err_msg or "cuda" in err_msg:
+                _log.critical(
+                    "Fatal GPU/memory error during backward pass — "
+                    "re-raising to prevent corrupt training state: %s", e
+                )
+                raise
+            _log.error(
+                "RuntimeError during policy gradient computation "
+                "(step %d): %s", self._step_count, e,
+                exc_info=True,
+            )
+            loss_value = 0.0
+            step_failed = True
+        except (ValueError, TypeError) as e:
+            _log.error(
+                "Recoverable error during policy gradient computation "
+                "(step %d): %s", self._step_count, e,
+                exc_info=True,
+            )
             loss_value = 0.0
             step_failed = True
         else:
@@ -263,6 +275,12 @@ class RLAlignmentTrainer:
         """Extract token IDs from a proposal.
 
         Handles CommandSequenceProposal and other proposal types.
+        Used by external callers (e.g. evaluation, logging) that need
+        token IDs from an already-generated proposal.
+
+        Note:
+            For RL training, use ``generator.generate_for_training()``
+            instead — it computes log-probs on the same trajectory.
 
         Args:
             proposal: A BaseProposal subclass.
@@ -325,6 +343,12 @@ class RLAlignmentTrainer:
     ) -> tuple[Any | None, float]:
         """Get log probabilities for a token sequence via teacher-forcing.
 
+        .. deprecated::
+            This method runs a separate forward pass that is disconnected
+            from the sampling trajectory, producing biased gradients for
+            stochastic models (VAE, diffusion).  Use
+            ``generator.generate_for_training()`` for RL training instead.
+
         Args:
             token_ids: Array of token IDs to compute log_probs for.
 
@@ -333,63 +357,13 @@ class RLAlignmentTrainer:
             log_probs shape: (seq_len,) or (seq_len * num_params,)
             entropy: scalar value
         """
-        import torch
-
-        if self.generator._model is None:
-            return None, 0.0
-
-        try:
-            # Convert to tensor
-            if isinstance(token_ids, np.ndarray):
-                token_ids_t = torch.from_numpy(token_ids).long().to(self.device)
-            else:
-                token_ids_t = token_ids.to(self.device)
-
-            # Forward pass (no torch.no_grad — gradients must flow for training)
-            # The exact interface depends on your model.
-            # Assumes model returns logits or log_probs directly
-            output = self.generator._model(token_ids_t.unsqueeze(0))
-
-            # Extract log probabilities from output
-            # This is model-specific; adapt as needed
-            if hasattr(output, "logits"):
-                logits = output.logits
-            elif isinstance(output, tuple) and len(output) > 0:
-                logits = output[0]
-            else:
-                logits = output
-
-            # Compute log_probs via softmax
-            log_probs = torch.nn.functional.log_softmax(logits, dim=-1)
-
-            # Gather log-probs for actually chosen tokens only (REINFORCE)
-            # logits shape: (1, seq_len, vocab_size) or (seq_len, vocab_size)
-            if log_probs.dim() == 3:
-                log_probs = log_probs.squeeze(0)  # (seq_len, vocab_size)
-
-            # Shift: teacher forcing means logits[t] predicts token[t+1]
-            if len(token_ids_t) > 1:
-                shifted_log_probs = log_probs[:-1]   # (seq_len-1, vocab)
-                shifted_targets = token_ids_t[1:]     # (seq_len-1,)
-                chosen_log_probs = shifted_log_probs.gather(
-                    1, shifted_targets.unsqueeze(1)
-                ).squeeze(1)
-                log_prob_sum = chosen_log_probs.sum()
-
-                # Entropy over valid shifted positions
-                shifted_probs = torch.exp(shifted_log_probs)
-                entropy = -(shifted_probs * shifted_log_probs).sum(dim=-1).mean()
-            else:
-                # Degenerate single-token case
-                log_prob_sum = log_probs.sum()
-                probs = torch.exp(log_probs)
-                entropy = -(probs * log_probs).sum()
-
-            return log_prob_sum, float(entropy.detach().cpu())
-
-        except Exception as e:
-            _log.warning("Error computing log_probs: %s", e)
-            return None, 0.0
+        raise NotImplementedError(
+            "_get_log_probs() ran a forward pass disconnected from the "
+            "sampling trajectory, producing biased gradients for stochastic "
+            "models (VAE, diffusion). Use generator.generate_for_training() "
+            "which returns log_probs on the actual sampled trajectory via "
+            "proposal.log_probs."
+        )
 
     def train_epoch(
         self,
@@ -419,7 +393,7 @@ class RLAlignmentTrainer:
         # Copy to avoid mutating the caller's list
         dataset = list(dataset)
         if shuffle:
-            np.random.shuffle(dataset)
+            self._rng.shuffle(dataset)
 
         rewards = []
         losses = []
@@ -487,7 +461,8 @@ class RLAlignmentTrainer:
         import torch
 
         self._init_training()
-        assert self._disposal_engine is not None
+        if self._disposal_engine is None:
+            raise RuntimeError("Disposal engine not initialized — call _init_training() first")
 
         # Set model to eval mode for correct dropout/batchnorm behavior
         if self.generator._model is not None:
@@ -534,7 +509,8 @@ class RLAlignmentTrainer:
         import torch
 
         self._init_training()
-        assert self._optimizer is not None
+        if self._optimizer is None:
+            raise RuntimeError("Optimizer not initialized — call _init_training() first")
 
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -556,7 +532,7 @@ class RLAlignmentTrainer:
         torch.save(checkpoint, path)
 
         # Save train_history as separate JSON (avoids weights_only=True issues)
-        history_path = str(path).replace(".pt", "_history.json")
+        history_path = path.with_name(path.stem + "_history.json")
         with open(history_path, "w") as f:
             json.dump(self._train_history, f)
 
@@ -571,7 +547,8 @@ class RLAlignmentTrainer:
         import torch
 
         self._init_training()
-        assert self._optimizer is not None
+        if self._optimizer is None:
+            raise RuntimeError("Optimizer not initialized — call _init_training() first")
 
         path = Path(path)
         try:
@@ -586,7 +563,7 @@ class RLAlignmentTrainer:
         self._baseline = checkpoint.get("baseline", 0.0)
 
         # Load train_history from separate JSON file
-        history_path = str(path).replace(".pt", "_history.json")
+        history_path = path.with_name(path.stem + "_history.json")
         try:
             with open(history_path, "r") as f:
                 self._train_history = json.load(f)

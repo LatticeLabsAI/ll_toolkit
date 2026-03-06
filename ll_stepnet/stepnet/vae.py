@@ -21,6 +21,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from .config import (
+    NUM_COMMAND_TYPES,
+    NUM_PARAM_SLOTS,
+    DEFAULT_QUANTIZATION_LEVELS,
+    DEFAULT_MAX_SEQ_LEN,
+)
 from .encoder import STEPTransformerEncoder, STEPTransformerDecoder
 
 _log = logging.getLogger(__name__)
@@ -46,11 +52,11 @@ class STEPVAE(nn.Module):
     def __init__(
         self,
         encoder_config,
-        latent_dim: int = 256,
+        latent_dim: int = DEFAULT_QUANTIZATION_LEVELS,
         kl_weight: float = 1.0,
-        num_command_types: int = 6,
-        num_param_levels: int = 256,
-        max_seq_len: int = 60,
+        num_command_types: int = NUM_COMMAND_TYPES,
+        num_param_levels: int = DEFAULT_QUANTIZATION_LEVELS,
+        max_seq_len: int = DEFAULT_MAX_SEQ_LEN,
     ) -> None:
         super().__init__()
 
@@ -101,9 +107,9 @@ class STEPVAE(nn.Module):
 
         # Output heads
         self.command_head = nn.Linear(embed_dim, num_command_types)
-        # 16 parameter slots, each quantised into num_param_levels bins
+        # NUM_PARAM_SLOTS parameter slots, each quantised into num_param_levels bins
         self.param_heads = nn.ModuleList(
-            [nn.Linear(embed_dim, num_param_levels) for _ in range(16)]
+            [nn.Linear(embed_dim, num_param_levels) for _ in range(NUM_PARAM_SLOTS)]
         )
 
         # KL warmup tracking

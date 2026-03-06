@@ -323,11 +323,13 @@ class GraphTokenizer:
 
             # Dequantize
             node_params = self._node_params or self.node_quantizer.fitted_params
-            if node_params is not None:
-                node_features = self.node_quantizer.dequantize(q_node_feats, node_params)
-            else:
-                # Can't dequantize without params — return quantized values as float
-                node_features = q_node_feats.astype(np.float32)
+            if node_params is None:
+                raise ValueError(
+                    "Cannot dequantize node features: no quantization params "
+                    "available. Call tokenize() or fit() first so that "
+                    "fitted_params are populated."
+                )
+            node_features = self.node_quantizer.dequantize(q_node_feats, node_params)
         else:
             node_features = np.zeros((0, self.config.node_feature_dim), dtype=np.float32)
 
@@ -359,10 +361,13 @@ class GraphTokenizer:
                 q_edge_feats[i] = et.feature_tokens[:feat_dim]
 
             edge_params = self._edge_params or self.edge_quantizer.fitted_params
-            if edge_params is not None:
-                edge_features = self.edge_quantizer.dequantize(q_edge_feats, edge_params)
-            else:
-                edge_features = q_edge_feats.astype(np.float32)
+            if edge_params is None:
+                raise ValueError(
+                    "Cannot dequantize edge features: no quantization params "
+                    "available. Call tokenize() or fit() first so that "
+                    "fitted_params are populated."
+                )
+            edge_features = self.edge_quantizer.dequantize(q_edge_feats, edge_params)
         else:
             edge_index = np.zeros((2, 0), dtype=np.int64)
             edge_features = None

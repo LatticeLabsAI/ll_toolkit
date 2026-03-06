@@ -9,11 +9,13 @@ Classes:
 
 from __future__ import annotations
 
+import itertools
 import logging
 import random
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Iterator, Optional
+from typing import TYPE_CHECKING, Any, Optional
+from collections.abc import Iterator
 
 if TYPE_CHECKING:
     from cadling.datamodel.base_models import CADlingDocument
@@ -35,6 +37,7 @@ from cadling.sdg.qa.prompts import (
 from cadling.sdg.qa.prompts.generation_prompts import get_prompts_for_level
 from cadling.sdg.qa.utils import (
     ChatAgent,
+    count_tokens_simple,
     load_qa_chunks,
     postprocess_answer,
     postprocess_question,
@@ -152,18 +155,13 @@ class CADGenerator:
 
         _log.info(f"Generating Q&A pairs from {source}")
 
-        # Load passages
-        passages = list(load_qa_chunks(source))
-        _log.info(f"Loaded {len(passages)} passages")
-
-        # Limit to max_qac
-        if len(passages) > self.options.max_qac:
-            passages = passages[: self.options.max_qac]
+        # Stream passages up to max_qac (avoid materializing entire JSONL)
+        passages = itertools.islice(load_qa_chunks(source), self.options.max_qac)
 
         # Generate Q&A for each passage
         for i, passage in enumerate(passages):
             try:
-                _log.debug(f"Generating Q&A {i + 1}/{len(passages)}")
+                _log.debug(f"Generating Q&A {i + 1}/{self.options.max_qac}")
 
                 qac = self._generate_for_passage(passage)
                 if qac:
@@ -364,19 +362,27 @@ class CADGenerator:
         self,
         passage: CADQaChunk,
         question: str,
+        question_type: QuestionType | None = None,
     ) -> str:
         """Generate an answer for a question.
 
         Args:
             passage: CAD passage chunk
             question: Question to answer
+            question_type: Type of question to match answer prompt style
 
         Returns:
             Generated answer
         """
-        # Use fact_single prompt for answers (generic)
-        prompts = get_generation_prompts()
-        prompt_template = prompts.get("fact_single", self.prompts[0])
+        # Select prompt template matching the question type
+        if question_type:
+            prompts = get_prompts_for_question_type(question_type)
+            if prompts:
+                prompt_template = self.rng.choice(prompts)
+            else:
+                prompt_template = self.rng.choice(self.prompts)
+        else:
+            prompt_template = self.rng.choice(self.prompts)
 
         answer_prompt = prompt_template.format_answer_prompt(
             context=passage.text,
@@ -454,9 +460,9 @@ class CADGenerator:
                 doc_id=getattr(chunk, "doc_id", ""),
                 doc_name=chunk.doc_name,
                 entity_types=chunk.meta.entity_types if chunk.meta else [],
-                entity_ids=chunk.meta.entity_ids if chunk.meta else [],
+                entity_ids=[str(eid) for eid in chunk.meta.entity_ids] if chunk.meta else [],
                 properties=chunk.meta.properties if chunk.meta else {},
-                token_count=chunk.token_count,
+                token_count=count_tokens_simple(chunk.text),
             )
             qa_chunks.append(qa_chunk)
 

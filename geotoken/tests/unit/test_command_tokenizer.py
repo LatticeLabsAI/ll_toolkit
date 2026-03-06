@@ -326,3 +326,62 @@ class TestDequantizeParameters:
         assert dequantized[0]["type"] == CommandType.LINE
         # Values should be floats
         assert all(isinstance(p, float) for p in dequantized[0]["params"])
+
+
+class TestLooksLikePadded:
+    """Tests for _looks_like_padded false-positive prevention."""
+
+    def test_line_to_origin_not_detected_as_padded(self):
+        """A compact DeepCAD LINE from (0.5, 0.5) to (0, 0) must NOT be
+        misidentified as old cadling z-interleaved format.
+
+        Compact: [0.5, 0.5, 0.0, 0.0, 0, ..., 0]  (x1, y1, x2, y2)
+        Old:     [0.5, 0.5, 0,   0.0, 0.0, 0, ..., 0]  (x1, y1, z, x2, y2, z)
+
+        The heuristic must not fire here — both are structurally identical
+        when the endpoint is origin, so we must be conservative.
+        """
+        params = [0.5, 0.5, 0.0, 0.0] + [0.0] * 12
+        result = CommandSequenceTokenizer._looks_like_padded(
+            CommandType.LINE, params
+        )
+        assert result is False, (
+            "_looks_like_padded should NOT match compact LINE to origin"
+        )
+
+    def test_line_with_zero_x2_not_detected_as_padded(self):
+        """Compact LINE with x2=0 (e.g. vertical line) must not be corrupted.
+
+        Compact: [0.5, 0.5, 0.0, 0.3, 0, ..., 0]  (x2=0, y2=0.3)
+        If misidentified, strip would produce [0.5, 0.5, 0.3, 0.0] — wrong!
+        """
+        params = [0.5, 0.5, 0.0, 0.3] + [0.0] * 12
+        result = CommandSequenceTokenizer._looks_like_padded(
+            CommandType.LINE, params
+        )
+        assert result is False, (
+            "_looks_like_padded should NOT match when only params[3] is non-zero"
+        )
+
+    def test_genuine_cadling_line_detected(self):
+        """Old cadling format with clear z-interleaving IS detected.
+
+        Old: [0.5, 0.5, 0, 0.3, 0.7, 0, 0, ..., 0]
+        Both x2 (idx 3) AND y2 (idx 4) non-zero → strong cadling signal.
+        """
+        params = [0.5, 0.5, 0.0, 0.3, 0.7, 0.0] + [0.0] * 10
+        result = CommandSequenceTokenizer._looks_like_padded(
+            CommandType.LINE, params
+        )
+        assert result is True
+
+    def test_parse_preserves_line_to_origin(self):
+        """End-to-end: parsing a LINE to origin keeps all 4 params correct."""
+        config = CommandTokenizationConfig(source_format="auto")
+        tokenizer = CommandSequenceTokenizer(command_config=config)
+        commands = [
+            {"type": "Line", "params": [0.5, 0.5, 0.0, 0.0] + [0.0] * 12}
+        ]
+        parsed = tokenizer.parse_construction_history(commands)
+        # First 4 params must be preserved exactly
+        assert parsed[0]["params"][:4] == [0.5, 0.5, 0.0, 0.0]

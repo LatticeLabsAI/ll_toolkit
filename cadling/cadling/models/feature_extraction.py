@@ -129,6 +129,12 @@ class FeatureExtractionModel(EnrichmentModel):
             if cached_features is not None:
                 _log.debug("Using cached features")
                 self._apply_features_to_items(cached_features, doc, item_batch)
+                for item in item_batch:
+                    if "face_geometry" in item.properties or "available_face_features" in item.properties:
+                        item.add_provenance(
+                            component_type="enrichment_model",
+                            component_name=self.__class__.__name__,
+                        )
                 return
 
         # Extract features via OCC wrapper
@@ -136,6 +142,14 @@ class FeatureExtractionModel(EnrichmentModel):
 
         # Apply to document and items
         self._apply_features_to_items(features, doc, item_batch)
+
+        # Stamp provenance on items that received features
+        for item in item_batch:
+            if "face_geometry" in item.properties or "available_face_features" in item.properties:
+                item.add_provenance(
+                    component_type="enrichment_model",
+                    component_name=self.__class__.__name__,
+                )
 
         # Cache for future use
         if self._cache is not None and cache_key is not None:
@@ -194,11 +208,14 @@ class FeatureExtractionModel(EnrichmentModel):
         Returns:
             Cache key string
         """
-        # Get source file path
+        # Build cache key from origin metadata (unique per file content)
         file_path = None
-        input_doc = getattr(doc, "input", None)
-        if input_doc is not None:
-            file_path = getattr(input_doc, "file", None)
+        if doc.origin is not None:
+            # Prefer binary_hash for content-based cache keys (avoids name collisions)
+            if doc.origin.binary_hash:
+                file_path = Path(f"{doc.origin.filename}_{doc.origin.binary_hash[:16]}")
+            else:
+                file_path = Path(doc.origin.filename)
 
         if file_path is None:
             # Use document name as fallback

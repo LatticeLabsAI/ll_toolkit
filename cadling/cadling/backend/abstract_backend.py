@@ -81,14 +81,15 @@ class AbstractCADBackend(ABC):
             path_or_stream: Path to file or byte stream.
             options: Backend-specific options.
         """
+        self.in_doc = in_doc
         self.file = in_doc.file
         self.path_or_stream = path_or_stream
         self.input_format = in_doc.format
         self.options = options or self._get_default_options()
 
-        # Use _compute_hash to set document_hash from file content,
-        # falling back to the hash provided by the input document
-        self.document_hash = self._compute_hash_from_source(path_or_stream) or in_doc.document_hash
+        # Reuse hash already computed during _create_input_document
+        # instead of re-reading the file via _compute_hash_from_source
+        self.document_hash = in_doc.document_hash
 
         _log.debug(
             f"Initialized {self.__class__.__name__} for {self.file.name} "

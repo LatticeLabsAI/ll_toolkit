@@ -210,7 +210,10 @@ class IGESBackend(DeclarativeCADBackend, RenderableCADBackend):
         Returns:
             IGES file content as string
         """
-        if isinstance(self.path_or_stream, (str, Path)):
+        # Use content cache from document converter to avoid redundant disk read
+        if self.in_doc._content_cache is not None:
+            return self.in_doc._content_cache.decode("utf-8", errors="ignore")
+        elif isinstance(self.path_or_stream, (str, Path)):
             with open(self.path_or_stream, "r", encoding="utf-8", errors="ignore") as f:
                 return f.read()
         else:
@@ -229,6 +232,12 @@ class IGESBackend(DeclarativeCADBackend, RenderableCADBackend):
         - P: Parameter Data (entity data)
         - T: Terminate (section counts)
         """
+        # Clear sections to ensure idempotency on repeated calls
+        self.start_section.clear()
+        self.global_section.clear()
+        self.directory_entries.clear()
+        self.parameter_data.clear()
+
         lines = self.iges_text.split("\n")
 
         for line in lines:
@@ -374,7 +383,6 @@ class IGESBackend(DeclarativeCADBackend, RenderableCADBackend):
             "left",
             "isometric",
             "isometric2",
-            "isometric_back",
         ]
 
     def load_view(self, view_name: str) -> CADViewBackend:

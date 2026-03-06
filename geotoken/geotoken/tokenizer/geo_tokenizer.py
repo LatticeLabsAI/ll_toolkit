@@ -111,7 +111,8 @@ class GeoTokenizer:
 
         # Denormalize using stored parameters
         norm_center = np.array(tokens.metadata.get("norm_center", [0, 0, 0]))
-        norm_scale = tokens.metadata.get("norm_scale", 1.0)
+        raw_scale = tokens.metadata.get("norm_scale", 1.0)
+        norm_scale = np.array(raw_scale) if isinstance(raw_scale, list) else raw_scale
 
         from ..quantization.normalizer import NormalizationResult
         norm_result = NormalizationResult(

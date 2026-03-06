@@ -281,6 +281,53 @@ class DisposalEngine:
         return result
 
     # ------------------------------------------------------------------
+    # Deferred export
+    # ------------------------------------------------------------------
+
+    def export_result(self, result: "DisposalResult") -> "DisposalResult":
+        """Export a previously-disposed result to STEP and STL.
+
+        Useful when disposal was run with ``export=False`` (e.g. during
+        batch candidate generation) and only the winning result needs to
+        be written to disk.
+
+        Args:
+            result: A disposal result whose ``shape`` is not None and
+                ``is_valid`` is True.
+
+        Returns:
+            The same *result* instance with ``step_path`` and ``stl_path``
+            populated.
+        """
+        shape = result.shape
+        if shape is None or not result.is_valid:
+            return result
+
+        pid = result.proposal_id or "exported"
+
+        try:
+            step_path = self.output_dir / f"{pid}.step"
+            result.step_path = export_step(
+                shape, step_path, self.export_config.step_schema,
+            )
+        except Exception as exc:
+            _log.warning("STEP export failed: %s", exc)
+
+        try:
+            stl_path = self.output_dir / f"{pid}.stl"
+            result.stl_path = export_stl(
+                shape,
+                stl_path,
+                self.export_config.stl_linear_deflection,
+                self.export_config.stl_angular_deflection,
+                self.export_config.stl_ascii,
+            )
+        except Exception as exc:
+            _log.warning("STL export failed: %s", exc)
+
+        return result
+
+    # ------------------------------------------------------------------
     # Executor routing
     # ------------------------------------------------------------------
 

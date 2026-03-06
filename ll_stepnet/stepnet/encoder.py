@@ -5,6 +5,9 @@ Uses tokenizer, features, and topology separately.
 """
 from __future__ import annotations
 
+import logging
+import math
+
 import torch
 import torch.nn as nn
 from typing import Dict, List, Optional
@@ -12,6 +15,24 @@ from typing import Dict, List, Optional
 from .tokenizer import STEPTokenizer
 from .features import STEPFeatureExtractor
 from .topology import STEPTopologyBuilder
+
+_log = logging.getLogger(__name__)
+
+
+def _sinusoidal_positional_encoding(max_len: int, embed_dim: int) -> torch.Tensor:
+    """Generate sinusoidal positional encoding (Vaswani et al., 2017).
+
+    Returns:
+        Tensor of shape [1, max_len, embed_dim] with sin/cos positional signals.
+    """
+    pe = torch.zeros(max_len, embed_dim)
+    position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+    div_term = torch.exp(
+        torch.arange(0, embed_dim, 2, dtype=torch.float) * (-math.log(10000.0) / embed_dim)
+    )
+    pe[:, 0::2] = torch.sin(position * div_term)
+    pe[:, 1::2] = torch.cos(position * div_term)
+    return pe.unsqueeze(0)  # [1, max_len, embed_dim]
 
 
 class STEPTransformerEncoder(nn.Module):
@@ -36,8 +57,10 @@ class STEPTransformerEncoder(nn.Module):
         # Token embedding
         self.token_embedding = nn.Embedding(vocab_size, embed_dim)
 
-        # Positional encoding
-        self.pos_embedding = nn.Parameter(torch.zeros(1, 5000, embed_dim))
+        # Positional encoding (sinusoidal init for faster convergence)
+        self.pos_embedding = nn.Parameter(
+            _sinusoidal_positional_encoding(5000, embed_dim)
+        )
 
         # Transformer layers
         encoder_layer = nn.TransformerEncoderLayer(
@@ -110,25 +133,95 @@ class STEPTransformerDecoder(nn.Module):
 
         self.embed_dim = embed_dim
         self.num_layers = num_layers
+        self._num_heads = num_heads
+        self._ff_dim = ff_dim
+        self._dropout_rate = dropout
 
         # Token embedding
         self.token_embedding = nn.Embedding(vocab_size, embed_dim)
 
-        # Positional encoding
-        self.pos_embedding = nn.Parameter(torch.zeros(1, 5000, embed_dim))
-
-        # Transformer decoder layers (causal attention)
-        decoder_layer = nn.TransformerDecoderLayer(
-            d_model=embed_dim,
-            nhead=num_heads,
-            dim_feedforward=ff_dim,
-            dropout=dropout,
-            batch_first=True
+        # Positional encoding (sinusoidal init for faster convergence)
+        self.pos_embedding = nn.Parameter(
+            _sinusoidal_positional_encoding(5000, embed_dim)
         )
-        self.transformer = nn.TransformerDecoder(decoder_layer, num_layers=num_layers)
+
+        # Lazy-built stacks: only one is instantiated per use-case to halve
+        # decoder memory.  Both are registered as proper submodules so that
+        # state_dict / load_state_dict still work transparently.
+        self._causal_encoder: Optional[nn.TransformerEncoder] = None
+        self._transformer: Optional[nn.TransformerDecoder] = None
 
         self.dropout = nn.Dropout(dropout)
         self.layer_norm = nn.LayerNorm(embed_dim)
+
+    @property
+    def causal_encoder(self) -> nn.TransformerEncoder:
+        """Lazily build the GPT-style causal encoder on first access."""
+        if self._causal_encoder is None:
+            encoder_layer = nn.TransformerEncoderLayer(
+                d_model=self.embed_dim,
+                nhead=self._num_heads,
+                dim_feedforward=self._ff_dim,
+                dropout=self._dropout_rate,
+                batch_first=True,
+            )
+            self._causal_encoder = nn.TransformerEncoder(
+                encoder_layer, num_layers=self.num_layers,
+            )
+            # Move to same device/dtype as token embedding
+            self._causal_encoder = self._causal_encoder.to(
+                device=self.token_embedding.weight.device,
+                dtype=self.token_embedding.weight.dtype,
+            )
+            # Register as submodule so state_dict sees it
+            self.add_module('_causal_encoder', self._causal_encoder)
+        return self._causal_encoder
+
+    @property
+    def transformer(self) -> nn.TransformerDecoder:
+        """Lazily build the cross-attention decoder on first access."""
+        if self._transformer is None:
+            decoder_layer = nn.TransformerDecoderLayer(
+                d_model=self.embed_dim,
+                nhead=self._num_heads,
+                dim_feedforward=self._ff_dim,
+                dropout=self._dropout_rate,
+                batch_first=True,
+            )
+            self._transformer = nn.TransformerDecoder(
+                decoder_layer, num_layers=self.num_layers,
+            )
+            self._transformer = self._transformer.to(
+                device=self.token_embedding.weight.device,
+                dtype=self.token_embedding.weight.dtype,
+            )
+            self.add_module('_transformer', self._transformer)
+        return self._transformer
+
+    def _load_from_state_dict(
+        self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs
+    ):
+        """Backward-compatible loading: remap old causal_encoder.*/transformer.* keys."""
+        remaps = {}
+        for key in list(state_dict.keys()):
+            if key.startswith(prefix + 'causal_encoder.'):
+                new_key = key.replace(prefix + 'causal_encoder.', prefix + '_causal_encoder.', 1)
+                remaps[key] = new_key
+            elif key.startswith(prefix + 'transformer.'):
+                new_key = key.replace(prefix + 'transformer.', prefix + '_transformer.', 1)
+                remaps[key] = new_key
+        for old_key, new_key in remaps.items():
+            state_dict[new_key] = state_dict.pop(old_key)
+
+        # Eagerly build any stack whose weights appear in the state_dict
+        if any(k.startswith(prefix + '_causal_encoder.') for k in state_dict):
+            _ = self.causal_encoder  # trigger lazy init
+        if any(k.startswith(prefix + '_transformer.') for k in state_dict):
+            _ = self.transformer  # trigger lazy init
+
+        super()._load_from_state_dict(
+            state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs
+        )
 
     def forward(
         self,
@@ -180,26 +273,28 @@ class STEPTransformerDecoder(nn.Module):
         else:
             padding_mask = None
 
-        # Determine memory for the decoder cross-attention
-        # When cross_attention_memory is provided, use it as external memory;
-        # otherwise fall back to self-attention (memory = x).
-        if cross_attention_memory is not None:
-            memory = cross_attention_memory
-        else:
-            memory = x
+        # Route: cross-attention decoder vs GPT-style causal encoder
+        has_memory = cross_attention_memory is not None
+        has_conditioner = conditioner is not None and conditioning_inputs is not None
 
-        # Process through decoder layers with optional per-layer conditioning
-        if conditioner is not None and conditioning_inputs is not None:
-            # Apply conditioning with block_index for skip logic (Text2CAD)
+        if has_conditioner:
+            # Conditioning path always uses the decoder (cross-attention needed)
+            memory = cross_attention_memory if has_memory else x
             x = self._forward_with_conditioning(
                 x, memory, causal_mask, padding_mask,
                 conditioner, conditioning_inputs,
             )
-        else:
-            # Standard decoder forward
+        elif has_memory:
+            # External memory provided — use decoder cross-attention
             x = self.transformer(
-                x, memory=memory, tgt_mask=causal_mask,
+                x, memory=cross_attention_memory, tgt_mask=causal_mask,
                 tgt_key_padding_mask=padding_mask,
+            )
+        else:
+            # GPT-style: causal self-attention only (no cross-attention)
+            x = self.causal_encoder(
+                x, mask=causal_mask,
+                src_key_padding_mask=padding_mask,
             )
 
         x = self.layer_norm(x)
@@ -283,33 +378,67 @@ class STEPGraphEncoder(nn.Module):
         self.activation = nn.ReLU()
         self.dropout = nn.Dropout(0.1)
 
+    @staticmethod
+    def _to_sparse(adj: torch.Tensor) -> torch.Tensor:
+        """Convert adjacency to sparse COO format if not already sparse.
+
+        Accepts dense [N, N], sparse COO, or sparse CSR tensors.
+        Returns a coalesced sparse COO tensor.
+        """
+        if adj.is_sparse or adj.layout == torch.sparse_csr:
+            return adj.to_sparse_coo().coalesce()
+        # Dense -> sparse COO
+        indices = adj.nonzero(as_tuple=False).t().contiguous()  # [2, nnz]
+        values = adj[indices[0], indices[1]]
+        return torch.sparse_coo_tensor(
+            indices, values, adj.shape, device=adj.device, dtype=adj.dtype,
+        ).coalesce()
+
     def forward(self, node_features: torch.Tensor, adjacency_matrix: torch.Tensor) -> torch.Tensor:
         """
         Args:
             node_features: [num_nodes, input_dim]
-            adjacency_matrix: [num_nodes, num_nodes]
+            adjacency_matrix: [num_nodes, num_nodes] — dense, sparse COO, or sparse CSR.
+                Sparse inputs avoid O(N^2) memory for large B-Rep graphs.
 
         Returns:
             updated_features: [num_nodes, node_dim]
         """
+        num_nodes = node_features.shape[0]
+
         # Project input features to node_dim
         x = self.input_proj(node_features)
         x = self.activation(x)
 
-        # Add self-loops to adjacency (standard GCN: A_hat = A + I)
-        identity = torch.eye(
-            adjacency_matrix.shape[0],
-            device=adjacency_matrix.device,
-            dtype=adjacency_matrix.dtype,
+        # Convert to sparse COO for memory-efficient GCN
+        adj_sp = self._to_sparse(adjacency_matrix)
+
+        # Add self-loops: A_hat = A + I (sparse)
+        self_loop_indices = torch.arange(num_nodes, device=adj_sp.device)
+        self_loop_indices = torch.stack([self_loop_indices, self_loop_indices])  # [2, N]
+        self_loop_values = torch.ones(num_nodes, device=adj_sp.device, dtype=adj_sp.dtype)
+        identity_sp = torch.sparse_coo_tensor(
+            self_loop_indices, self_loop_values, (num_nodes, num_nodes),
+            device=adj_sp.device, dtype=adj_sp.dtype,
         )
-        adj_with_self_loops = adjacency_matrix + identity
-        # Degree normalization
-        deg = adj_with_self_loops.sum(dim=1, keepdim=True).clamp(min=1)
-        adj_norm = adj_with_self_loops / deg
+        adj_hat = (adj_sp + identity_sp).coalesce()
+
+        # Symmetric normalization: D^{-1/2} A_hat D^{-1/2} (standard GCN)
+        # Compute degree from sparse tensor
+        deg = torch.sparse.sum(adj_hat, dim=1).to_dense().clamp(min=1)
+        deg_inv_sqrt = deg.pow(-0.5)
+
+        # Scale values: adj_norm[i,j] = deg_inv_sqrt[i] * adj_hat[i,j] * deg_inv_sqrt[j]
+        row, col = adj_hat.indices()
+        vals = adj_hat.values() * deg_inv_sqrt[row] * deg_inv_sqrt[col]
+        adj_norm = torch.sparse_coo_tensor(
+            adj_hat.indices(), vals, adj_hat.shape,
+            device=adj_hat.device, dtype=adj_hat.dtype,
+        ).coalesce()
 
         for conv in self.conv_layers:
-            # Message passing: aggregate neighbor + self features (GCN with self-loops)
-            messages = torch.matmul(adj_norm, x)  # [num_nodes, node_dim]
+            # Message passing: sparse matmul — O(nnz * node_dim) instead of O(N^2 * node_dim)
+            messages = torch.sparse.mm(adj_norm, x)  # [num_nodes, node_dim]
 
             # Update with MLP
             x_new = conv(messages)
@@ -349,7 +478,8 @@ class STEPEncoder(nn.Module):
         graph_input_dim: int = 48,
         output_dim: int = 1024,
         num_transformer_layers: int = 6,
-        num_graph_layers: int = 3
+        num_graph_layers: int = 3,
+        expected_feature_dims: Optional[List[int]] = None,
     ):
         super().__init__()
 
@@ -373,6 +503,16 @@ class STEPEncoder(nn.Module):
         # Registered as nn.ModuleDict so weights are part of state_dict/optimizer.
         self._feature_projs = nn.ModuleDict()
 
+        # Pre-register projections for known feature dims so they are captured
+        # by the optimizer at construction time.
+        if expected_feature_dims:
+            for dim in expected_feature_dims:
+                if dim != graph_input_dim:
+                    self.register_feature_projection(dim)
+
+        # Track whether lazy projections were created after init (for warnings)
+        self._lazy_proj_warning_issued: set = set()
+
         # Fusion layer
         self.fusion = nn.Sequential(
             nn.Linear(token_embed_dim + graph_node_dim, output_dim),
@@ -380,12 +520,59 @@ class STEPEncoder(nn.Module):
             nn.Linear(output_dim, output_dim)
         )
 
+    def register_feature_projection(self, in_dim: int) -> nn.Linear:
+        """Pre-register a projection layer for a given input feature dimension.
+
+        Call this before constructing the optimizer to ensure the projection
+        parameters are included in ``model.parameters()``.
+
+        Args:
+            in_dim: Input feature dimension to project from.
+
+        Returns:
+            The ``nn.Linear`` projection layer (also stored in
+            ``self._feature_projs``).
+        """
+        key = str(in_dim)
+        if key not in self._feature_projs:
+            self._feature_projs[key] = nn.Linear(
+                in_dim, self.graph_encoder.input_dim
+            )
+        return self._feature_projs[key]
+
+    def load_state_dict(self, state_dict, strict=True, assign=False):
+        """Pre-create lazy projection layers found in checkpoint before loading.
+
+        ``_feature_projs`` entries are created lazily during ``forward()`` so a
+        freshly constructed model has an empty ``ModuleDict``.  Without this
+        override, ``load_state_dict`` would either error (strict=True) or
+        silently drop the learned projection weights (strict=False).
+        """
+        prefix = "_feature_projs."
+        proj_keys: Dict[str, int] = {}
+        for key in state_dict:
+            if key.startswith(prefix):
+                # key format: "_feature_projs.<dim>.weight" or ".bias"
+                parts = key[len(prefix):].split(".")
+                dim_key = parts[0]
+                if dim_key not in proj_keys and key.endswith(".weight"):
+                    # infer in_features from weight shape [out, in]
+                    proj_keys[dim_key] = state_dict[key].shape[1]
+
+        for dim_key, in_dim in proj_keys.items():
+            if dim_key not in self._feature_projs:
+                self._feature_projs[dim_key] = nn.Linear(
+                    in_dim, self.graph_encoder.input_dim
+                )
+
+        return super().load_state_dict(state_dict, strict=strict, assign=assign)
+
     def forward(self, token_ids: torch.Tensor, topology_data: Optional[Dict] = None) -> torch.Tensor:
         """
         Args:
             token_ids: [batch_size, seq_len] from STEPTokenizer
             topology_data: Dict with topology from either cadling or ll_stepnet:
-                - adjacency_matrix: [num_nodes, num_nodes]
+                - adjacency_matrix: [num_nodes, num_nodes] (dense, sparse COO, or sparse CSR)
                 - node_features: [num_nodes, feature_dim]
                   (48-dim from cadling TopologyGraph, or 129-dim from STEPTopologyBuilder)
 
@@ -399,34 +586,60 @@ class STEPEncoder(nn.Module):
         token_pooled = token_features.mean(dim=1)  # [batch, embed_dim]
 
         # Encode topology if provided
-        if topology_data is not None and 'adjacency_matrix' in topology_data:
-            adj_matrix = topology_data['adjacency_matrix']
-            node_features = topology_data.get('node_features')
+        # Normalize topology_data: accept a single dict or a list of dicts
+        topo_list: Optional[List[Optional[Dict]]] = None
+        if topology_data is not None:
+            if isinstance(topology_data, list):
+                topo_list = topology_data
+            elif 'adjacency_matrix' in topology_data:
+                topo_list = [topology_data]
 
-            if node_features is None:
-                # Create default node features matching the graph encoder input_dim
-                num_nodes = adj_matrix.shape[0]
-                node_features = torch.zeros(num_nodes, self.graph_encoder.input_dim)
+        if topo_list is not None:
+            batch_size = token_pooled.shape[0]
+            # Pad list to batch_size (trailing items get zero graph features)
+            while len(topo_list) < batch_size:
+                topo_list.append(None)
 
-            # Auto-project if feature dim doesn't match graph encoder input_dim
-            if node_features.shape[-1] != self.graph_encoder.input_dim:
-                in_dim = node_features.shape[-1]
-                key = str(in_dim)
-                if key not in self._feature_projs:
-                    self._feature_projs[key] = nn.Linear(
-                        in_dim,
-                        self.graph_encoder.input_dim,
-                    ).to(node_features.device)
-                node_features = self._feature_projs[key](node_features)
+            per_sample_pooled = []
+            for topo in topo_list[:batch_size]:
+                if topo is not None and 'adjacency_matrix' in topo:
+                    adj_matrix = topo['adjacency_matrix']
+                    node_features = topo.get('node_features')
 
-            # Graph encoding
-            graph_features = self.graph_encoder(node_features, adj_matrix)  # [num_nodes, node_dim]
+                    if node_features is None:
+                        num_nodes = adj_matrix.shape[0]
+                        node_features = torch.zeros(
+                            num_nodes, self.graph_encoder.input_dim,
+                            device=token_pooled.device,
+                        )
 
-            # Pool graph features
-            graph_pooled = graph_features.mean(dim=0)  # [node_dim]
+                    # Auto-project if feature dim doesn't match graph encoder input_dim
+                    if node_features.shape[-1] != self.graph_encoder.input_dim:
+                        in_dim = node_features.shape[-1]
+                        key = str(in_dim)
+                        if key not in self._feature_projs:
+                            if self.training and key not in self._lazy_proj_warning_issued:
+                                _log.warning(
+                                    "Creating feature projection for dim=%d during "
+                                    "forward(). These parameters are NOT in the "
+                                    "optimizer. Call register_feature_projection(%d) "
+                                    "before constructing the optimizer, or pass "
+                                    "expected_feature_dims=[%d] to __init__.",
+                                    in_dim, in_dim, in_dim,
+                                )
+                                self._lazy_proj_warning_issued.add(key)
+                            proj = self.register_feature_projection(in_dim)
+                            proj.to(node_features.device)
+                        node_features = self._feature_projs[key](node_features)
 
-            # Expand to batch
-            graph_pooled = graph_pooled.unsqueeze(0).expand(token_pooled.shape[0], -1)
+                    graph_features = self.graph_encoder(node_features, adj_matrix)
+                    per_sample_pooled.append(graph_features.mean(dim=0))
+                else:
+                    per_sample_pooled.append(
+                        torch.zeros(self.graph_encoder.node_dim, device=token_pooled.device)
+                    )
+
+            graph_pooled = torch.stack(per_sample_pooled, dim=0)  # [batch, node_dim]
 
             # Concatenate token and graph features
             combined = torch.cat([token_pooled, graph_pooled], dim=-1)
@@ -455,8 +668,11 @@ class STEPEncoder(nn.Module):
           values are tensors.
         - A cadling ``TopologyGraph`` object (or any object with
           ``to_numpy_node_features()`` and ``to_edge_index()`` methods) —
-          extracts numpy arrays, builds the adjacency matrix, and converts
-          to tensors.
+          extracts numpy arrays, builds a **sparse** adjacency matrix, and
+          converts to tensors.
+
+        The adjacency matrix is returned as a sparse COO tensor to avoid
+        O(N^2) memory on large B-Rep graphs.
 
         This lets callers pass a cadling TopologyGraph directly without
         writing glue code::
@@ -471,8 +687,9 @@ class STEPEncoder(nn.Module):
                 (e.g. cadling's ``TopologyGraph``).
 
         Returns:
-            Dict with ``adjacency_matrix`` ``[N, N]`` and ``node_features``
-            ``[N, D]`` float tensors ready for :meth:`forward`.
+            Dict with ``adjacency_matrix`` (sparse COO ``[N, N]``) and
+            ``node_features`` ``[N, D]`` float tensors ready for
+            :meth:`forward`.
         """
         import numpy as np
 
@@ -500,8 +717,7 @@ class STEPEncoder(nn.Module):
         node_feats_np = topology_obj.to_numpy_node_features()   # (N, D) float32
         num_nodes = node_feats_np.shape[0]
 
-        # Build dense adjacency matrix from edge_index (2, M) int64
-        adj_matrix = np.zeros((num_nodes, num_nodes), dtype=np.float32)
+        # Build sparse adjacency matrix from edge_index (2, M) int64
         if hasattr(topology_obj, 'to_edge_index'):
             edge_index = topology_obj.to_edge_index()           # (2, M) int64
             if edge_index.shape[1] > 0:
@@ -509,10 +725,28 @@ class STEPEncoder(nn.Module):
                 dst = edge_index[1]
                 # Clip to valid range (defensive)
                 valid = (src < num_nodes) & (dst < num_nodes)
-                adj_matrix[src[valid], dst[valid]] = 1.0
+                indices = torch.tensor(
+                    np.stack([src[valid], dst[valid]]), dtype=torch.long,
+                )
+                values = torch.ones(indices.shape[1], dtype=torch.float32)
+                adj_matrix = torch.sparse_coo_tensor(
+                    indices, values, (num_nodes, num_nodes),
+                ).coalesce()
+            else:
+                adj_matrix = torch.sparse_coo_tensor(
+                    torch.zeros(2, 0, dtype=torch.long),
+                    torch.zeros(0, dtype=torch.float32),
+                    (num_nodes, num_nodes),
+                )
+        else:
+            adj_matrix = torch.sparse_coo_tensor(
+                torch.zeros(2, 0, dtype=torch.long),
+                torch.zeros(0, dtype=torch.float32),
+                (num_nodes, num_nodes),
+            )
 
         return {
-            'adjacency_matrix': torch.tensor(adj_matrix, dtype=torch.float32),
+            'adjacency_matrix': adj_matrix,
             'node_features': torch.tensor(node_feats_np, dtype=torch.float32),
         }
 

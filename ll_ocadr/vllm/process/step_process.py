@@ -215,22 +215,18 @@ class STEPProcessor:
         Returns:
             normals: [N, 3] vertex normals
         """
-        # Initialize normals
+        # Vectorized face normal computation
+        v0 = vertices[faces[:, 0]]
+        v1 = vertices[faces[:, 1]]
+        v2 = vertices[faces[:, 2]]
+
+        face_normals = np.cross(v1 - v0, v2 - v0)  # [F, 3]
+
+        # Scatter-accumulate face normals to vertices using np.add.at
         normals = np.zeros_like(vertices)
-
-        # Compute face normals and accumulate to vertices
-        for face in faces:
-            v0, v1, v2 = vertices[face]
-
-            # Compute face normal via cross product
-            edge1 = v1 - v0
-            edge2 = v2 - v0
-            face_normal = np.cross(edge1, edge2)
-
-            # Accumulate to vertices
-            normals[face[0]] += face_normal
-            normals[face[1]] += face_normal
-            normals[face[2]] += face_normal
+        np.add.at(normals, faces[:, 0], face_normals)
+        np.add.at(normals, faces[:, 1], face_normals)
+        np.add.at(normals, faces[:, 2], face_normals)
 
         # Normalize
         norms = np.linalg.norm(normals, axis=1, keepdims=True)

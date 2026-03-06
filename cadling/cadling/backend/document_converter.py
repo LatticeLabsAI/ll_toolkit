@@ -143,6 +143,7 @@ class DocumentConverter:
         source: Union[Path, str, BytesIO],
         format: Optional[InputFormat] = None,
         pipeline_options: Optional[PipelineOptions] = None,
+        allowed_root: Optional[Union[Path, str]] = None,
     ) -> ConversionResult:
         """Convert a CAD file to CADlingDocument.
 
@@ -150,9 +151,15 @@ class DocumentConverter:
             source: Path to file or byte stream.
             format: Format (auto-detected if not provided).
             pipeline_options: Pipeline options to override format-level defaults.
+            allowed_root: If provided, restrict file access to this directory.
+                Paths outside the root raise ValueError.
 
         Returns:
             ConversionResult with status and document (or errors).
+
+        Raises:
+            ValueError: If the resolved path falls outside allowed_root or
+                the file does not exist.
 
         Example:
             # From file path
@@ -163,14 +170,43 @@ class DocumentConverter:
 
             # With explicit format
             result = converter.convert("data.bin", format=InputFormat.STEP)
+
+            # Restrict to a directory
+            result = converter.convert("part.step", allowed_root="/data/cad")
         """
-        # Normalize source to Path
+        # Normalize source to Path and validate against traversal
         if isinstance(source, str):
             source = Path(source)
 
+        if isinstance(source, Path):
+            # Resolve symlinks and relative components (../) to a canonical path
+            source = source.resolve()
+
+            if not source.is_file():
+                raise ValueError(
+                    f"Source path does not point to an existing file: {source}"
+                )
+
+            if allowed_root is not None:
+                root = Path(allowed_root).resolve()
+                if not source.is_relative_to(root):
+                    raise ValueError(
+                        f"Path traversal blocked: {source} is outside "
+                        f"allowed root {root}"
+                    )
+
+        # Pre-read file content once to avoid redundant reads during
+        # format detection and input document creation.
+        if isinstance(source, Path):
+            with open(source, "rb") as f:
+                _cached_content = f.read()
+        else:
+            _cached_content = source.read()
+            source.seek(0)
+
         # Detect format if not provided
         if format is None:
-            format = self._detect_format(source)
+            format = self._detect_format(source, content=_cached_content)
             _log.info(f"Detected format: {format.value}")
 
         # Validate format is allowed
@@ -191,8 +227,10 @@ class DocumentConverter:
             )
             return result
 
-        # Create input document
-        input_doc = self._create_input_document(source, format)
+        # Create input document (reuses cached content)
+        input_doc = self._create_input_document(
+            source, format, content=_cached_content
+        )
 
         # Get format option
         format_option = self.format_options[format]
@@ -239,11 +277,18 @@ class DocumentConverter:
 
         return result
 
-    def _detect_format(self, source: Union[Path, BytesIO]) -> InputFormat:
+    def _detect_format(
+        self,
+        source: Union[Path, BytesIO],
+        content: Optional[bytes] = None,
+    ) -> InputFormat:
         """Detect CAD file format.
 
         Args:
             source: File path or byte stream.
+            content: Pre-read file content to avoid redundant reads.
+                When provided, header bytes are extracted from this
+                instead of opening the file again.
 
         Returns:
             Detected InputFormat.
@@ -268,14 +313,20 @@ class DocumentConverter:
             if extension in extension_map:
                 return extension_map[extension]
 
-            # Try by content
-            with open(source, "rb") as f:
-                header = f.read(1024)
-                return self._detect_format_by_content(header)
+            # Try by content — reuse pre-read bytes if available
+            if content is not None:
+                header = content[:1024]
+            else:
+                with open(source, "rb") as f:
+                    header = f.read(1024)
+            return self._detect_format_by_content(header)
 
         else:  # BytesIO
-            header = source.read(1024)
-            source.seek(0)
+            if content is not None:
+                header = content[:1024]
+            else:
+                header = source.read(1024)
+                source.seek(0)
             return self._detect_format_by_content(header)
 
     def _detect_format_by_content(self, header: bytes) -> InputFormat:
@@ -336,23 +387,26 @@ class DocumentConverter:
         self,
         source: Union[Path, BytesIO],
         format: InputFormat,
+        content: Optional[bytes] = None,
     ) -> CADInputDocument:
         """Create input document descriptor.
 
         Args:
             source: File path or byte stream.
             format: Detected format.
+            content: Pre-read file content to avoid redundant reads.
 
         Returns:
             CADInputDocument.
         """
-        # Compute hash (cache content to avoid redundant re-reads)
-        if isinstance(source, Path):
-            with open(source, "rb") as f:
-                content = f.read()
-        else:
-            content = source.read()
-            source.seek(0)
+        # Use pre-read content or read now as fallback
+        if content is None:
+            if isinstance(source, Path):
+                with open(source, "rb") as f:
+                    content = f.read()
+            else:
+                content = source.read()
+                source.seek(0)
 
         doc_hash = hashlib.sha256(content).hexdigest()
 
@@ -401,7 +455,7 @@ class DocumentConverter:
             )
 
         elif format == InputFormat.BREP:
-            from cadling.backend.brep.brep_backend import BRepBackend
+            from cadling.backend.brep_backend import BRepBackend
 
             return FormatOption(
                 backend=BRepBackend,

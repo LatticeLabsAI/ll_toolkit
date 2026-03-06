@@ -4,6 +4,7 @@ transformers>=4.35.0
 vllm>=0.2.0
 
 # 3D geometry processing
+torch-cluster>=1.6.0  # fused CUDA FPS kernel for GeometryNet; optional but strongly recommended
 trimesh>=3.23.0
 
 open3d>=0.17.0

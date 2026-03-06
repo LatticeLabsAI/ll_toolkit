@@ -228,6 +228,20 @@ class TestBaseProposalSummary:
         summary = prop.summary()
         assert summary["num_alternatives"] == 3
 
+    def test_with_error_context_preserves_log_probs_grad(self):
+        """with_error_context() must not detach log_probs from computation graph."""
+        torch = pytest.importorskip("torch")
+        w = torch.tensor(2.0, requires_grad=True)
+        log_probs = w * 3.0  # has grad_fn
+        prop = BaseProposal(log_probs=log_probs)
+        new_prop = prop.with_error_context({"error_code": "TEST"})
+        # The copied tensor must still be in the computation graph
+        assert new_prop.log_probs is log_probs
+        assert new_prop.log_probs.grad_fn is not None
+        # Backward must flow through to w
+        new_prop.log_probs.backward()
+        assert w.grad is not None and w.grad.item() == 3.0
+
 
 # =============================================================================
 # CodeProposal Tests

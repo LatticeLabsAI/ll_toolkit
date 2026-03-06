@@ -106,12 +106,15 @@ class BRepBackend(DeclarativeCADBackend, RenderableCADBackend):
             return False
 
     def _read_file_content(self) -> bytes:
-        """Read file content as bytes."""
+        """Read file content as bytes, using converter cache when available."""
         if self._file_content is not None:
             return self._file_content
 
         try:
-            if isinstance(self.path_or_stream, BytesIO):
+            # Use content cache from document converter to avoid redundant disk read
+            if self.in_doc._content_cache is not None:
+                self._file_content = self.in_doc._content_cache
+            elif isinstance(self.path_or_stream, BytesIO):
                 self._file_content = self.path_or_stream.read()
                 self.path_or_stream.seek(0)
             else:
@@ -459,7 +462,6 @@ class BRepBackend(DeclarativeCADBackend, RenderableCADBackend):
             "left",
             "isometric",
             "isometric2",
-            "isometric_back",
         ]
 
     def load_view(self, view_name: str) -> CADViewBackend:
@@ -484,29 +486,27 @@ class BRepViewBackend(CADViewBackend):
     def __init__(self, view_name: str, parent_backend: BRepBackend):
         """Initialize BRep view backend."""
         super().__init__(view_name, parent_backend)
-        self.brep_backend = parent_backend
 
     def render(self, resolution: int = 1024) -> Image.Image:
         """Render this view to an image using pythonocc-core offscreen rendering."""
         from cadling.backend.pythonocc_core_backend import render_shape_to_image
 
         try:
-            shape = self.brep_backend._load_shape()
+            shape = self.parent_backend._load_shape()
             _log.info(f"Rendering BRep {self.view_name} view at {resolution}x{resolution}")
             img = render_shape_to_image(shape, self.view_name, resolution)
             _log.info(f"Successfully rendered {self.view_name} view")
             return img
+        except ImportError as e:
+            raise RuntimeError(
+                f"pythonocc-core not available: {e}. "
+                "Install with: conda install -c conda-forge pythonocc-core"
+            ) from e
         except Exception as e:
-            _log.error(f"Failed to render view {self.view_name}: {e}")
-            img = Image.new("RGB", (resolution, resolution), color=(255, 200, 200))
-            from PIL import ImageDraw
-            draw = ImageDraw.Draw(img)
-            draw.text(
-                (resolution // 4, resolution // 2),
-                f"Rendering error: {str(e)[:50]}",
-                fill=(0, 0, 0),
-            )
-            return img
+            _log.error(f"BRep rendering failed for view {self.view_name}: {e}")
+            raise RuntimeError(
+                f"BRep rendering failed for view {self.view_name}: {e}"
+            ) from e
 
     def _set_view_orientation(self, view, view_name: str):
         """Set camera orientation for the specified view.

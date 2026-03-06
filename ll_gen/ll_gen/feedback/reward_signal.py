@@ -1,6 +1,6 @@
 """Convert disposal outcomes to scalar rewards for RL training.
 
-The reward signal is a composite score in [−1.0, 1.0] built from
+The reward signal is a composite score (floored at −1.0) built from
 multiple tiers:
 
 ==========================  =======  ===================================
@@ -53,12 +53,15 @@ def compute_reward(
 
     5. **Semantic match** (``config.semantic_match_reward``):
        +0.2 if bounding box dimensions match the target within
-       ``config.dimension_tolerance_pct``.
+       ``config.dimension_tolerance_pct``, plus an additional +0.1
+       (50% of ``semantic_match_reward``) if the volume also matches.
+       Combined semantic reward is capped at 1.5x ``semantic_match_reward``.
 
     6. **Critical error penalty** (``config.critical_error_penalty``):
        −0.1 per critical-severity finding.
 
-    The final reward is clamped to [−1.0, 1.0].
+    The final reward is floored at −1.0 but has no upper clamp, so
+    the RL trainer receives full gradient signal for semantic match.
 
     Args:
         result: Disposal result to score.
@@ -70,7 +73,7 @@ def compute_reward(
             semantic check (±10% tolerance).
 
     Returns:
-        Scalar reward in [−1.0, 1.0].
+        Scalar reward ≥ −1.0.
     """
     if config is None:
         config = FeedbackConfig()
@@ -94,12 +97,13 @@ def compute_reward(
         tiers_passed = _count_passing_tiers(result)
         reward += config.per_tier_reward * tiers_passed
 
-    # 5. Semantic match
+    # 5. Semantic match (dimension + volume share a single reward budget)
+    semantic_reward = 0.0
     if target_dimensions is not None and result.geometry_report is not None:
         if result.geometry_report.matches_dimensions(
             target_dimensions, config.dimension_tolerance_pct
         ):
-            reward += config.semantic_match_reward
+            semantic_reward += config.semantic_match_reward
 
     if target_volume is not None and result.geometry_report is not None:
         if result.geometry_report.volume is not None:
@@ -107,7 +111,11 @@ def compute_reward(
                 result.geometry_report.volume - target_volume
             ) / max(abs(target_volume), 1e-10)
             if vol_err <= config.dimension_tolerance_pct:
-                reward += config.semantic_match_reward * 0.5
+                semantic_reward += config.semantic_match_reward * 0.5
+
+    # Budget = dimension bonus (1.0x) + volume bonus (0.5x) = 1.5x
+    semantic_budget = config.semantic_match_reward * 1.5
+    reward += min(semantic_reward, semantic_budget)
 
     # 6. Critical error penalty
     num_critical = sum(
@@ -116,8 +124,9 @@ def compute_reward(
     )
     reward += config.critical_error_penalty * num_critical
 
-    # Clamp to [-1, 1]
-    reward = max(-1.0, min(1.0, reward))
+    # Clamp lower bound only — upper bound is uncapped so the RL trainer
+    # can distinguish valid shapes that also match target dimensions.
+    reward = max(-1.0, reward)
 
     return round(reward, 4)
 

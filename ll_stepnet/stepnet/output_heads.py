@@ -23,6 +23,8 @@ from typing import Dict, List, Optional
 import torch
 import torch.nn as nn
 
+from .config import NUM_COMMAND_TYPES, NUM_PARAM_SLOTS, DEFAULT_QUANTIZATION_LEVELS
+
 _log = logging.getLogger(__name__)
 
 
@@ -69,7 +71,7 @@ class CommandTypeHead(nn.Module):
         num_command_types: Number of distinct command types.
     """
 
-    def __init__(self, embed_dim: int = 256, num_command_types: int = 6) -> None:
+    def __init__(self, embed_dim: int = 256, num_command_types: int = NUM_COMMAND_TYPES) -> None:
         super().__init__()
         self.projection = nn.Linear(embed_dim, num_command_types)
 
@@ -100,8 +102,8 @@ class ParameterHeads(nn.Module):
     def __init__(
         self,
         embed_dim: int = 256,
-        num_param_slots: int = 16,
-        num_levels: int = 256,
+        num_param_slots: int = NUM_PARAM_SLOTS,
+        num_levels: int = DEFAULT_QUANTIZATION_LEVELS,
     ) -> None:
         super().__init__()
         self.num_param_slots = num_param_slots
@@ -119,7 +121,7 @@ class ParameterHeads(nn.Module):
             hidden_states: [batch, seq_len, embed_dim]
 
         Returns:
-            List of 16 tensors, each [batch, seq_len, num_levels].
+            List of NUM_PARAM_SLOTS tensors, each [batch, seq_len, num_levels].
         """
         return [head(hidden_states) for head in self.heads]
 
@@ -152,9 +154,9 @@ class CompositeHead(nn.Module):
     def __init__(
         self,
         embed_dim: int = 256,
-        num_command_types: int = 6,
-        num_param_slots: int = 16,
-        num_levels: int = 256,
+        num_command_types: int = NUM_COMMAND_TYPES,
+        num_param_slots: int = NUM_PARAM_SLOTS,
+        num_levels: int = DEFAULT_QUANTIZATION_LEVELS,
         include_vertex_head: bool = False,
         max_vertices: int = 512,
         num_refinement_steps: int = 3,

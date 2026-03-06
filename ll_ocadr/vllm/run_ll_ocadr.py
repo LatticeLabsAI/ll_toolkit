@@ -7,9 +7,10 @@ Example usage:
         --prompt "<mesh>\nDescribe this CAD model."
 """
 
+from __future__ import annotations
+
 import argparse
 import asyncio
-import sys
 from pathlib import Path
 from typing import Optional
 
@@ -23,12 +24,12 @@ except ImportError:
     VLLM_AVAILABLE = False
     print("Warning: vLLM not available. Install with: pip install vllm")
 
-from latticelabs_ocadr import (
+from ll_ocadr.vllm.latticelabs_ocadr import (
     LatticelabsOCADRForCausalLM,
-    LLOCADRMultiModalProcessor
+    LLOCADRMultiModalProcessor,
 )
-from config import LLOCADRConfig, get_config_for_model
-from process.mesh_process import MeshLoader
+from ll_ocadr.vllm.config import LLOCADRConfig, get_config_for_model
+from ll_ocadr.vllm.process.mesh_process import MeshLoader
 
 
 class LLOCADRInference:
@@ -99,7 +100,8 @@ class LLOCADRInference:
         if Path(self.model_path).exists():
             checkpoint = torch.load(
                 self.model_path,
-                map_location=self.device
+                map_location=self.device,
+                weights_only=True
             )
             model.load_state_dict(checkpoint["model_state_dict"])
             print(f"✓ Loaded checkpoint from {self.model_path}")
@@ -228,7 +230,7 @@ class LLOCADRInference:
         print(f"📝 Prompt: {prompt[:100]}..." if len(prompt) > 100 else f"📝 Prompt: {prompt}")
 
         # Preprocess mesh
-        from process.mesh_process import LLOCADRProcessor
+        from ll_ocadr.vllm.process.mesh_process import LLOCADRProcessor
 
         processor = LLOCADRProcessor(
             tokenizer=self.tokenizer,

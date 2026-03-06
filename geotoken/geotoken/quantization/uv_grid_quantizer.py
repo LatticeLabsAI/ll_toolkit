@@ -195,13 +195,17 @@ class UVGridQuantizer:
         self.grid_resolution = grid_resolution
         self.bits = bits
 
-        # Separate per-channel quantizers to avoid shared state corruption
-        self._xyz_quantizer = FeatureVectorQuantizer(bits=bits)
+        # Separate per-channel quantizers to avoid shared state corruption.
+        # Face and edge XYZ get independent instances so interleaved
+        # fit()/quantize() calls never corrupt each other's cached params.
+        self._face_xyz_quantizer = FeatureVectorQuantizer(bits=bits)
+        self._edge_xyz_quantizer = FeatureVectorQuantizer(bits=bits)
         self._normals_quantizer = FeatureVectorQuantizer(bits=bits)
         self._tangents_quantizer = FeatureVectorQuantizer(bits=bits)
 
-        # Backward-compatible alias
-        self._quantizer = self._xyz_quantizer
+        # Backward-compatible aliases
+        self._xyz_quantizer = self._face_xyz_quantizer
+        self._quantizer = self._face_xyz_quantizer
 
         # Global normalization params (set via fit_global)
         self._global_xyz_params: FeatureQuantizationParams | None = None
@@ -246,7 +250,8 @@ class UVGridQuantizer:
                 f"all_xyz_samples must be (N, 3), got {all_xyz_samples.shape}"
             )
 
-        self._global_xyz_params = self._xyz_quantizer.fit(all_xyz_samples)
+        self._global_xyz_params = self._face_xyz_quantizer.fit(all_xyz_samples)
+        self._edge_xyz_quantizer.fit(all_xyz_samples)
         _log.info(
             "Fit global XYZ params on %d samples", len(all_xyz_samples),
         )
@@ -563,12 +568,13 @@ class UVGridQuantizer:
         xyz = uv_grid[:, :3]
         tangents = uv_grid[:, 3:6]
 
-        # Quantize XYZ (use global params if available)
+        # Quantize XYZ with edge-dedicated quantizer (avoids shared state
+        # corruption when interleaved with face quantization calls)
         if self._global_xyz_params is not None:
             params_xyz = self._global_xyz_params
         else:
-            params_xyz = self._xyz_quantizer.fit(xyz)
-        quantized_xyz = self._xyz_quantizer.quantize(xyz, params_xyz).astype(np.int32)
+            params_xyz = self._edge_xyz_quantizer.fit(xyz)
+        quantized_xyz = self._edge_xyz_quantizer.quantize(xyz, params_xyz).astype(np.int32)
 
         # Quantize tangents independently (use global params if available)
         if self._global_tangents_params is not None:
@@ -646,8 +652,8 @@ class UVGridQuantizer:
         if tokens.params_xyz is None or tokens.params_tangents is None:
             raise ValueError("Cannot dequantize: missing params")
 
-        # Dequantize XYZ and tangents
-        xyz = self._xyz_quantizer.dequantize(tokens.quantized_xyz, tokens.params_xyz)
+        # Dequantize XYZ and tangents (edge-dedicated quantizer)
+        xyz = self._edge_xyz_quantizer.dequantize(tokens.quantized_xyz, tokens.params_xyz)
         tangents = self._tangents_quantizer.dequantize(
             tokens.quantized_tangents, tokens.params_tangents
         )

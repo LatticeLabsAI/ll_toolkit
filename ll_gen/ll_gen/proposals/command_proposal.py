@@ -293,15 +293,13 @@ class CommandSequenceProposal(BaseProposal):
         Preserves the latent vector (so the generator can perturb it)
         but clears the decoded tokens.
         """
-        new = copy.deepcopy(self)
-        new.proposal_id = uuid.uuid4().hex
-        new.attempt = self.next_attempt()
-        new.error_context = error
-        new.timestamp = datetime.now(timezone.utc).isoformat()
+        # Delegate to base which uses shallow copy to preserve tensor grad_fn
+        new = super().with_error_context(error)
         new.token_ids = []
         new.command_dicts = []
         new.confidence = 0.0
-        # Keep latent_vector for perturbed re-decoding
+        # Keep latent_vector for perturbed re-decoding (shallow ref is fine,
+        # numpy .copy() only needed if caller mutates in-place)
         if self.latent_vector is not None:
             new.latent_vector = self.latent_vector.copy()
         return new

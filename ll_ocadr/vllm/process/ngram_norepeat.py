@@ -4,9 +4,9 @@ Prevents repetitive text generation by penalizing repeated n-grams.
 Adapted from DeepSeek-OCR's implementation.
 """
 
-from typing import List, Dict, Set, Tuple
+from typing import List, Dict, Set, Tuple, Union
 import torch
-from collections import defaultdict
+from collections import defaultdict, OrderedDict
 
 
 class NGramNoRepeatLogitsProcessor:
@@ -24,7 +24,8 @@ class NGramNoRepeatLogitsProcessor:
         self,
         ngram_size: int = 3,
         penalty: float = float('inf'),
-        min_sequence_length: int = 10
+        min_sequence_length: int = 10,
+        max_batch_entries: int = 1024,
     ):
         """
         Initialize n-gram no-repeat processor.
@@ -33,13 +34,18 @@ class NGramNoRepeatLogitsProcessor:
             ngram_size: Size of n-grams to track (default: 3)
             penalty: Penalty to apply to repeated n-grams (default: inf for blocking)
             min_sequence_length: Minimum sequence length before applying penalty
+            max_batch_entries: Maximum batch-index entries to retain before evicting
+                oldest entries. Prevents unbounded memory growth in serving scenarios.
         """
         self.ngram_size = ngram_size
         self.penalty = penalty
         self.min_sequence_length = min_sequence_length
+        self.max_batch_entries = max_batch_entries
 
-        # Track n-grams per sequence in batch
-        self.ngram_history: Dict[int, Set[Tuple[int, ...]]] = defaultdict(set)
+        # OrderedDict so we can evict oldest batch entries (LRU-style)
+        self._banned_map: OrderedDict[int, Dict[Tuple[int, ...], Set[int]]] = OrderedDict()
+        # Track last seen sequence length per batch item for incremental updates
+        self._last_seq_len: Dict[int, int] = {}
 
     def __call__(
         self,
@@ -49,6 +55,9 @@ class NGramNoRepeatLogitsProcessor:
         """
         Process logits to penalize repeated n-grams.
 
+        Complexity is O(seq_len) per batch element (scanning sequence for
+        matching context prefixes), NOT O(vocab_size).
+
         Args:
             input_ids: [batch_size, seq_len] - Generated token IDs so far
             scores: [batch_size, vocab_size] - Logits for next token
@@ -56,48 +65,61 @@ class NGramNoRepeatLogitsProcessor:
         Returns:
             scores: [batch_size, vocab_size] - Modified logits with penalties
         """
-        batch_size, vocab_size = scores.shape
         seq_len = input_ids.shape[1]
 
         # Don't apply penalty for very short sequences
         if seq_len < self.min_sequence_length:
             return scores
 
+        batch_size = scores.shape[0]
+        n = self.ngram_size
+
         # Process each sequence in batch
         for batch_idx in range(batch_size):
-            # Get current sequence for this batch item
             sequence = input_ids[batch_idx].tolist()
 
-            # Extract all n-grams from sequence
-            if seq_len >= self.ngram_size:
-                # Get the last (ngram_size - 1) tokens as context
-                context = tuple(sequence[-(self.ngram_size - 1):])
+            # Ensure entry exists; move to end (most-recently-used)
+            if batch_idx not in self._banned_map:
+                self._banned_map[batch_idx] = defaultdict(set)
+                # Evict oldest entries when we exceed the limit
+                while len(self._banned_map) > self.max_batch_entries:
+                    evicted_key, _ = self._banned_map.popitem(last=False)
+                    self._last_seq_len.pop(evicted_key, None)
+            else:
+                self._banned_map.move_to_end(batch_idx)
 
-                # Check which next tokens would complete a repeated n-gram
-                for vocab_idx in range(vocab_size):
-                    # Form potential n-gram with this next token
-                    potential_ngram = context + (vocab_idx,)
+            if seq_len >= n:
+                # Get the last (n - 1) tokens as context
+                context = tuple(sequence[-(n - 1):])
 
-                    # If this n-gram already exists, penalize it
-                    if potential_ngram in self.ngram_history[batch_idx]:
-                        scores[batch_idx, vocab_idx] -= self.penalty
+                # Look up banned tokens for this context — O(1)
+                banned_tokens = self._banned_map[batch_idx].get(context)
+                if banned_tokens:
+                    for token_id in banned_tokens:
+                        scores[batch_idx, token_id] -= self.penalty
 
-            # Update n-gram history with all n-grams in current sequence
-            if seq_len >= self.ngram_size:
-                for i in range(seq_len - self.ngram_size + 1):
-                    ngram = tuple(sequence[i:i + self.ngram_size])
-                    self.ngram_history[batch_idx].add(ngram)
+                # Incrementally add only n-grams not yet seen.
+                # On first call with a prompt, this registers all n-grams.
+                # On subsequent autoregressive steps, only 1 new n-gram is added.
+                prev_len = self._last_seq_len.get(batch_idx, 0)
+                start = max(0, prev_len - n + 1)
+                for i in range(start, seq_len - n + 1):
+                    ngram = tuple(sequence[i:i + n])
+                    self._banned_map[batch_idx][ngram[:-1]].add(ngram[-1])
+                self._last_seq_len[batch_idx] = seq_len
 
         return scores
 
     def reset(self):
         """Reset n-gram history."""
-        self.ngram_history.clear()
+        self._banned_map.clear()
+        self._last_seq_len.clear()
 
     def reset_batch(self, batch_idx: int):
         """Reset n-gram history for specific batch item."""
-        if batch_idx in self.ngram_history:
-            del self.ngram_history[batch_idx]
+        if batch_idx in self._banned_map:
+            del self._banned_map[batch_idx]
+        self._last_seq_len.pop(batch_idx, None)
 
 
 class BigramNoRepeatLogitsProcessor:
@@ -135,20 +157,25 @@ class BigramNoRepeatLogitsProcessor:
         batch_size = scores.shape[0]
         seq_len = input_ids.shape[1]
 
-        # Need at least 2 tokens to form a bigram
-        if seq_len < 2:
+        # Need at least 1 token to form a bigram context
+        if seq_len < 1:
             return scores
 
-        # For each batch, penalize tokens that would repeat the last bigram
+        # For each batch, find tokens that would complete a repeated bigram
         for batch_idx in range(batch_size):
-            # Get last two tokens
-            last_two = input_ids[batch_idx, -2:].tolist()
-            prev_token = last_two[0]
-            last_token = last_two[1]
+            sequence = input_ids[batch_idx].tolist()
+            last_token = sequence[-1]
 
-            # If the last bigram would be repeated, penalize the token
-            # that would complete it
-            scores[batch_idx, last_token] -= self.penalty if prev_token == last_token else 0
+            # Collect all tokens that previously followed last_token,
+            # forming bigrams (last_token, next_token). Penalize those
+            # next_tokens so the same bigram doesn't repeat.
+            banned: Set[int] = set()
+            for i in range(seq_len - 1):
+                if sequence[i] == last_token:
+                    banned.add(sequence[i + 1])
+
+            for token_id in banned:
+                scores[batch_idx, token_id] -= self.penalty
 
         return scores
 
@@ -166,7 +193,9 @@ class AdaptiveNGramNoRepeatProcessor:
         ngram_size: int = 3,
         base_penalty: float = 1.0,
         penalty_scale: float = 2.0,
-        min_sequence_length: int = 10
+        max_penalty: float = 1e4,
+        min_sequence_length: int = 10,
+        max_batch_entries: int = 1024,
     ):
         """
         Initialize adaptive processor.
@@ -175,17 +204,22 @@ class AdaptiveNGramNoRepeatProcessor:
             ngram_size: Size of n-grams to track
             base_penalty: Base penalty for first repetition
             penalty_scale: Scaling factor for each additional repetition
+            max_penalty: Upper bound on penalty to prevent inf/nan overflow
             min_sequence_length: Minimum sequence length before applying
+            max_batch_entries: Maximum batch-index entries to retain before evicting
+                oldest entries. Prevents unbounded memory growth in serving scenarios.
         """
         self.ngram_size = ngram_size
         self.base_penalty = base_penalty
         self.penalty_scale = penalty_scale
+        self.max_penalty = max_penalty
         self.min_sequence_length = min_sequence_length
+        self.max_batch_entries = max_batch_entries
 
-        # Track n-gram counts per sequence
-        self.ngram_counts: Dict[int, Dict[Tuple[int, ...], int]] = defaultdict(
-            lambda: defaultdict(int)
-        )
+        # OrderedDict so we can evict oldest batch entries (LRU-style)
+        self._count_map: OrderedDict[int, Dict[Tuple[int, ...], Dict[int, int]]] = OrderedDict()
+        # Track last seen sequence length per batch item for incremental updates
+        self._last_seq_len: Dict[int, int] = {}
 
     def __call__(
         self,
@@ -195,6 +229,9 @@ class AdaptiveNGramNoRepeatProcessor:
         """
         Process logits with adaptive penalties.
 
+        Complexity is O(num_repeated_tokens) per batch element for penalty
+        application, not O(vocab_size).
+
         Args:
             input_ids: [batch_size, seq_len] - Generated token IDs
             scores: [batch_size, vocab_size] - Logits for next token
@@ -202,52 +239,67 @@ class AdaptiveNGramNoRepeatProcessor:
         Returns:
             scores: Modified logits
         """
-        batch_size, vocab_size = scores.shape
         seq_len = input_ids.shape[1]
 
         if seq_len < self.min_sequence_length:
             return scores
 
+        batch_size = scores.shape[0]
+        n = self.ngram_size
+
         for batch_idx in range(batch_size):
             sequence = input_ids[batch_idx].tolist()
 
-            if seq_len >= self.ngram_size:
-                context = tuple(sequence[-(self.ngram_size - 1):])
+            # Ensure entry exists; move to end (most-recently-used)
+            if batch_idx not in self._count_map:
+                self._count_map[batch_idx] = defaultdict(lambda: defaultdict(int))
+                # Evict oldest entries when we exceed the limit
+                while len(self._count_map) > self.max_batch_entries:
+                    evicted_key, _ = self._count_map.popitem(last=False)
+                    self._last_seq_len.pop(evicted_key, None)
+            else:
+                self._count_map.move_to_end(batch_idx)
 
-                for vocab_idx in range(vocab_size):
-                    potential_ngram = context + (vocab_idx,)
+            if seq_len >= n:
+                context = tuple(sequence[-(n - 1):])
 
-                    # Get repetition count
-                    count = self.ngram_counts[batch_idx][potential_ngram]
+                # Look up token counts for this context — O(1) lookup
+                token_counts = self._count_map[batch_idx].get(context)
+                if token_counts:
+                    for token_id, count in token_counts.items():
+                        if count > 0:
+                            penalty = min(
+                                self.base_penalty * (self.penalty_scale ** count),
+                                self.max_penalty,
+                            )
+                            scores[batch_idx, token_id] -= penalty
 
-                    if count > 0:
-                        # Apply scaled penalty based on number of repetitions
-                        penalty = self.base_penalty * (self.penalty_scale ** count)
-                        scores[batch_idx, vocab_idx] -= penalty
-
-            # Update counts
-            if seq_len >= self.ngram_size:
-                for i in range(seq_len - self.ngram_size + 1):
-                    ngram = tuple(sequence[i:i + self.ngram_size])
-                    self.ngram_counts[batch_idx][ngram] += 1
+                # Incrementally add only n-grams not yet seen
+                prev_len = self._last_seq_len.get(batch_idx, 0)
+                start = max(0, prev_len - n + 1)
+                for i in range(start, seq_len - n + 1):
+                    ngram = tuple(sequence[i:i + n])
+                    self._count_map[batch_idx][ngram[:-1]][ngram[-1]] += 1
+                self._last_seq_len[batch_idx] = seq_len
 
         return scores
 
     def reset(self):
         """Reset n-gram counts."""
-        self.ngram_counts.clear()
+        self._count_map.clear()
+        self._last_seq_len.clear()
 
     def reset_batch(self, batch_idx: int):
         """Reset counts for specific batch item."""
-        if batch_idx in self.ngram_counts:
-            del self.ngram_counts[batch_idx]
+        self._count_map.pop(batch_idx, None)
+        self._last_seq_len.pop(batch_idx, None)
 
 
 def create_norepeat_processor(
     mode: str = "standard",
     ngram_size: int = 3,
     **kwargs
-) -> object:
+) -> Union[NGramNoRepeatLogitsProcessor, BigramNoRepeatLogitsProcessor, AdaptiveNGramNoRepeatProcessor]:
     """
     Factory function to create no-repeat processor.
 

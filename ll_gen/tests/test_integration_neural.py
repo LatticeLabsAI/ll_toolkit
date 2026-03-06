@@ -932,8 +932,8 @@ class TestOrchestratorFullFlow:
             mock_router.route.assert_called_once()
             # Verify generator was initialized and used
             assert orchestrator._vae_generator is not None
-            # Verify disposal was called (once to validate, once to export)
-            assert mock_disposal.dispose.call_count == 2
+            # Verify disposal was called (single-pass: validate + export in one call)
+            assert mock_disposal.dispose.call_count == 1
 
     @pytest.mark.integration
     def test_generate_with_error_retry_neural(self) -> None:
@@ -967,16 +967,16 @@ class TestOrchestratorFullFlow:
             mock_result_valid.is_valid = True
             mock_result_valid.reward_signal = 1.0
 
-            # First attempt: invalid (1 dispose), second attempt: valid (2 disposes = validate + export)
-            mock_disposal.dispose.side_effect = [mock_result_invalid, mock_result_valid, mock_result_valid]
+            # First attempt: invalid (1 single-pass dispose), second attempt: valid (1 single-pass dispose)
+            mock_disposal.dispose.side_effect = [mock_result_invalid, mock_result_valid]
 
             # Run
             orchestrator.generate("test prompt")
 
             # Verify generator was called twice (once per attempt)
             assert mock_gen.generate.call_count == 2
-            # Verify disposal: 1 (invalid, no re-export) + 2 (valid + export) = 3
-            assert mock_disposal.dispose.call_count == 3
+            # Verify disposal: 1 (invalid) + 1 (valid, single-pass with export) = 2
+            assert mock_disposal.dispose.call_count == 2
 
     @pytest.mark.integration
     def test_conditioning_passed_through_entire_flow(self) -> None:

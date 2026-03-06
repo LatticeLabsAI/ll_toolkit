@@ -146,12 +146,15 @@ class STEPBackend(DeclarativeCADBackend, RenderableCADBackend):
             return False
 
     def _read_file_content(self) -> str:
-        """Read file content as string."""
+        """Read file content as string, using converter cache when available."""
         if self._file_content is not None:
             return self._file_content
 
         try:
-            if isinstance(self.path_or_stream, BytesIO):
+            # Use content cache from document converter to avoid redundant disk read
+            if self.in_doc._content_cache is not None:
+                self._file_content = self.in_doc._content_cache.decode("utf-8", errors="ignore")
+            elif isinstance(self.path_or_stream, BytesIO):
                 content = self.path_or_stream.read()
                 if isinstance(content, bytes):
                     self._file_content = content.decode("utf-8", errors="ignore")
@@ -447,7 +450,6 @@ class STEPBackend(DeclarativeCADBackend, RenderableCADBackend):
         _log.debug("Building topology graph for document")
         topology = TopologyGraph(
             num_nodes=parsed_data["topology"]["num_nodes"],
-            num_edges=parsed_data["topology"]["num_edges"],
             adjacency_list=parsed_data["topology"]["adjacency_list"],
         )
         doc.topology = topology
@@ -508,7 +510,6 @@ class STEPBackend(DeclarativeCADBackend, RenderableCADBackend):
             "left",  # YZ plane, looking along +X
             "isometric",  # Isometric view (1,1,1)
             "isometric2",  # Alternate isometric (-1,1,1)
-            "isometric_back",  # Alias for isometric2
         ]
 
     def load_view(self, view_name: str) -> CADViewBackend:

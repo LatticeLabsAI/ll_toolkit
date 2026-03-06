@@ -315,3 +315,65 @@ class TestDataclassDefaults:
         assert tokens.params_xyz is None
         assert tokens.params_tangents is None
         assert tokens.bits == 8
+
+
+class TestInterleavedFaceEdgeQuantization:
+    """Regression tests for shared _xyz_quantizer corruption.
+
+    Previously, face and edge quantization shared a single
+    FeatureVectorQuantizer for XYZ. Interleaved calls would overwrite
+    cached params, causing incorrect roundtrip results.
+    """
+
+    def test_interleaved_face_edge_roundtrip(self):
+        """Face quantization must be stable after edge quantization."""
+        np.random.seed(123)
+        quantizer = UVGridQuantizer(bits=8)
+
+        # Face data in [0, 100] range
+        face_grid = np.random.rand(5, 5, 7).astype(np.float32) * 100
+        face_grid[..., 6] = (face_grid[..., 6] > 50).astype(np.float32)
+
+        # Edge data in [-1, 1] range (very different scale)
+        edge_grid = (np.random.rand(10, 6).astype(np.float32) - 0.5) * 2
+
+        # Quantize face first
+        face_tokens = quantizer.quantize_face_uv_grid(face_grid, face_index=0)
+
+        # Quantize edge (would corrupt shared quantizer's cached params)
+        edge_tokens = quantizer.quantize_edge_uv_grid(edge_grid, edge_index=0)
+
+        # Dequantize face — must still produce correct results
+        face_recon = quantizer.dequantize_face_grid(face_tokens)
+        face_error = np.abs(face_recon[..., :3] - face_grid[..., :3]).max()
+        assert face_error < 1.0, (
+            f"Face roundtrip error {face_error} too high after edge quantization"
+        )
+
+        # Dequantize edge — must also be correct
+        edge_recon = quantizer.dequantize_edge_grid(edge_tokens)
+        edge_error = np.abs(edge_recon - edge_grid).max()
+        assert edge_error < 0.02, (
+            f"Edge roundtrip error {edge_error} too high"
+        )
+
+    def test_interleaved_does_not_share_params(self):
+        """Face and edge quantizers must have independent fitted params."""
+        np.random.seed(456)
+        quantizer = UVGridQuantizer(bits=8)
+
+        face_grid = np.random.rand(5, 5, 7).astype(np.float32) * 100
+        face_grid[..., 6] = 1.0
+        edge_grid = np.random.rand(10, 6).astype(np.float32) * 0.01
+
+        face_tokens = quantizer.quantize_face_uv_grid(face_grid)
+        edge_tokens = quantizer.quantize_edge_uv_grid(edge_grid)
+
+        # Params must reflect their respective data ranges
+        assert face_tokens.params_xyz is not edge_tokens.params_xyz
+        face_scale = face_tokens.params_xyz.scale.max()
+        edge_scale = edge_tokens.params_xyz.scale.max()
+        assert face_scale > edge_scale * 10, (
+            f"Face scale {face_scale} should be much larger than edge scale "
+            f"{edge_scale} — they may be sharing params"
+        )

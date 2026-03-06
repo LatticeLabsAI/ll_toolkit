@@ -378,6 +378,7 @@ class CADlingDocument(BaseModel):
         topology: Topology graph (entity references).
         embeddings: Neural embeddings from ll_stepnet (optional).
         bounding_box: Overall bounding box for the document.
+        metadata: Format-specific metadata populated by backends.
         processing_history: History of processing steps.
     """
 
@@ -394,17 +395,26 @@ class CADlingDocument(BaseModel):
 
     # Private attributes
     _segment_index_cache: Optional[Dict[str, "Segment"]] = PrivateAttr(default=None)
+    _segment_index_len: int = PrivateAttr(default=-1)
     _backend: Optional[Any] = PrivateAttr(default=None)
+    _occ_shape: Optional[Any] = PrivateAttr(default=None)
 
     @property
     def segment_index(self) -> Dict[str, Segment]:
-        """Index of segments by segment_id, derived from segments list."""
-        if self._segment_index_cache is None:
+        """Index of segments by segment_id, derived from segments list.
+
+        The cache is automatically invalidated when the segments list length
+        changes (e.g. via direct ``doc.segments.append()`` calls) or when
+        ``_invalidate_segment_index()`` is called explicitly.
+        """
+        if self._segment_index_cache is None or self._segment_index_len != len(self.segments):
             self._segment_index_cache = {seg.segment_id: seg for seg in self.segments}
+            self._segment_index_len = len(self.segments)
         return self._segment_index_cache
 
     def _invalidate_segment_index(self):
         self._segment_index_cache = None
+        self._segment_index_len = -1
 
     # CAD-specific data
     topology: Optional[TopologyGraph] = None
@@ -412,6 +422,7 @@ class CADlingDocument(BaseModel):
     bounding_box: Optional[BoundingBox3D] = None
 
     # Metadata
+    metadata: Dict[str, Any] = Field(default_factory=dict)  # Backend-populated format-specific metadata
     processing_history: List[ProcessingStep] = Field(default_factory=list)
     properties: Dict[str, Any] = Field(default_factory=dict)  # Enrichment model results
 
@@ -512,6 +523,7 @@ class CADlingDocument(BaseModel):
             "processing_history": [
                 step.model_dump(mode='json') for step in self.processing_history
             ],
+            "metadata": self.metadata,
             "properties": self.properties,
             "segments": [
                 {
@@ -547,6 +559,13 @@ class CADlingDocument(BaseModel):
             lines.append(f"- Format: {self.format.value if self.format else 'unknown'}")
             lines.append(f"- Filename: {self.origin.filename}")
             lines.append(f"- Hash: {self.hash[:16]}..." if self.hash else "")
+            lines.append("")
+
+        # Backend metadata
+        if self.metadata:
+            lines.append("## Backend Metadata")
+            for key, value in self.metadata.items():
+                lines.append(f"- {key}: {value}")
             lines.append("")
 
         # Topology summary
@@ -605,6 +624,18 @@ class CADInputDocument(BaseModel):
     document_hash: str
     _backend: Optional[Any] = PrivateAttr(default=None)  # Backend instance (set during conversion)
     _content_cache: Optional[bytes] = PrivateAttr(default=None)  # Cached file content to avoid re-reads
+
+    def get_content(self) -> bytes:
+        """Return cached file content, reading from disk if not cached.
+
+        Returns:
+            File content as bytes.
+        """
+        if self._content_cache is not None:
+            return self._content_cache
+        with open(self.file, "rb") as f:
+            self._content_cache = f.read()
+        return self._content_cache
 
 
 class ConversionResult(BaseModel):

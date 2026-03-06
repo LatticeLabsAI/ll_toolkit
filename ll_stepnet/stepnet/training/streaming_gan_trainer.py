@@ -151,6 +151,14 @@ class StreamingGANTrainer:
         else:
             self.optimizer_critic = optimizer_critic
 
+        # Track optimizer param ids for detecting lazily-added parameters
+        self._optimizer_gen_param_ids: set = {
+            id(p) for group in self.optimizer_gen.param_groups for p in group['params']
+        }
+        self._optimizer_critic_param_ids: set = {
+            id(p) for group in self.optimizer_critic.param_groups for p in group['params']
+        }
+
         # Create schedulers with warmup
         self.scheduler_gen = self._create_scheduler(self.optimizer_gen)
         self.scheduler_critic = self._create_scheduler(self.optimizer_critic)
@@ -193,6 +201,25 @@ class StreamingGANTrainer:
             self.lambda_gp,
             self._latent_dim,
         )
+
+    def _sync_optimizer_params(self) -> None:
+        """Add any lazily-created model parameters to the optimizers."""
+        for model, optimizer, param_ids_attr in [
+            (self.generator, self.optimizer_gen, '_optimizer_gen_param_ids'),
+            (self.critic, self.optimizer_critic, '_optimizer_critic_param_ids'),
+        ]:
+            param_ids = getattr(self, param_ids_attr)
+            new_params = [
+                p for p in model.parameters()
+                if id(p) not in param_ids and p.requires_grad
+            ]
+            if new_params:
+                optimizer.add_param_group({'params': new_params})
+                param_ids.update(id(p) for p in new_params)
+                _log.info(
+                    "Added %d lazily-created parameters to %s optimizer",
+                    len(new_params), model.__class__.__name__,
+                )
 
     def _create_scheduler(self, optimizer: Any) -> "LambdaLR":
         """Create a learning rate scheduler with linear warmup and constant decay."""
@@ -311,6 +338,7 @@ class StreamingGANTrainer:
         """
         batch_size = real_latents.size(0)
         self.critic.train()
+        self._sync_optimizer_params()
         self.optimizer_critic.zero_grad()
 
         # Generate fake latents
@@ -352,6 +380,7 @@ class StreamingGANTrainer:
             Dictionary with generator metrics.
         """
         self.generator.train()
+        self._sync_optimizer_params()
         self.optimizer_gen.zero_grad()
 
         # Generate fake latents

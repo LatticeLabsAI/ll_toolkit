@@ -1,8 +1,19 @@
 """Test fixtures for geotoken."""
 from __future__ import annotations
 
-import pytest  # noqa: I001 - must precede torch for OpenMP
-torch = pytest.importorskip("torch")  # OpenMP protection: load torch before numpy
+import os  # noqa: I001 - must precede torch for OpenMP
+import sys
+
+# OpenMP protection (macOS): load torch before numpy to avoid libomp conflicts.
+# Use conditional import so pure-numpy tests still run without torch.
+if sys.platform == "darwin":
+    os.environ.setdefault("OMP_NUM_THREADS", "1")
+try:
+    import torch  # noqa: F401
+except ImportError:
+    pass
+
+import pytest  # noqa: E402
 
 import numpy as np
 

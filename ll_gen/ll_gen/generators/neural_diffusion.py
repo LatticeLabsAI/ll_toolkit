@@ -54,6 +54,49 @@ class NeuralDiffusionGenerator(BaseNeuralGenerator):
         self.inference_steps = inference_steps
         self.eta = eta
 
+    def _extract_geometry_from_output(
+        self,
+        output: Any,
+    ) -> tuple[list[np.ndarray], list[np.ndarray], dict[str, Any] | None]:
+        """Extract face grids, edge points, and stage latents from model output.
+
+        Args:
+            output: Raw model output (dict or tensor).
+
+        Returns:
+            Tuple of (face_grids, edge_points, stage_latents).
+        """
+        face_grids: list[np.ndarray] = []
+        edge_points: list[np.ndarray] = []
+        stage_latents: dict[str, Any] | None = None
+
+        if isinstance(output, dict):
+            if "face_grids" in output:
+                face_grids = self._tensor_to_numpy_list(output["face_grids"])
+            elif "face_positions" in output:
+                face_grids = self._tensor_to_numpy_list(output["face_positions"])
+
+            if "edge_points" in output:
+                edge_points = self._tensor_to_numpy_list(output["edge_points"])
+            elif "edge_positions" in output:
+                edge_points = self._tensor_to_numpy_list(output["edge_positions"])
+
+            if "stage_latents" in output:
+                stage_latents = {
+                    k: self._tensor_to_numpy(v)
+                    for k, v in output["stage_latents"].items()
+                }
+        else:
+            face_grids = self._create_placeholder_face_grids(output)
+
+        if not face_grids and not edge_points:
+            _log.warning(
+                "Diffusion model returned no geometry; returning proposal "
+                "with empty geometry (callers should handle None/empty)"
+            )
+
+        return face_grids, edge_points, stage_latents
+
     def generate(
         self,
         prompt: str,
@@ -99,40 +142,7 @@ class NeuralDiffusionGenerator(BaseNeuralGenerator):
             else:
                 output = self._model(noise, steps=self.inference_steps)
 
-        # Extract geometry from output
-        face_grids: list[np.ndarray] = []
-        edge_points: list[np.ndarray] = []
-        stage_latents: dict[str, Any] | None = None
-
-        if isinstance(output, dict):
-            # Structured output with geometry and latents
-            if "face_grids" in output:
-                face_grids = self._tensor_to_numpy_list(output["face_grids"])
-            elif "face_positions" in output:
-                face_grids = self._tensor_to_numpy_list(output["face_positions"])
-
-            if "edge_points" in output:
-                edge_points = self._tensor_to_numpy_list(output["edge_points"])
-            elif "edge_positions" in output:
-                edge_points = self._tensor_to_numpy_list(output["edge_positions"])
-
-            if "stage_latents" in output:
-                stage_latents = {
-                    k: self._tensor_to_numpy(v)
-                    for k, v in output["stage_latents"].items()
-                }
-        else:
-            # Raw tensor output — create placeholder geometry
-            face_grids = self._create_placeholder_face_grids(output)
-
-        # If no geometry extracted, log warning and return with empty geometry
-        if not face_grids and not edge_points:
-            _log.warning(
-                "Diffusion model returned no geometry; returning proposal "
-                "with empty geometry (callers should handle None/empty)"
-            )
-
-        # Compute confidence based on stage completeness
+        face_grids, edge_points, stage_latents = self._extract_geometry_from_output(output)
         confidence = self._compute_confidence(face_grids, edge_points)
 
         return LatentProposal(
@@ -148,6 +158,101 @@ class NeuralDiffusionGenerator(BaseNeuralGenerator):
                 eta=self.eta,
             ),
             error_context=error_context,
+        )
+
+    def generate_for_training(
+        self,
+        prompt: str,
+        conditioning: ConditioningEmbeddings | None = None,
+        error_context: dict[str, Any] | None = None,
+    ) -> LatentProposal:
+        """Generate with gradients for RL training (DDPO-style).
+
+        For diffusion models, standard REINFORCE on the full denoising
+        chain is intractable.  Instead we use a single-step denoising
+        approach: the model predicts the clean sample from the initial
+        noise in one differentiable step, and the log-probability of the
+        initial noise under the standard normal prior serves as the
+        policy log-prob.
+
+        When the model supports ``sample_with_log_prob`` (DDPO-compatible),
+        that is used directly.  Otherwise we fall back to computing the
+        log-prob of the initial noise ``z ~ N(0, I)`` as
+        ``-0.5 * ||z||^2 + const``, which gives an unbiased but
+        high-variance REINFORCE signal.
+
+        Args:
+            prompt: User prompt.
+            conditioning: Optional conditioning embeddings.
+            error_context: Optional error context.
+
+        Returns:
+            LatentProposal with ``log_probs`` and ``entropy`` set.
+        """
+        import torch
+
+        if self._model is None:
+            self._init_model()
+
+        batch_size = 1
+        noise_shape = self._get_noise_shape()
+
+        # Sample noise WITH grad — this IS the policy action for diffusion
+        noise = torch.randn(
+            batch_size, *noise_shape,
+            device=self.device,
+            dtype=torch.float32,
+            requires_grad=True,
+        )
+
+        # Log-prob of noise under N(0, I): -0.5 * sum(z^2) - 0.5*d*log(2*pi)
+        d = noise.numel()
+        log_prob = -0.5 * noise.pow(2).sum() - 0.5 * d * torch.log(
+            torch.tensor(2.0 * torch.pi, device=self.device)
+        )
+
+        # Entropy of N(0,I) = 0.5 * d * (1 + log(2*pi))
+        entropy_value = float(0.5 * d * (1.0 + np.log(2.0 * np.pi)))
+
+        # Check if model provides DDPO-style API
+        if hasattr(self._model, "sample_with_log_prob"):
+            output, model_log_prob = self._model.sample_with_log_prob(
+                noise=noise,
+                num_steps=self.inference_steps,
+                eta=self.eta,
+            )
+            log_prob = model_log_prob
+        else:
+            # Standard denoising — no grad through the chain,
+            # but grad through the noise log-prob
+            with torch.no_grad():
+                if hasattr(self._model, "sample"):
+                    output = self._model.sample(
+                        noise=noise.detach(),
+                        num_steps=self.inference_steps,
+                        eta=self.eta,
+                    )
+                else:
+                    output = self._model(noise.detach(), steps=self.inference_steps)
+
+        face_grids, edge_points, stage_latents = self._extract_geometry_from_output(output)
+        confidence = self._compute_confidence(face_grids, edge_points)
+
+        return LatentProposal(
+            face_grids=face_grids,
+            edge_points=edge_points,
+            stage_latents=stage_latents,
+            source_prompt=prompt,
+            conditioning_source=conditioning.source_type if conditioning else "unconditional",
+            confidence=confidence,
+            generation_metadata=self._build_metadata(
+                "StructuredDiffusion",
+                inference_steps=self.inference_steps,
+                eta=self.eta,
+            ),
+            error_context=error_context,
+            log_probs=log_prob,
+            entropy=entropy_value,
         )
 
     def generate_candidates(
@@ -195,39 +300,9 @@ class NeuralDiffusionGenerator(BaseNeuralGenerator):
                 else:
                     output = self._model(noise, steps=self.inference_steps)
 
-                face_grids: list[np.ndarray] = []
-                edge_points: list[np.ndarray] = []
-                stage_latents: dict[str, Any] | None = None
-
-                if isinstance(output, dict):
-                    if "face_grids" in output:
-                        face_grids = self._tensor_to_numpy_list(output["face_grids"])
-                    elif "face_positions" in output:
-                        face_grids = self._tensor_to_numpy_list(
-                            output["face_positions"]
-                        )
-
-                    if "edge_points" in output:
-                        edge_points = self._tensor_to_numpy_list(output["edge_points"])
-                    elif "edge_positions" in output:
-                        edge_points = self._tensor_to_numpy_list(
-                            output["edge_positions"]
-                        )
-
-                    if "stage_latents" in output:
-                        stage_latents = {
-                            k: self._tensor_to_numpy(v)
-                            for k, v in output["stage_latents"].items()
-                        }
-                else:
-                    face_grids = self._create_placeholder_face_grids(output)
-
-                if not face_grids and not edge_points:
-                    _log.warning(
-                        "Diffusion model returned no geometry for candidate; "
-                        "returning proposal with empty geometry"
-                    )
-
+                face_grids, edge_points, stage_latents = (
+                    self._extract_geometry_from_output(output)
+                )
                 confidence = self._compute_confidence(face_grids, edge_points)
 
                 proposal = LatentProposal(

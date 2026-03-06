@@ -83,13 +83,14 @@ class TestPrepareTopologyData:
 
         assert result["adjacency_matrix"].shape == (6, 6)
         assert result["node_features"].shape == (6, 48)
-        # Check edges are set
+        # Check edges are set (convert sparse to dense for indexing)
         adj = result["adjacency_matrix"]
-        assert adj[0, 1] == 1.0
-        assert adj[1, 2] == 1.0
-        assert adj[2, 3] == 1.0
+        adj_dense = adj.to_dense() if adj.is_sparse else adj
+        assert adj_dense[0, 1] == 1.0
+        assert adj_dense[1, 2] == 1.0
+        assert adj_dense[2, 3] == 1.0
         # Non-edges should be zero
-        assert adj[3, 0] == 0.0
+        assert adj_dense[3, 0] == 0.0
 
     def test_duck_typed_no_edges(self):
         """TopologyGraph with no edges should produce zero adjacency."""

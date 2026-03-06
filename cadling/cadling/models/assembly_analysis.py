@@ -18,6 +18,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple
 
+import numpy as np
+
 from cadling.models.base_model import EnrichmentModel
 
 if TYPE_CHECKING:
@@ -181,23 +183,36 @@ class AssemblyGraph:
                 children.append(target)
         return children
 
-    def get_depth(self, node_id: str, current_depth: int = 0) -> int:
+    def get_depth(
+        self,
+        node_id: str,
+        current_depth: int = 0,
+        _visited: set[str] | None = None,
+    ) -> int:
         """Get maximum depth of hierarchy from a node.
 
         Args:
             node_id: Node to measure depth from
             current_depth: Current depth (for recursion)
+            _visited: Internal cycle guard — do not pass manually
 
         Returns:
             Maximum depth
         """
+        if _visited is None:
+            _visited = set()
+        if node_id in _visited:
+            _log.warning("Cycle detected at node %s — stopping traversal", node_id)
+            return current_depth
+        _visited.add(node_id)
+
         children = self.get_children(node_id)
         if not children:
             return current_depth
 
         max_child_depth = current_depth
         for child_id in children:
-            child_depth = self.get_depth(child_id, current_depth + 1)
+            child_depth = self.get_depth(child_id, current_depth + 1, _visited)
             if child_depth > max_child_depth:
                 max_child_depth = child_depth
 
@@ -225,12 +240,17 @@ class AssemblyAnalysisModel(EnrichmentModel):
         bom = result.get("bom")
     """
 
+    #: Maximum number of part pairs to evaluate for contact detection.
+    #: Prevents runaway O(n²) pythonocc calls on large assemblies.
+    MAX_CONTACT_PAIRS: int = 50_000
+
     def __init__(
         self,
         detect_contacts: bool = True,
         compute_bom: bool = True,
         identify_subassemblies: bool = True,
         contact_tolerance: float = 0.01,
+        max_contact_pairs: int | None = None,
     ):
         """Initialize assembly analysis model.
 
@@ -239,12 +259,14 @@ class AssemblyAnalysisModel(EnrichmentModel):
             compute_bom: Whether to compute BOM
             identify_subassemblies: Whether to detect subassemblies
             contact_tolerance: Distance tolerance for contact detection (mm)
+            max_contact_pairs: Cap on part-pair evaluations (default MAX_CONTACT_PAIRS)
         """
         super().__init__()
         self.detect_contacts = detect_contacts
         self.compute_bom = compute_bom
         self.identify_subassemblies = identify_subassemblies
         self.contact_tolerance = contact_tolerance
+        self.max_contact_pairs = max_contact_pairs if max_contact_pairs is not None else self.MAX_CONTACT_PAIRS
 
         # Check for pythonocc availability
         try:
@@ -257,13 +279,6 @@ class AssemblyAnalysisModel(EnrichmentModel):
                 "simplified algorithms."
             )
 
-        # Check for numpy availability
-        try:
-            import numpy as np
-            self.has_numpy = True
-        except ImportError:
-            self.has_numpy = False
-            _log.warning("numpy not available. Some features will be limited.")
 
     def __call__(
         self,
@@ -276,7 +291,7 @@ class AssemblyAnalysisModel(EnrichmentModel):
             doc: CADlingDocument to analyze
             item_batch: Items to process (unused, analyzes entire document)
         """
-        if not self.has_pythonocc and not self.has_numpy:
+        if not self.has_pythonocc:
             _log.warning(
                 "Skipping assembly analysis - missing required dependencies"
             )
@@ -318,6 +333,13 @@ class AssemblyAnalysisModel(EnrichmentModel):
 
             # Store results in document properties
             doc.properties["assembly_analysis"] = results
+
+            # Stamp provenance on all items analyzed in the assembly
+            for item in item_batch:
+                item.add_provenance(
+                    component_type="enrichment_model",
+                    component_name=self.__class__.__name__,
+                )
 
             _log.info(
                 f"Assembly analysis complete: {results['num_parts']} parts, "
@@ -398,6 +420,10 @@ class AssemblyAnalysisModel(EnrichmentModel):
     ) -> list[Contact]:
         """Find contacting/mating surfaces between two parts.
 
+        Uses BRepExtrema for precise minimum distance computation, then
+        iterates face pairs to identify actual mating surfaces within
+        the contact tolerance.
+
         Args:
             part1: First part item
             part2: Second part item
@@ -407,13 +433,27 @@ class AssemblyAnalysisModel(EnrichmentModel):
         """
         contacts = []
 
-        if not self.has_pythonocc or not self.has_numpy:
+        if not self.has_pythonocc:
             return contacts
 
         try:
-            import numpy as np
-            from OCC.Core.BRepBndLib import brepbndlib
+            from OCC.Core.BRepExtrema import BRepExtrema_DistShapeShape
+            from OCC.Core.TopAbs import TopAbs_FACE
+            from OCC.Core.TopExp import TopExp_Explorer
+            from OCC.Core.BRepAdaptor import BRepAdaptor_Surface
+            from OCC.Core.BRepGProp import brepgprop
+            from OCC.Core.GProp import GProp_GProps
+            from OCC.Core.GeomAbs import (
+                GeomAbs_Plane,
+                GeomAbs_Cylinder,
+                GeomAbs_Cone,
+                GeomAbs_Sphere,
+                GeomAbs_Torus,
+            )
+            from OCC.Core.TopAbs import TopAbs_REVERSED
+            from OCC.Core.TopoDS import topods
             from OCC.Core.Bnd import Bnd_Box
+            from OCC.Core.BRepBndLib import brepbndlib
 
             # Get OCC shapes if available
             shape1 = getattr(part1, '_occ_shape', None)
@@ -422,38 +462,138 @@ class AssemblyAnalysisModel(EnrichmentModel):
             if shape1 is None or shape2 is None:
                 return contacts
 
-            # Compute bounding boxes
-            bbox1 = Bnd_Box()
-            bbox2 = Bnd_Box()
-            brepbndlib.Add(shape1, bbox1)
-            brepbndlib.Add(shape2, bbox2)
+            # Precise minimum distance between shapes
+            dist_calc = BRepExtrema_DistShapeShape(shape1, shape2)
+            dist_calc.Perform()
 
-            # Check if bounding boxes are close
-            xmin1, ymin1, zmin1, xmax1, ymax1, zmax1 = bbox1.Get()
-            xmin2, ymin2, zmin2, xmax2, ymax2, zmax2 = bbox2.Get()
+            if not dist_calc.IsDone():
+                _log.debug("BRepExtrema computation failed for mating detection")
+                return contacts
 
-            # Simple proximity check
-            center1 = np.array([(xmin1 + xmax1) / 2, (ymin1 + ymax1) / 2, (zmin1 + zmax1) / 2])
-            center2 = np.array([(xmin2 + xmax2) / 2, (ymin2 + ymax2) / 2, (zmin2 + zmax2) / 2])
+            min_distance = dist_calc.Value()
 
-            distance = np.linalg.norm(center1 - center2)
+            # If shapes are farther apart than tolerance, no mating
+            if min_distance > self.contact_tolerance:
+                return contacts
 
-            # Diagonal of combined bounding box
-            diag1 = np.linalg.norm([xmax1 - xmin1, ymax1 - ymin1, zmax1 - zmin1])
-            diag2 = np.linalg.norm([xmax2 - xmin2, ymax2 - ymin2, zmax2 - zmin2])
-            max_diag = max(diag1, diag2)
+            part1_id = getattr(part1, 'item_id', 'unknown')
+            part2_id = getattr(part2, 'item_id', 'unknown')
 
-            # If parts are within reasonable distance, create contact
-            if distance < max_diag * 1.5:
-                contact = Contact(
-                    part1_id=getattr(part1, 'item_id', 'unknown'),
-                    part2_id=getattr(part2, 'item_id', 'unknown'),
-                    contact_type="proximity",
-                    contact_center=((center1 + center2) / 2).tolist(),
-                    distance=float(distance),
-                    confidence=0.5  # Low confidence for proximity-based detection
-                )
-                contacts.append(contact)
+            # Collect faces from each shape
+            faces1 = []
+            explorer = TopExp_Explorer(shape1, TopAbs_FACE)
+            while explorer.More():
+                faces1.append(topods.Face(explorer.Current()))
+                explorer.Next()
+
+            faces2 = []
+            explorer = TopExp_Explorer(shape2, TopAbs_FACE)
+            while explorer.More():
+                faces2.append(topods.Face(explorer.Current()))
+                explorer.Next()
+
+            # Pre-compute per-face AABBs for fast rejection
+            def _face_aabb(face):
+                box = Bnd_Box()
+                brepbndlib.Add(face, box)
+                return box
+
+            aabbs1 = [_face_aabb(f) for f in faces1]
+            aabbs2 = [_face_aabb(f) for f in faces2]
+            tol = self.contact_tolerance
+
+            # Find mating face pairs using AABB filter + precise distance
+            surface_type_names = {
+                GeomAbs_Plane: "planar",
+                GeomAbs_Cylinder: "cylindrical",
+                GeomAbs_Cone: "conical",
+                GeomAbs_Sphere: "spherical",
+                GeomAbs_Torus: "toroidal",
+            }
+
+            for i, face1 in enumerate(faces1):
+                box1 = aabbs1[i]
+                for j, face2 in enumerate(faces2):
+                    # Fast AABB rejection — skip if bounding boxes are
+                    # farther apart than contact_tolerance
+                    if box1.Distance(aabbs2[j]) > tol:
+                        continue
+
+                    face_dist = BRepExtrema_DistShapeShape(face1, face2)
+                    face_dist.Perform()
+
+                    if not face_dist.IsDone():
+                        continue
+
+                    if face_dist.Value() > self.contact_tolerance:
+                        continue
+
+                    # These faces are in contact — classify the contact
+                    adaptor1 = BRepAdaptor_Surface(face1)
+                    adaptor2 = BRepAdaptor_Surface(face2)
+                    stype1 = adaptor1.GetType()
+                    stype2 = adaptor2.GetType()
+
+                    # Determine contact type from surface geometry
+                    if stype1 == stype2 and stype1 in surface_type_names:
+                        contact_type = surface_type_names[stype1]
+                    else:
+                        name1 = surface_type_names.get(stype1, "freeform")
+                        name2 = surface_type_names.get(stype2, "freeform")
+                        contact_type = f"{name1}-{name2}"
+
+                    # Compute contact area (smaller face area as proxy)
+                    props1 = GProp_GProps()
+                    props2 = GProp_GProps()
+                    brepgprop.SurfaceProperties(face1, props1)
+                    brepgprop.SurfaceProperties(face2, props2)
+                    contact_area = min(props1.Mass(), props2.Mass())
+
+                    # Contact center from closest points
+                    if face_dist.NbSolution() > 0:
+                        pt1 = face_dist.PointOnShape1(1)
+                        pt2 = face_dist.PointOnShape2(1)
+                        center = [
+                            (pt1.X() + pt2.X()) / 2,
+                            (pt1.Y() + pt2.Y()) / 2,
+                            (pt1.Z() + pt2.Z()) / 2,
+                        ]
+                    else:
+                        center = None
+
+                    # Contact normal from planar faces
+                    contact_normal = None
+                    if stype1 == GeomAbs_Plane:
+                        pln = adaptor1.Plane()
+                        ax = pln.Axis().Direction()
+                        # Flip if face orientation is reversed
+                        sign = -1.0 if face1.Orientation() == TopAbs_REVERSED else 1.0
+                        contact_normal = [
+                            sign * ax.X(),
+                            sign * ax.Y(),
+                            sign * ax.Z(),
+                        ]
+
+                    # Confidence based on contact quality
+                    dist_val = face_dist.Value()
+                    if dist_val < 1e-6:
+                        confidence = 0.95  # Touching
+                    elif dist_val < self.contact_tolerance * 0.5:
+                        confidence = 0.85
+                    else:
+                        confidence = 0.7
+
+                    contact = Contact(
+                        part1_id=part1_id,
+                        part2_id=part2_id,
+                        contact_type=contact_type,
+                        contact_area=float(contact_area),
+                        contact_center=center,
+                        contact_normal=contact_normal,
+                        distance=float(dist_val),
+                        confidence=confidence,
+                    )
+                    contacts.append(contact)
 
         except Exception as e:
             _log.debug(f"Error detecting mating surfaces: {e}")
@@ -564,21 +704,37 @@ class AssemblyAnalysisModel(EnrichmentModel):
             if n["type"] == "part"
         ]
 
-        # Group by name prefix
+        # Individual hardware parts that should NOT form subassemblies
+        # even when multiple instances share a prefix (e.g., Bolt_M6_1,
+        # Bolt_M6_2 are individual fasteners, not a subassembly).
+        _hardware_patterns = {
+            "bolt", "screw", "nut", "washer", "pin", "rivet",
+            "nail", "stud", "dowel", "clip", "clamp", "spacer",
+            "bushing", "bearing", "gasket", "oring", "o_ring",
+            "spring", "key", "cotter", "fastener", "insert",
+        }
+
+        # Group by name prefix — only when the trailing segment is a
+        # numeric instance counter (e.g. "_1", "_02").
         prefix_groups: Dict[str, List[str]] = {}
         for node_id, node_data in part_nodes:
             name = node_data.get("name", "")
-            # Extract prefix (e.g., "Wheel" from "Wheel_1")
             parts = name.split("_")
-            if len(parts) > 1:
+            if len(parts) > 1 and parts[-1].isdigit():
                 prefix = "_".join(parts[:-1])
                 if prefix not in prefix_groups:
                     prefix_groups[prefix] = []
                 prefix_groups[prefix].append(node_id)
 
-        # Create subassemblies for groups with multiple parts
+        # Create subassemblies for groups with multiple parts,
+        # excluding groups whose prefix indicates individual hardware.
         for prefix, part_ids in prefix_groups.items():
             if len(part_ids) >= 2:
+                prefix_lower = prefix.lower()
+                # Skip if any token in the prefix is a hardware keyword
+                prefix_tokens = set(prefix_lower.split("_"))
+                if prefix_tokens & _hardware_patterns:
+                    continue
                 subasm = Subassembly(
                     subassembly_id=f"subasm_{prefix}",
                     name=f"{prefix} Group",
@@ -611,9 +767,46 @@ class AssemblyAnalysisModel(EnrichmentModel):
             if n["type"] == "part" and "item" in n
         ]
 
-        # Check all pairs
+        n_parts = len(part_nodes)
+        total_pairs = n_parts * (n_parts - 1) // 2
+
+        if total_pairs > self.max_contact_pairs:
+            _log.warning(
+                "Assembly has %d parts (%d pairs) — exceeds max_contact_pairs=%d. "
+                "Skipping contact detection. Increase max_contact_pairs or reduce assembly size.",
+                n_parts, total_pairs, self.max_contact_pairs,
+            )
+            return all_contacts
+
+        # Pre-compute AABBs for broad-phase filtering to avoid expensive
+        # pythonocc calls on distant part pairs.
+        aabbs: dict[str, tuple[float, ...]] = {}
+        if self.has_pythonocc:
+            try:
+                from OCC.Core.BRepBndLib import brepbndlib
+                from OCC.Core.Bnd import Bnd_Box
+
+                for nid, node in part_nodes:
+                    shape = getattr(node.get("item"), "_occ_shape", None)
+                    if shape is not None:
+                        bbox = Bnd_Box()
+                        brepbndlib.Add(shape, bbox)
+                        aabbs[nid] = bbox.Get()  # (xmin,ymin,zmin,xmax,ymax,zmax)
+            except Exception:
+                _log.debug("AABB pre-computation failed; falling back to full pairwise check")
+
         for i, (id1, node1) in enumerate(part_nodes):
             for id2, node2 in part_nodes[i + 1:]:
+                # Broad-phase: skip pairs whose AABBs don't overlap (with tolerance)
+                if id1 in aabbs and id2 in aabbs:
+                    a = aabbs[id1]
+                    b = aabbs[id2]
+                    tol = self.contact_tolerance
+                    if (a[0] > b[3] + tol or b[0] > a[3] + tol or
+                            a[1] > b[4] + tol or b[1] > a[4] + tol or
+                            a[2] > b[5] + tol or b[2] > a[5] + tol):
+                        continue
+
                 contacts = self.detect_mating_surfaces(node1["item"], node2["item"])
                 all_contacts.extend(contacts)
 

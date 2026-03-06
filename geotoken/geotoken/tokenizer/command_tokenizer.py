@@ -255,15 +255,12 @@ class CommandSequenceTokenizer:
                 trailing_zero = all(abs(params[k]) < 1e-10 for k in range(6, 16))
                 if not trailing_zero:
                     pass  # Not cadling format
-                elif abs(params[3]) > 1e-10 or abs(params[4]) > 1e-10:
-                    # Standard case: x2,y2 at indices 3,4 are non-zero
-                    return True
-                elif abs(params[0]) > 1e-10 or abs(params[1]) > 1e-10:
-                    # Origin-endpoint case: line ends at (0,0) so indices 3,4
-                    # are also zero, but start point is non-zero and the
-                    # z-interleaving pattern (zeros at 2,5) with active data
-                    # only at 0,1 strongly suggests cadling format since compact
-                    # DeepCAD LINE would have 4 active params at indices 0-3
+                elif abs(params[3]) > 1e-10 and abs(params[4]) > 1e-10:
+                    # Both x2 AND y2 (indices 3,4) are non-zero — strong
+                    # evidence of z-interleaved cadling format.  We require
+                    # both because in compact DeepCAD, index 2 is x2 and
+                    # index 3 is y2; when x2 == 0 the patterns are
+                    # indistinguishable and we must not corrupt valid data.
                     return True
 
         elif cmd_type == CommandType.CIRCLE:

@@ -6,6 +6,23 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import List, Optional
 
+# ---------------------------------------------------------------------------
+# DeepCAD domain constants — single source of truth for the entire package.
+# These mirror the geotoken command vocabulary and DeepCAD's architecture.
+# ---------------------------------------------------------------------------
+
+#: Number of CAD command types: SOL, LINE, ARC, CIRCLE, EXTRUDE, EOS
+NUM_COMMAND_TYPES: int = 6
+
+#: Number of parameter slots per command (DeepCAD convention)
+NUM_PARAM_SLOTS: int = 16
+
+#: Default quantization levels per parameter
+DEFAULT_QUANTIZATION_LEVELS: int = 256
+
+#: Default maximum sequence length (DeepCAD uses 60-command sequences)
+DEFAULT_MAX_SEQ_LEN: int = 60
+
 
 @dataclass
 class STEPTokenizerConfig:
@@ -133,16 +150,16 @@ class VAEConfig:
     Command types follow geotoken's vocabulary:
         SOL=0, LINE=1, ARC=2, CIRCLE=3, EXTRUDE=4, EOS=5
     """
-    latent_dim: int = 256
+    latent_dim: int = DEFAULT_QUANTIZATION_LEVELS
     kl_weight: float = 1.0
     kl_warmup_epochs: int = 10
     encoder_vocab_size: int = 50000
-    encoder_embed_dim: int = 256
+    encoder_embed_dim: int = DEFAULT_QUANTIZATION_LEVELS
     encoder_layers: int = 6
     decoder_layers: int = 6
-    num_command_types: int = 6      # SOL, LINE, ARC, CIRCLE, EXTRUDE, EOS
-    num_param_levels: int = 256
-    max_seq_len: int = 60
+    num_command_types: int = NUM_COMMAND_TYPES
+    num_param_levels: int = DEFAULT_QUANTIZATION_LEVELS
+    max_seq_len: int = DEFAULT_MAX_SEQ_LEN
 
 
 @dataclass
@@ -221,7 +238,7 @@ class StreamingCadlingConfig:
     shuffle: bool = True
     shuffle_buffer_size: int = 10000
     max_samples: Optional[int] = None
-    max_commands: int = 60
+    max_commands: int = DEFAULT_MAX_SEQ_LEN
 
     # Lazy loading
     lazy_load_topology: bool = True

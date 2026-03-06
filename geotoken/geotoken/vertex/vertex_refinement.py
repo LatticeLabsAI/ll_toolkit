@@ -16,9 +16,16 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
+
+try:
+    from scipy import sparse as sp_sparse
+
+    _has_scipy_sparse = True
+except ImportError:  # pragma: no cover
+    _has_scipy_sparse = False
 
 _log = logging.getLogger(__name__)
 
@@ -340,27 +347,37 @@ class CoarseToFineRefiner:
     def _compute_smoothness_gradient(
         self,
         vertices: np.ndarray,
-        adjacency: Dict[int, List[int]],
+        adjacency: Any,
     ) -> np.ndarray:
         """Laplacian smoothing gradient.
 
         Each vertex moves toward the centroid of its neighbors.
 
+        When *adjacency* is a sparse Laplacian matrix ``L``
+        (built by ``_build_adjacency`` with scipy), the gradient is
+        computed as a single sparse matrix–dense matrix multiply:
+        ``gradient = L @ vertices``.
+
+        Falls back to a Python loop when adjacency is a dict.
+
         Args:
             vertices: ``(N, 3)`` positions.
-            adjacency: Vertex → neighbor list mapping.
+            adjacency: Sparse Laplacian ``(N, N)`` or dict fallback.
 
         Returns:
             Gradient ``(N, 3)``.
         """
-        gradient = np.zeros_like(vertices)
+        # Fast path: sparse Laplacian matrix
+        if _has_scipy_sparse and sp_sparse.issparse(adjacency):
+            return adjacency @ vertices
 
+        # Fallback: Python dict iteration
+        gradient = np.zeros_like(vertices)
         for i, neighbors in adjacency.items():
             if not neighbors:
                 continue
             neighbor_center = vertices[neighbors].mean(axis=0)
             gradient[i] = neighbor_center - vertices[i]
-
         return gradient
 
     # ------------------------------------------------------------------
@@ -471,27 +488,58 @@ class CoarseToFineRefiner:
     def _build_adjacency(
         vertices: np.ndarray,
         faces: np.ndarray,
-    ) -> Dict[int, List[int]]:
-        """Build vertex adjacency list from face array.
+    ) -> Any:
+        """Build vertex adjacency as a sparse Laplacian matrix.
+
+        When scipy is available, returns a CSR sparse matrix ``L`` where
+        ``L @ vertices`` computes the Laplacian (neighbor-centroid minus
+        vertex position) for every vertex in one operation.
+
+        Falls back to a Python dict adjacency list when scipy is not
+        installed.
 
         Args:
             vertices: ``(N, 3)`` positions (used for vertex count).
             faces: ``(F, 3)`` triangle indices.
 
         Returns:
-            Dict mapping vertex index → list of neighbor indices.
+            Sparse CSR matrix ``(N, N)`` or dict adjacency fallback.
         """
-        adjacency_sets: Dict[int, set] = {
-            i: set() for i in range(len(vertices))
-        }
+        n_verts = len(vertices)
 
+        if _has_scipy_sparse:
+            # Extract directed edges from triangles (vectorised)
+            i0, i1, i2 = faces[:, 0], faces[:, 1], faces[:, 2]
+            rows = np.concatenate([i0, i1, i2, i1, i2, i0])
+            cols = np.concatenate([i1, i2, i0, i0, i1, i2])
+
+            # Build binary adjacency (duplicates summed, but we normalise)
+            data = np.ones(len(rows), dtype=np.float64)
+            adj = sp_sparse.csr_matrix(
+                (data, (rows, cols)), shape=(n_verts, n_verts)
+            )
+            # Remove duplicate edges (clamp to 1)
+            adj.data[:] = 1.0
+
+            # Row-normalised adjacency: each row sums to 1
+            degree = np.array(adj.sum(axis=1)).ravel()
+            degree[degree == 0] = 1.0  # avoid division by zero
+            inv_degree = 1.0 / degree
+            # D^{-1} A  — row-normalised adjacency
+            norm_adj = sp_sparse.diags(inv_degree) @ adj
+            # Laplacian: L = D^{-1}A - I  (so L @ v = centroid - v)
+            laplacian = norm_adj - sp_sparse.eye(n_verts, format="csr")
+            return laplacian
+
+        # Fallback: Python dict adjacency
+        adjacency_sets: Dict[int, set] = {
+            i: set() for i in range(n_verts)
+        }
         for fi in range(len(faces)):
             v0, v1, v2 = int(faces[fi, 0]), int(faces[fi, 1]), int(faces[fi, 2])
             for a, b in [(v0, v1), (v1, v2), (v2, v0)]:
                 adjacency_sets[a].add(b)
                 adjacency_sets[b].add(a)
-
-        # Convert to lists for downstream compatibility
         adjacency: Dict[int, List[int]] = {
             k: list(v) for k, v in adjacency_sets.items()
         }

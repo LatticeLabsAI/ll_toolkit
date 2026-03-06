@@ -574,7 +574,7 @@ class TestGenerationOrchestratorBuildFeedback:
         assert "error_message" in feedback
         assert isinstance(feedback["error_message"], str)
         assert feedback["type"] == "code_feedback"
-        assert "original_code" in feedback
+        assert "old_code" in feedback
         assert "error_category" in feedback
 
     def test_build_feedback_for_non_code_proposal(

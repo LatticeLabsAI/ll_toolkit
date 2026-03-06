@@ -55,6 +55,46 @@ class NeuralVQVAEGenerator(BaseNeuralGenerator):
         self.max_seq_len = max_seq_len
         self._pipeline: Any | None = None
 
+    def _extract_pipeline_result(
+        self,
+        result: dict[str, Any],
+    ) -> tuple[list[dict[str, Any]], list[int], Any, Any, np.ndarray | None]:
+        """Extract command dicts, token IDs, logits, and codebook indices from a pipeline result.
+
+        Args:
+            result: Single result dict from CADGenerationPipeline.generate().
+
+        Returns:
+            Tuple of (command_dicts, token_ids, command_logits, param_logits, codebook_indices).
+        """
+        command_dicts: list[dict[str, Any]] = []
+        if "commands" in result and result["commands"]:
+            command_dicts = result["commands"]
+
+        token_ids: list[int] = []
+        command_logits = result.get("command_logits")
+        param_logits = result.get("param_logits")
+
+        if command_logits is not None and param_logits is not None:
+            token_ids = self._logits_to_token_ids(
+                command_logits, param_logits, max_seq_len=self.max_seq_len
+            )
+
+        codebook_indices: np.ndarray | None = None
+        if "codebook_indices" in result:
+            try:
+                import torch
+
+                indices = result["codebook_indices"]
+                if isinstance(indices, torch.Tensor):
+                    codebook_indices = indices.detach().cpu().numpy()
+                else:
+                    codebook_indices = np.array(indices)
+            except ImportError:
+                pass
+
+        return command_dicts, token_ids, command_logits, param_logits, codebook_indices
+
     def generate(
         self,
         prompt: str,
@@ -76,7 +116,6 @@ class NeuralVQVAEGenerator(BaseNeuralGenerator):
 
         temp = self._adjust_temperature_for_error(self.temperature, error_context)
 
-        # Generate from VQ-VAE
         result_list = self._pipeline.generate(
             num_samples=1,
             reconstruct=False,
@@ -93,38 +132,9 @@ class NeuralVQVAEGenerator(BaseNeuralGenerator):
                 error_context=error_context,
             )
 
-        result = result_list[0]
-
-        # Extract command dicts
-        command_dicts: list[dict[str, Any]] = []
-        if "commands" in result and result["commands"]:
-            command_dicts = result["commands"]
-
-        # Extract token IDs from logits
-        token_ids: list[int] = []
-        command_logits = result.get("command_logits")
-        param_logits = result.get("param_logits")
-
-        if command_logits is not None and param_logits is not None:
-            token_ids = self._logits_to_token_ids(
-                command_logits, param_logits, max_seq_len=self.max_seq_len
-            )
-
-        # Extract codebook indices if available
-        codebook_indices: np.ndarray | None = None
-        if "codebook_indices" in result:
-            try:
-                import torch
-
-                indices = result["codebook_indices"]
-                if isinstance(indices, torch.Tensor):
-                    codebook_indices = indices.detach().cpu().numpy()
-                else:
-                    codebook_indices = np.array(indices)
-            except ImportError:
-                pass
-
-        # Compute confidence
+        command_dicts, token_ids, command_logits, param_logits, codebook_indices = (
+            self._extract_pipeline_result(result_list[0])
+        )
         confidence = self._compute_confidence(command_logits, param_logits)
 
         return CommandSequenceProposal(
@@ -141,6 +151,153 @@ class NeuralVQVAEGenerator(BaseNeuralGenerator):
                 codebook_indices=codebook_indices,
             ),
             error_context=error_context,
+        )
+
+    def generate_for_training(
+        self,
+        prompt: str,
+        conditioning: ConditioningEmbeddings | None = None,
+        error_context: dict[str, Any] | None = None,
+    ) -> CommandSequenceProposal:
+        """Generate with gradients for RL training.
+
+        Bypasses ``CADGenerationPipeline.generate()`` (which wraps
+        everything in ``torch.no_grad``) and instead runs the three
+        autoregressive codebook decoders directly with gradients.  Each
+        code is sampled **once** and the log-probability is accumulated
+        on that same draw, ensuring an unbiased REINFORCE estimator.
+
+        After code generation, the codes are deterministically decoded to
+        features and then to command/parameter logits via the pipeline's
+        projection heads.  Token IDs are obtained by argmax over those
+        logits (deterministic — no second stochastic draw).
+
+        Args:
+            prompt: User prompt.
+            conditioning: Optional conditioning embeddings.
+            error_context: Optional error context.
+
+        Returns:
+            CommandSequenceProposal with ``log_probs`` and ``entropy``.
+        """
+        import torch
+
+        if self._model is None:
+            self._init_model()
+
+        temp = self._adjust_temperature_for_error(self.temperature, error_context)
+        device = torch.device(self.device)
+
+        # --- Autoregressive code sampling WITH gradients ---
+        # Replicate CodebookDecoder.sample() logic but without @no_grad
+        # so the computation graph stays alive for REINFORCE.
+        log_probs_accum: list[torch.Tensor] = []
+        entropy_accum: list[torch.Tensor] = []
+
+        def _sample_ar_decoder(
+            decoder: Any,
+            max_codes: int,
+        ) -> torch.Tensor:
+            """Sample from one AR decoder, accumulating log-probs."""
+            generated = torch.full(
+                (1, 1), decoder.bos_token_id,
+                dtype=torch.long, device=device,
+            )
+            for _step in range(max_codes):
+                logits = decoder(generated)               # (1, cur_len, vocab)
+                next_logits = logits[:, -1, :] / max(temp, 1e-8)  # (1, vocab)
+
+                dist = torch.distributions.Categorical(logits=next_logits[0])
+                next_token = dist.sample()                # scalar
+
+                log_probs_accum.append(dist.log_prob(next_token))
+                entropy_accum.append(dist.entropy())
+
+                generated = torch.cat(
+                    [generated, next_token.view(1, 1)], dim=1,
+                )
+            # Strip BOS, keep generated codes
+            return generated[:, 1:]                       # (1, max_codes)
+
+        from ll_stepnet.stepnet.vqvae import DisentangledCodebooks
+
+        topo_codes = _sample_ar_decoder(
+            self._model.topology_ar_decoder,
+            DisentangledCodebooks.TOPOLOGY_NUM_CODES,
+        )
+        geom_codes = _sample_ar_decoder(
+            self._model.geometry_ar_decoder,
+            DisentangledCodebooks.GEOMETRY_NUM_CODES,
+        )
+        extr_codes = _sample_ar_decoder(
+            self._model.extrusion_ar_decoder,
+            DisentangledCodebooks.EXTRUSION_NUM_CODES,
+        )
+
+        # Clamp to valid codebook range
+        topo_codes = topo_codes.clamp(
+            0, self._model.codebooks.topology_codebook.num_embeddings - 1,
+        )
+        geom_codes = geom_codes.clamp(
+            0, self._model.codebooks.geometry_codebook.num_embeddings - 1,
+        )
+        extr_codes = extr_codes.clamp(
+            0, self._model.codebooks.extrusion_codebook.num_embeddings - 1,
+        )
+
+        # --- Deterministic decode: codes → features → command/param logits ---
+        reconstructed = self._model.decode_from_codes(
+            topo_codes, geom_codes, extr_codes,
+        )
+        # Expand to seq dim for projection: [B, D] → [B, 1, D]
+        if reconstructed.dim() == 2:
+            reconstructed = reconstructed.unsqueeze(1)
+
+        command_logits = self._pipeline._project_to_command_logits(reconstructed)
+        param_logits = self._pipeline._project_to_param_logits(reconstructed)
+
+        # --- Deterministic argmax decoding to token_ids ---
+        # (No second stochastic draw — policy is at the codebook level)
+        cmd_logits_2d = command_logits[0]  # [S, C]
+        param_logits_2d = [pl[0] for pl in param_logits]  # 16 × [S, P]
+        token_ids = self._logits_to_token_ids(
+            cmd_logits_2d.unsqueeze(0), param_logits_2d, max_seq_len=self.max_seq_len,
+        )
+
+        # --- Aggregate log-probs and entropy ---
+        total_log_prob: torch.Tensor | None = None
+        entropy_value = 0.0
+        if log_probs_accum:
+            total_log_prob = torch.stack(log_probs_accum).sum()
+            entropy_value = float(
+                torch.stack(entropy_accum).mean().detach().cpu()
+            )
+
+        # Codebook indices for metadata
+        codebook_indices = torch.cat(
+            [topo_codes, geom_codes, extr_codes], dim=-1,
+        ).detach().cpu().numpy()
+
+        confidence = self._compute_confidence(
+            command_logits.detach(), [pl.detach() for pl in param_logits_2d],
+        )
+
+        return CommandSequenceProposal(
+            token_ids=token_ids,
+            command_dicts=[],
+            source_prompt=prompt,
+            conditioning_source=conditioning.source_type if conditioning else "unconditional",
+            confidence=confidence,
+            generation_metadata=self._build_metadata(
+                "VQVAE",
+                temperature=temp,
+                has_codebook_indices=True,
+                codebook_dim=self.codebook_dim,
+                codebook_indices=codebook_indices,
+            ),
+            error_context=error_context,
+            log_probs=total_log_prob,
+            entropy=entropy_value,
         )
 
     def generate_candidates(
@@ -171,19 +328,9 @@ class NeuralVQVAEGenerator(BaseNeuralGenerator):
         proposals: list[CommandSequenceProposal] = []
 
         for result in result_list:
-            command_dicts: list[dict[str, Any]] = []
-            if "commands" in result and result["commands"]:
-                command_dicts = result["commands"]
-
-            token_ids: list[int] = []
-            command_logits = result.get("command_logits")
-            param_logits = result.get("param_logits")
-
-            if command_logits is not None and param_logits is not None:
-                token_ids = self._logits_to_token_ids(
-                    command_logits, param_logits, max_seq_len=self.max_seq_len
-                )
-
+            command_dicts, token_ids, command_logits, param_logits, codebook_indices = (
+                self._extract_pipeline_result(result)
+            )
             confidence = self._compute_confidence(command_logits, param_logits)
 
             proposal = CommandSequenceProposal(
@@ -253,21 +400,9 @@ class NeuralVQVAEGenerator(BaseNeuralGenerator):
         if not result_list:
             return None
 
-        result = result_list[0]
-
-        command_dicts: list[dict[str, Any]] = []
-        if "commands" in result and result["commands"]:
-            command_dicts = result["commands"]
-
-        token_ids: list[int] = []
-        command_logits = result.get("command_logits")
-        param_logits = result.get("param_logits")
-
-        if command_logits is not None and param_logits is not None:
-            token_ids = self._logits_to_token_ids(
-                command_logits, param_logits, max_seq_len=self.max_seq_len
-            )
-
+        command_dicts, token_ids, command_logits, param_logits, _ = (
+            self._extract_pipeline_result(result_list[0])
+        )
         confidence = self._compute_confidence(command_logits, param_logits)
 
         return CommandSequenceProposal(

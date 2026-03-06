@@ -123,6 +123,44 @@ class BaseNeuralGenerator(ABC):
         """
         pass
 
+    def generate_for_training(
+        self,
+        prompt: str,
+        conditioning: ConditioningEmbeddings | None = None,
+        error_context: dict[str, Any] | None = None,
+    ) -> BaseProposal:
+        """Generate a proposal while retaining the computation graph for RL.
+
+        Unlike ``generate()`` (which runs under ``torch.no_grad``), this
+        method keeps gradients flowing so that ``proposal.log_probs`` is a
+        differentiable scalar that can be used in a REINFORCE loss::
+
+            loss = -advantage * proposal.log_probs
+
+        Subclasses should override this to compute log-probs on the
+        **same stochastic trajectory** that was sampled (same latent z
+        for VAE, same codebook indices for VQ-VAE, etc.).
+
+        The default implementation falls back to ``generate()`` with a
+        warning — callers should check ``proposal.log_probs is not None``
+        before relying on the gradient.
+
+        Args:
+            prompt: User prompt describing the shape/object to generate.
+            conditioning: Optional conditioning embeddings.
+            error_context: Optional error feedback from a prior failed attempt.
+
+        Returns:
+            A proposal with ``log_probs`` and ``entropy`` populated.
+        """
+        _log.warning(
+            "%s does not implement generate_for_training(); "
+            "falling back to generate() without RL signals. "
+            "Policy gradient updates will be skipped for this sample.",
+            type(self).__name__,
+        )
+        return self.generate(prompt, conditioning, error_context)
+
     def _resolve_device(self, device: str) -> str:
         """Resolve and validate the target device.
 
@@ -344,6 +382,64 @@ class BaseNeuralGenerator(ABC):
 
         confidence = 1.0 - normalized_entropy
         return float(confidence)
+
+    def _sample_params_with_log_probs(
+        self,
+        param_logits: Any,
+        pos: int,
+        cmd_type: int,
+        temperature: float,
+        token_ids: list[int],
+        log_probs_accum: list,
+        entropy_accum: list,
+    ) -> None:
+        """Sample parameter tokens and accumulate their log-probs.
+
+        Shared by VAE and VQ-VAE generators for training-time sampling.
+
+        Args:
+            param_logits: Parameter logit tensors (dict or list).
+            pos: Sequence position index.
+            cmd_type: Command type integer.
+            temperature: Sampling temperature.
+            token_ids: Token ID list to append to (mutated).
+            log_probs_accum: Log-prob accumulator (mutated).
+            entropy_accum: Entropy accumulator (mutated).
+        """
+        import torch
+        import torch.nn.functional as functional
+
+        param_items: list[tuple[int, Any]] = []
+        if isinstance(param_logits, dict):
+            param_items = list(param_logits.items())
+        elif isinstance(param_logits, (list, tuple)):
+            param_items = list(enumerate(param_logits))
+
+        for param_idx, param_tensor in param_items:
+            if param_idx >= 16:
+                break
+            if not PARAMETER_MASKS[cmd_type][param_idx]:
+                continue
+
+            if isinstance(param_tensor, np.ndarray):
+                param_tensor = torch.from_numpy(param_tensor).float()
+            if param_tensor.ndim == 3:
+                param_tensor = param_tensor[0]
+            if param_tensor.ndim > 1:
+                param_tensor = param_tensor[pos]
+
+            param_logits_scaled = param_tensor / max(temperature, 1e-8)
+            param_log_probs = functional.log_softmax(param_logits_scaled, dim=-1)
+            param_probs = torch.exp(param_log_probs)
+
+            param_dist = torch.distributions.Categorical(probs=param_probs)
+            param_val_t = param_dist.sample()
+            param_val = int(param_val_t.item())
+
+            log_probs_accum.append(param_dist.log_prob(param_val_t))
+            entropy_accum.append(param_dist.entropy())
+
+            token_ids.append(PARAM_OFFSET + param_val)
 
     def _adjust_temperature_for_error(
         self,

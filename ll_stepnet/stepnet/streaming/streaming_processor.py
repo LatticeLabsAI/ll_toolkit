@@ -423,9 +423,10 @@ class StreamingProcessor:
             if isinstance(sample_id, (list, tuple)):
                 sample_id = sample_id[0] if len(sample_id) > 0 else "unknown"
 
+            # Bind batch via default arg to capture current value (not mutable ref)
             return self._topology_loader.load(
                 sample_id,
-                lambda: self._build_topology_from_batch(batch),
+                lambda _batch=batch: self._build_topology_from_batch(_batch),
             )
 
         return None
@@ -495,13 +496,26 @@ class StreamingProcessor:
                 edge_index = topo_graph.to_edge_index()
 
                 num_nodes = node_feats.shape[0]
-                adj_matrix = np.zeros((num_nodes, num_nodes), dtype=np.float32)
+                # Build sparse adjacency to avoid O(N^2) memory
                 if edge_index.shape[1] > 0:
-                    adj_matrix[edge_index[0], edge_index[1]] = 1.0
+                    indices = torch.tensor(
+                        np.stack([edge_index[0], edge_index[1]]),
+                        dtype=torch.long,
+                    )
+                    values = torch.ones(indices.shape[1], dtype=torch.float32)
+                    adj_matrix = torch.sparse_coo_tensor(
+                        indices, values, (num_nodes, num_nodes),
+                    ).coalesce()
+                else:
+                    adj_matrix = torch.sparse_coo_tensor(
+                        torch.zeros(2, 0, dtype=torch.long),
+                        torch.zeros(0, dtype=torch.float32),
+                        (num_nodes, num_nodes),
+                    )
 
                 return {
                     "node_features": self._ensure_tensor(node_feats),
-                    "adjacency_matrix": self._ensure_tensor(adj_matrix),
+                    "adjacency_matrix": adj_matrix,
                 }
 
         _log.debug("Could not build topology from batch")

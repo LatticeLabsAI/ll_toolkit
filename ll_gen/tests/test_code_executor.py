@@ -23,6 +23,7 @@ from ll_gen.proposals.code_proposal import CodeProposal
 from ll_gen.disposal.code_executor import (
     TimeoutError,
     _timeout_handler,
+    _build_sandbox_preamble,
     execute_code_proposal,
 )
 
@@ -51,6 +52,10 @@ class TestTimeoutError:
             raise TimeoutError("test timeout")
 
 
+@pytest.mark.skipif(
+    not hasattr(signal, "SIGALRM"),
+    reason="SIGALRM is not available on Windows",
+)
 class TestTimeoutHandler:
     """Test the _timeout_handler signal handler function."""
 
@@ -77,6 +82,7 @@ class TestExecuteCodeProposalRouting:
 
     def test_cadquery_language_routes_to_cadquery_executor(self) -> None:
         """Test CadQuery language routes to _execute_cadquery."""
+        from ll_gen.disposal.code_executor import _DEFAULT_ALLOWED_MODULES
         proposal = CodeProposal(
             proposal_id="test",
             confidence=0.8,
@@ -88,7 +94,9 @@ class TestExecuteCodeProposalRouting:
         ) as mock_exec:
             mock_exec.return_value = MagicMock()
             execute_code_proposal(proposal)
-            mock_exec.assert_called_once_with(proposal.code, 30)
+            mock_exec.assert_called_once_with(
+                proposal.code, 30, list(_DEFAULT_ALLOWED_MODULES)
+            )
 
     def test_openscad_language_routes_to_openscad_executor(self) -> None:
         """Test OpenSCAD language routes to _execute_openscad."""
@@ -107,6 +115,7 @@ class TestExecuteCodeProposalRouting:
 
     def test_pythonocc_language_routes_to_pythonocc_executor(self) -> None:
         """Test pythonocc language routes to _execute_pythonocc."""
+        from ll_gen.disposal.code_executor import _DEFAULT_ALLOWED_MODULES
         proposal = CodeProposal(
             proposal_id="test",
             confidence=0.8,
@@ -118,10 +127,13 @@ class TestExecuteCodeProposalRouting:
         ) as mock_exec:
             mock_exec.return_value = MagicMock()
             execute_code_proposal(proposal)
-            mock_exec.assert_called_once_with(proposal.code, 30)
+            mock_exec.assert_called_once_with(
+                proposal.code, 30, list(_DEFAULT_ALLOWED_MODULES)
+            )
 
     def test_custom_timeout_passed_to_executor(self) -> None:
         """Test custom timeout is passed to the executor."""
+        from ll_gen.disposal.code_executor import _DEFAULT_ALLOWED_MODULES
         proposal = CodeProposal(
             proposal_id="test",
             confidence=0.8,
@@ -133,7 +145,9 @@ class TestExecuteCodeProposalRouting:
         ) as mock_exec:
             mock_exec.return_value = MagicMock()
             execute_code_proposal(proposal, timeout=60)
-            mock_exec.assert_called_once_with(proposal.code, 60)
+            mock_exec.assert_called_once_with(
+                proposal.code, 60, list(_DEFAULT_ALLOWED_MODULES)
+            )
 
 
 # ============================================================================
@@ -159,8 +173,8 @@ class TestCadQueryExecutionMocked:
                 execute_code_proposal(proposal)
             assert "CadQuery is not available" in str(exc_info.value)
 
-    def test_occ_unavailable_with_cadquery_raises_runtime_error(self) -> None:
-        """Test RuntimeError when pythonocc is not available for CadQuery."""
+    def test_ocp_unavailable_with_cadquery_raises_runtime_error(self) -> None:
+        """Test RuntimeError when OCP bindings are not available for CadQuery."""
         proposal = CodeProposal(
             proposal_id="test",
             confidence=0.8,
@@ -169,11 +183,11 @@ class TestCadQueryExecutionMocked:
         )
         with patch("ll_gen.disposal.code_executor._CADQUERY_AVAILABLE", True):
             with patch(
-                "ll_gen.disposal.code_executor._OCC_AVAILABLE", False
+                "ll_gen.disposal.code_executor._OCP_AVAILABLE", False
             ):
                 with pytest.raises(RuntimeError) as exc_info:
                     execute_code_proposal(proposal)
-                assert "pythonocc is not available" in str(exc_info.value)
+                assert "OCP" in str(exc_info.value)
 
 
 class TestCadQueryExecutionNamespace:
@@ -514,27 +528,57 @@ class TestSandboxSecurity:
                     assert "timeout" in str(exc_info.value).lower()
 
     def test_dangerous_builtins_not_in_restricted_namespace(self) -> None:
-        """Test that dangerous builtins are restricted."""
-        # The code uses a restricted __builtins__ dict
-        # These should NOT be available in the sandbox
-        dangerous_builtins = [
-            "eval", "exec", "compile", "open", "__import__",
-            "globals", "locals", "vars", "getattr", "setattr",
-            "delattr", "input",
+        """Test that dangerous builtins are actually excluded by the sandbox."""
+        # Execute the real sandbox preamble and inspect _safe_builtins
+        preamble_src = _build_sandbox_preamble(["math", "json"])
+        ns: dict[str, Any] = {}
+        exec(compile(preamble_src, "<sandbox-preamble>", "exec"), ns)
+        safe_builtins = ns["_safe_builtins"]
+
+        # These must NOT be reachable from user code
+        dangerous = [
+            "eval", "exec", "compile", "open",
+            "breakpoint", "exit", "quit",
         ]
-        # Document what's expected to be restricted
-        assert len(dangerous_builtins) > 0
+        for name in dangerous:
+            assert name not in safe_builtins, (
+                f"{name!r} should be removed from sandbox builtins"
+            )
+
+        # __import__ should be replaced with the restricted version
+        assert safe_builtins["__import__"] is ns["_restricted_import"]
 
     def test_restricted_builtins_structure(self) -> None:
-        """Test that restricted builtins are a dict (not module)."""
-        # The code creates a dict for __builtins__, not the full module
-        # This is a key security measure
-        safe_builtins = {
-            "abs": abs,
-            "round": round,
-            "len": len,
-        }
+        """Test that sandbox produces a dict (not module) for __builtins__."""
+        preamble_src = _build_sandbox_preamble(["math"])
+        ns: dict[str, Any] = {}
+        exec(compile(preamble_src, "<sandbox-preamble>", "exec"), ns)
+        safe_builtins = ns["_safe_builtins"]
+
+        # Must be a plain dict — passing a module as __builtins__ to exec()
+        # gives user code access to everything.
         assert isinstance(safe_builtins, dict)
+        assert not isinstance(safe_builtins, type(__builtins__) if isinstance(__builtins__, type) else type(None))
+
+        # Verify safe builtins still include essential non-dangerous items
+        for name in ("abs", "round", "len", "range", "int", "float", "str", "list", "dict", "True", "False", "None"):
+            assert name in safe_builtins, f"Safe builtin {name!r} should be available"
+
+    def test_restricted_import_blocks_disallowed_module(self) -> None:
+        """Test that the sandbox import guard actually blocks unauthorized imports."""
+        preamble_src = _build_sandbox_preamble(["math"])
+        ns: dict[str, Any] = {}
+        exec(compile(preamble_src, "<sandbox-preamble>", "exec"), ns)
+
+        restricted_import = ns["_restricted_import"]
+
+        # Allowed module should succeed
+        math_mod = restricted_import("math")
+        assert math_mod is not None
+
+        # Disallowed module should raise ImportError
+        with pytest.raises(ImportError, match="not allowed"):
+            restricted_import("subprocess")
 
 
 # ============================================================================
@@ -633,3 +677,133 @@ class TestSubprocessIPC:
         with patch("subprocess.run", side_effect=_fake_run):
             with pytest.raises(RuntimeError, match="invalid JSON"):
                 _run_in_subprocess("print('hello')", "x = 1", 30, "Test")
+
+
+# ============================================================================
+# SECTION 11: Sandbox Preamble & Import Restriction Tests
+# ============================================================================
+
+
+class TestSandboxPreamble:
+    """Test _build_sandbox_preamble generates correct restriction code."""
+
+    def test_preamble_contains_allowed_modules(self) -> None:
+        """Test that preamble embeds the allowed module list via base64."""
+        from ll_gen.disposal.code_executor import _build_sandbox_preamble
+        preamble = _build_sandbox_preamble(["math", "numpy"])
+        # Modules are now base64-encoded for injection safety
+        assert "b64decode" in preamble
+        assert "_ALLOWED_MODULES" in preamble
+        # Verify the encoded payload decodes to the expected module list
+        ns: dict = {}
+        exec(preamble, ns)
+        assert ns["_ALLOWED_MODULES"] == {"math", "numpy"}
+
+    def test_preamble_defines_safe_builtins(self) -> None:
+        """Test that preamble defines _safe_builtins dict."""
+        from ll_gen.disposal.code_executor import _build_sandbox_preamble
+        preamble = _build_sandbox_preamble(["math"])
+        assert "_safe_builtins" in preamble
+        assert "_DANGEROUS_BUILTINS" in preamble
+
+    def test_preamble_removes_dangerous_builtins(self) -> None:
+        """Test that preamble removes eval, exec, compile, open, etc."""
+        from ll_gen.disposal.code_executor import _build_sandbox_preamble
+        preamble = _build_sandbox_preamble(["math"])
+        for dangerous in ("eval", "exec", "compile", "open", "breakpoint"):
+            assert f'"{dangerous}"' in preamble
+
+    def test_preamble_installs_restricted_import(self) -> None:
+        """Test that preamble installs a restricted __import__."""
+        from ll_gen.disposal.code_executor import _build_sandbox_preamble
+        preamble = _build_sandbox_preamble(["math"])
+        assert "_restricted_import" in preamble
+        assert '_safe_builtins["__import__"] = _restricted_import' in preamble
+
+    def test_preamble_is_valid_python(self) -> None:
+        """Test that the generated preamble compiles as valid Python."""
+        from ll_gen.disposal.code_executor import _build_sandbox_preamble
+        preamble = _build_sandbox_preamble(["math", "numpy", "cadquery"])
+        # Should not raise SyntaxError
+        compile(preamble, "<sandbox_preamble>", "exec")
+
+    def test_preamble_execution_blocks_disallowed_import(self) -> None:
+        """Test that executing the preamble creates a working import guard."""
+        from ll_gen.disposal.code_executor import _build_sandbox_preamble
+        preamble = _build_sandbox_preamble(["math"])
+        ns: dict = {}
+        exec(preamble, ns)
+        safe_builtins = ns["_safe_builtins"]
+        restricted_import = safe_builtins["__import__"]
+
+        # Allowed import should succeed
+        math_mod = restricted_import("math")
+        assert hasattr(math_mod, "pi")
+
+        # Disallowed import should raise ImportError
+        with pytest.raises(ImportError, match="not allowed"):
+            restricted_import("subprocess")
+
+    def test_preamble_execution_allows_submodule_of_allowed(self) -> None:
+        """Test that os.path is allowed if os is in allowed_modules."""
+        from ll_gen.disposal.code_executor import _build_sandbox_preamble
+        preamble = _build_sandbox_preamble(["os"])
+        ns: dict = {}
+        exec(preamble, ns)
+        restricted_import = ns["_safe_builtins"]["__import__"]
+        # __import__("os.path") returns the top-level 'os' module
+        os_mod = restricted_import("os.path")
+        assert hasattr(os_mod, "path")
+        assert hasattr(os_mod.path, "join")
+
+
+class TestWrapperBuilders:
+    """Test _build_cadquery_wrapper and _build_pythonocc_wrapper."""
+
+    def test_cadquery_wrapper_includes_sandbox(self) -> None:
+        """Test CadQuery wrapper includes sandbox preamble."""
+        from ll_gen.disposal.code_executor import _build_cadquery_wrapper
+        wrapper = _build_cadquery_wrapper(["math", "numpy", "cadquery"])
+        assert "_safe_builtins" in wrapper
+        assert '"__builtins__": _safe_builtins' in wrapper
+
+    def test_pythonocc_wrapper_includes_sandbox(self) -> None:
+        """Test pythonocc wrapper includes sandbox preamble."""
+        from ll_gen.disposal.code_executor import _build_pythonocc_wrapper
+        wrapper = _build_pythonocc_wrapper(["math", "numpy", "OCC"])
+        assert "_safe_builtins" in wrapper
+        assert '"__builtins__": _safe_builtins' in wrapper
+
+    def test_cadquery_wrapper_catches_blocked_import(self) -> None:
+        """Test CadQuery wrapper has ImportError handler."""
+        from ll_gen.disposal.code_executor import _build_cadquery_wrapper
+        wrapper = _build_cadquery_wrapper(["math"])
+        assert "except ImportError as exc:" in wrapper
+        assert "Blocked import" in wrapper
+
+    def test_pythonocc_wrapper_catches_blocked_import(self) -> None:
+        """Test pythonocc wrapper has ImportError handler."""
+        from ll_gen.disposal.code_executor import _build_pythonocc_wrapper
+        wrapper = _build_pythonocc_wrapper(["math"])
+        assert "except ImportError as exc:" in wrapper
+        assert "Blocked import" in wrapper
+
+    def test_allowed_modules_custom_list(self) -> None:
+        """Test execute_code_proposal accepts custom allowed_modules."""
+        proposal = CodeProposal(
+            proposal_id="test",
+            confidence=0.8,
+            code="result = 'test'",
+            language=CodeLanguage.CADQUERY,
+        )
+        custom_modules = ["math", "numpy", "cadquery", "scipy"]
+        with patch(
+            "ll_gen.disposal.code_executor._execute_cadquery"
+        ) as mock_exec:
+            mock_exec.return_value = MagicMock()
+            execute_code_proposal(
+                proposal, allowed_modules=custom_modules
+            )
+            mock_exec.assert_called_once_with(
+                proposal.code, 30, custom_modules
+            )

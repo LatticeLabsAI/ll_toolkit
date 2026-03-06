@@ -263,7 +263,6 @@ class PythonOCCBackend(RenderableCADBackend):
             "right",
             "isometric",
             "isometric2",
-            "isometric_back",
         ]
 
     def load_view(self, view_name: str) -> "PythonOCCViewBackend":

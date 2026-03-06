@@ -8,7 +8,7 @@ def test_imports():
 
     from cadling.backend.step.step_backend import STEPBackend
     from cadling.backend.stl.stl_backend import STLBackend
-    from cadling.backend.brep.brep_backend import BRepBackend
+    from cadling.backend.brep_backend import BRepBackend
     from cadling.backend.iges_backend import IGESBackend
     from cadling.backend.document_converter import DocumentConverter
 
@@ -26,7 +26,7 @@ def test_capabilities():
 
     from cadling.backend.step.step_backend import STEPBackend
     from cadling.backend.stl.stl_backend import STLBackend
-    from cadling.backend.brep.brep_backend import BRepBackend
+    from cadling.backend.brep_backend import BRepBackend
     from cadling.backend.iges_backend import IGESBackend
 
     backends = [

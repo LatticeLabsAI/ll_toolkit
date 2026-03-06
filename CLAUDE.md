@@ -40,7 +40,7 @@ cd ../ll_stepnet && pip install -e . && cd ../cadling
 
 On macOS (especially Apple Silicon), mixing different OpenMP library sources causes a fatal crash:
 
-```
+```text
 OMP: Error #15: Initializing libomp.dylib, but found libomp.dylib already initialized.
 ```
 
@@ -54,11 +54,13 @@ OMP: Error #15: Initializing libomp.dylib, but found libomp.dylib already initia
 4. **Set `OMP_NUM_THREADS=1` on macOS** as extra protection (conftest.py does this automatically)
 
 **Affected Files:**
+
 - `ll_stepnet/environment.yml` — must use `conda-forge` only
 - `ll_ocadr/environment.yml` — must use `conda-forge` only
 - `ll_stepnet/tests/conftest.py` — imports torch first for OpenMP protection
 
 **References:**
+
 - [PyTorch Issue #44282](https://github.com/pytorch/pytorch/issues/44282)
 - [PyTorch Issue #132372](https://github.com/pytorch/pytorch/issues/132372)
 
@@ -110,7 +112,7 @@ python -m cadling.sdg.cli.main qa generate <file>
 
 CADling mirrors [docling](https://github.com/DS4SD/docling)'s architecture adapted for 3D CAD geometry. The processing flow is:
 
-```
+```text
 DocumentConverter (entry point: backend/document_converter.py)
   → Format Detection → Backend Selection
   → Backend (format-specific parsing)
@@ -138,6 +140,7 @@ DocumentConverter (entry point: backend/document_converter.py)
 ### ll_stepnet Integration
 
 `ll_stepnet` (`ll_stepnet/stepnet/`) provides neural processing for STEP files. Integrated into cadling at two layers:
+
 - **Backend layer**: `cadling/backend/step/stepnet_integration.py` — tokenization, feature extraction, topology building
 - **Model layer**: Classification, property prediction, similarity via enrichment models
 
@@ -153,6 +156,7 @@ DocumentConverter (entry point: backend/document_converter.py)
 ## Tooling Config
 
 Configured in `cadling/pyproject.toml`:
+
 - **Black**: line-length 88, target py39-py312
 - **Ruff**: E, W, F, I, N, UP, B, C4 rules; E501 ignored (Black handles it)
 - **Mypy**: py39, lenient (disallow_untyped_defs=false), ignores missing imports
@@ -167,6 +171,7 @@ See `cadling/docs/RequiredToBeCorrected.md` for ~200 methods with placeholder/in
 Geometric tokenizer for CAD/mesh data. See `geotoken/README.md` for full documentation.
 
 **Quick Commands:**
+
 ```bash
 # Install
 pip install -e ./geotoken
@@ -179,11 +184,13 @@ python geotoken/docs/examples/mesh_tokenization.py
 ```
 
 **Key Classes:**
+
 - `GeoTokenizer`: Mesh tokenization
 - `CommandSequenceTokenizer`: CAD command sequences
 - `GraphTokenizer`: B-Rep topology graphs
 - `CADVocabulary`: Token → ID encoding
 
 **Integration:**
+
 - cadling: `from cadling.backend.geotoken_integration import GeoTokenIntegration`
 - ll_stepnet: `from ll_stepnet.stepnet.data import GeoTokenDataset`

@@ -56,6 +56,24 @@ class BaseProposal:
     error_context: Optional[Dict[str, Any]] = None
 
     # ------------------------------------------------------------------
+    # RL training signals (populated by generate_for_training)
+    # ------------------------------------------------------------------
+    log_probs: Optional[Any] = None
+    """Sum of log-probabilities for the sampled trajectory.
+
+    This is a scalar torch.Tensor with grad attached, computed during
+    the *same* forward pass that produced the sample.  Used by
+    REINFORCE / policy-gradient trainers.  ``None`` when the proposal
+    was produced by a regular ``generate()`` call (no grad).
+    """
+    entropy: Optional[float] = None
+    """Policy entropy (scalar) over the generation distribution.
+
+    Used as an exploration bonus in the RL loss.  ``None`` when no
+    training signals were requested.
+    """
+
+    # ------------------------------------------------------------------
     # Methods
     # ------------------------------------------------------------------
 
@@ -89,14 +107,23 @@ class BaseProposal:
             New BaseProposal (same type) with updated fields.
             Subclasses should override to preserve their own fields.
         """
+        from dataclasses import fields as dc_fields
+
+        # Shallow copy via dataclasses.replace to preserve torch tensor
+        # grad_fn on log_probs.  deepcopy detaches tensors from the
+        # computation graph, breaking REINFORCE backprop.
+        field_vals = {f.name: getattr(self, f.name) for f in dc_fields(self)}
+        # Deep-copy only mutable containers that the caller might mutate
         import copy
 
-        new = copy.deepcopy(self)
-        new.proposal_id = uuid.uuid4().hex
-        new.attempt = self.next_attempt()
-        new.error_context = error
-        new.timestamp = datetime.now(timezone.utc).isoformat()
-        return new
+        for key in ("generation_metadata", "alternatives", "error_context"):
+            if field_vals[key] is not None:
+                field_vals[key] = copy.deepcopy(field_vals[key])
+        field_vals["proposal_id"] = uuid.uuid4().hex
+        field_vals["attempt"] = self.next_attempt()
+        field_vals["error_context"] = error
+        field_vals["timestamp"] = datetime.now(timezone.utc).isoformat()
+        return type(self)(**field_vals)
 
     @property
     def is_first_attempt(self) -> bool:

@@ -28,9 +28,9 @@ def square_distance(src, dst):
     return dist
 
 
-def farthest_point_sample(xyz, npoint):
+def _farthest_point_sample_python(xyz, npoint):
     """
-    Farthest Point Sampling for downsampling point clouds.
+    Pure-Python fallback FPS. Used when torch_cluster is not available.
 
     Args:
         xyz: [B, N, 3] point cloud
@@ -41,10 +41,10 @@ def farthest_point_sample(xyz, npoint):
     """
     device = xyz.device
     B, N, C = xyz.shape
-    centroids = torch.zeros(B, npoint, dtype=torch.long).to(device)
-    distance = torch.ones(B, N).to(device) * 1e10
-    farthest = torch.randint(0, N, (B,), dtype=torch.long).to(device)
-    batch_indices = torch.arange(B, dtype=torch.long).to(device)
+    centroids = torch.zeros(B, npoint, dtype=torch.long, device=device)
+    distance = torch.full((B, N), 1e10, device=device)
+    farthest = torch.randint(0, N, (B,), dtype=torch.long, device=device)
+    batch_indices = torch.arange(B, dtype=torch.long, device=device)
 
     for i in range(npoint):
         centroids[:, i] = farthest
@@ -54,6 +54,45 @@ def farthest_point_sample(xyz, npoint):
         distance[mask] = dist[mask]
         farthest = torch.max(distance, -1)[1]
 
+    return centroids
+
+
+try:
+    from torch_cluster import fps as _torch_cluster_fps
+    _has_torch_cluster = True
+except ImportError:
+    _has_torch_cluster = False
+
+
+def farthest_point_sample(xyz, npoint):
+    """
+    Farthest Point Sampling for downsampling point clouds.
+
+    Uses torch_cluster.fps (single fused CUDA kernel) when available,
+    falling back to a Python loop implementation otherwise.
+
+    Args:
+        xyz: [B, N, 3] point cloud
+        npoint: number of samples
+
+    Returns:
+        centroids: [B, npoint] sampled point indices
+    """
+    if not _has_torch_cluster:
+        return _farthest_point_sample_python(xyz, npoint)
+
+    B, N, _ = xyz.shape
+    ratio = npoint / N
+
+    # torch_cluster.fps expects [B*N, 3] with a batch vector [B*N]
+    flat_xyz = xyz.reshape(B * N, -1)
+    batch_vec = torch.arange(B, device=xyz.device).repeat_interleave(N)
+
+    # fps returns flat indices into flat_xyz
+    flat_idx = _torch_cluster_fps(flat_xyz, batch_vec, ratio=ratio, random_start=True)
+
+    # Convert flat indices back to per-batch indices
+    centroids = (flat_idx.reshape(B, npoint) % N)
     return centroids
 
 

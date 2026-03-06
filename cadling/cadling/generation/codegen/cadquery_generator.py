@@ -947,8 +947,10 @@ class CadQueryExecutor:
             "system", "popen", "subprocess", "Popen",
         }
 
+        _FORBIDDEN_MODULES = {"os", "sys", "subprocess", "shutil", "importlib", "ctypes", "signal"}
+
         for node in ast.walk(tree):
-            # Check function calls to forbidden names
+            # Check function calls to forbidden names (direct and attribute-based)
             if isinstance(node, ast.Call):
                 func = node.func
                 if isinstance(func, ast.Name) and func.id in _FORBIDDEN_NAMES:
@@ -956,6 +958,16 @@ class CadQueryExecutor:
                         "shape": None,
                         "success": False,
                         "error": f"Forbidden function call: {func.id}()",
+                    }
+                # Catch attribute-based calls: e.g. importlib.import_module(),
+                # obj.eval(), obj.exec(), builtins.__import__()
+                if isinstance(func, ast.Attribute) and func.attr in (
+                    _FORBIDDEN_NAMES | {"import_module"}
+                ):
+                    return {
+                        "shape": None,
+                        "success": False,
+                        "error": f"Forbidden attribute call: .{func.attr}()",
                     }
             # Check forbidden attribute access
             if isinstance(node, ast.Attribute):
@@ -965,8 +977,8 @@ class CadQueryExecutor:
                         "success": False,
                         "error": f"Forbidden attribute access: .{node.attr}",
                     }
-            # Check forbidden Name references (e.g., os, sys, subprocess)
-            if isinstance(node, ast.Name) and node.id in {"os", "sys", "subprocess", "shutil"}:
+            # Check forbidden Name references (e.g., os, sys, subprocess, importlib)
+            if isinstance(node, ast.Name) and node.id in _FORBIDDEN_MODULES:
                 return {
                     "shape": None,
                     "success": False,

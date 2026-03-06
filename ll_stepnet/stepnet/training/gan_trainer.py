@@ -89,6 +89,14 @@ class GANTrainer:
             discriminator.parameters(), lr=lr_disc, betas=(0.5, 0.999)
         )
 
+        # Track optimizer param ids for detecting lazily-added parameters
+        self._optimizer_gen_param_ids: set = {
+            id(p) for group in self.optimizer_gen.param_groups for p in group['params']
+        }
+        self._optimizer_disc_param_ids: set = {
+            id(p) for group in self.optimizer_disc.param_groups for p in group['params']
+        }
+
         # Checkpoint directory
         self.checkpoint_dir = Path(checkpoint_dir) if checkpoint_dir else None
         if self.checkpoint_dir:
@@ -135,6 +143,25 @@ class GANTrainer:
 
         _log.warning("Could not infer latent dim; defaulting to 128.")
         return 128
+
+    def _sync_optimizer_params(self) -> None:
+        """Add any lazily-created model parameters to the optimizers."""
+        for model, optimizer, param_ids_attr in [
+            (self.generator, self.optimizer_gen, '_optimizer_gen_param_ids'),
+            (self.discriminator, self.optimizer_disc, '_optimizer_disc_param_ids'),
+        ]:
+            param_ids = getattr(self, param_ids_attr)
+            new_params = [
+                p for p in model.parameters()
+                if id(p) not in param_ids and p.requires_grad
+            ]
+            if new_params:
+                optimizer.add_param_group({'params': new_params})
+                param_ids.update(id(p) for p in new_params)
+                _log.info(
+                    "Added %d lazily-created parameters to %s optimizer",
+                    len(new_params), model.__class__.__name__,
+                )
 
     def _compute_gradient_penalty(
         self, real: torch.Tensor, fake: torch.Tensor
@@ -188,6 +215,7 @@ class GANTrainer:
         """
         batch_size = real_latents.size(0)
         self.discriminator.train()
+        self._sync_optimizer_params()
         self.optimizer_disc.zero_grad()
 
         # Generate fake latents
@@ -228,6 +256,7 @@ class GANTrainer:
             Dictionary with key: 'g_loss'.
         """
         self.generator.train()
+        self._sync_optimizer_params()
         self.optimizer_gen.zero_grad()
 
         # Generate fake latents

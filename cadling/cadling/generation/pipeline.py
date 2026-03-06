@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import subprocess
 import sys
 import tempfile
@@ -459,25 +460,91 @@ class GenerationPipeline:
             # OpenSCAD executor already runs an external binary via subprocess
             return executor.execute(code, output_path)
 
-        # For CadQuery and other code-exec backends, use subprocess isolation
+        # For CadQuery and other code-exec backends, use subprocess isolation.
+        # --- AST validation before any execution path ---
+        import ast as _ast
+
+        _FORBIDDEN_NAMES = {
+            "eval", "exec", "compile", "globals", "locals", "vars",
+            "__import__", "getattr", "setattr", "delattr",
+            "breakpoint", "exit", "quit", "open",
+        }
+        _FORBIDDEN_ATTRS = {
+            "__subclasses__", "__bases__", "__class__", "__mro__",
+            "__globals__", "__code__", "__builtins__",
+            "system", "popen", "subprocess", "Popen",
+        }
+        _ALLOWED_MODS = {
+            "cadquery", "math", "cmath", "numpy", "functools",
+            "itertools", "collections",
+        }
+
+        try:
+            tree = _ast.parse(code, filename="<generated_script>")
+        except SyntaxError as e:
+            return {"success": False, "error": f"Syntax error in generated code: {e}"}
+
+        for node in _ast.walk(tree):
+            if isinstance(node, _ast.Call):
+                func = node.func
+                if isinstance(func, _ast.Name) and func.id in _FORBIDDEN_NAMES:
+                    return {"success": False, "error": f"Forbidden call: {func.id}()"}
+            if isinstance(node, _ast.Attribute) and node.attr in _FORBIDDEN_ATTRS:
+                return {"success": False, "error": f"Forbidden attribute: .{node.attr}"}
+            if isinstance(node, _ast.Name) and node.id in {"os", "sys", "subprocess", "shutil"}:
+                return {"success": False, "error": f"Forbidden module: {node.id}"}
+            if isinstance(node, _ast.Import):
+                for alias in node.names:
+                    if alias.name.split(".")[0] not in _ALLOWED_MODS:
+                        return {"success": False, "error": f"Forbidden import: {alias.name}"}
+            if isinstance(node, _ast.ImportFrom) and node.module:
+                if node.module.split(".")[0] not in _ALLOWED_MODS:
+                    return {"success": False, "error": f"Forbidden import: {node.module}"}
+
+        # Pass script and output_path via environment variables to avoid
+        # path injection through repr() interpolation into source code.
         wrapper = textwrap.dedent("""\
+            import os
             import sys
             import json
+            import builtins as _builtins_mod
 
             try:
                 import cadquery as cq
             except ImportError:
-                print(json.dumps({{"success": False, "error": "cadquery not available"}}))
+                print(json.dumps({"success": False, "error": "cadquery not available"}))
                 sys.exit(1)
 
-            script = {script_repr}
-            output_path = {output_repr}
+            # Build restricted builtins to prevent class-introspection escapes
+            _SAFE_NAMES = {
+                "abs", "all", "any", "bool", "dict", "enumerate", "filter",
+                "float", "frozenset", "hasattr", "int", "isinstance",
+                "issubclass", "len", "list", "map", "max", "min", "print",
+                "range", "repr", "reversed", "round", "set", "slice",
+                "sorted", "str", "sum", "tuple", "type", "zip",
+                "True", "False", "None",
+            }
+            _safe_builtins = {}
+            for _n in _SAFE_NAMES:
+                if hasattr(_builtins_mod, _n):
+                    _safe_builtins[_n] = getattr(_builtins_mod, _n)
 
-            namespace = {{"cq": cq, "cadquery": cq}}
+            _ALLOWED = {"cadquery", "math", "cmath", "numpy", "functools", "itertools", "collections"}
+            _orig_import = _builtins_mod.__import__
+            def _guarded_import(name, *args, **kwargs):
+                if name.split(".")[0] not in _ALLOWED:
+                    raise ImportError(f"Import of '{name}' blocked in sandbox")
+                return _orig_import(name, *args, **kwargs)
+            _safe_builtins["__import__"] = _guarded_import
+
+            script = os.environ["_CADLING_SCRIPT"]
+            output_path = os.environ["_CADLING_OUTPUT_PATH"]
+
+            namespace = {"__builtins__": _safe_builtins, "cq": cq, "cadquery": cq}
             try:
                 exec(compile(script, "<generated_script>", "exec"), namespace)
             except Exception as e:
-                print(json.dumps({{"success": False, "error": str(e)}}))
+                print(json.dumps({"success": False, "error": str(e)}))
                 sys.exit(1)
 
             result = namespace.get("result")
@@ -488,7 +555,7 @@ class GenerationPipeline:
                         break
 
             if result is None:
-                print(json.dumps({{"success": False, "error": "No result variable found"}}))
+                print(json.dumps({"success": False, "error": "No result variable found"}))
                 sys.exit(1)
 
             try:
@@ -496,11 +563,16 @@ class GenerationPipeline:
                     cq.exporters.export(result, output_path)
                 else:
                     cq.exporters.export(cq.Workplane().add(result), output_path)
-                print(json.dumps({{"success": True, "output_path": output_path}}))
+                print(json.dumps({"success": True, "output_path": output_path}))
             except Exception as e:
-                print(json.dumps({{"success": False, "error": f"Export failed: {{e}}"}}))
+                print(json.dumps({"success": False, "error": f"Export failed: {e}"}))
                 sys.exit(1)
-        """).format(script_repr=repr(code), output_repr=repr(output_path))
+        """)
+        wrapper_env = {
+            **os.environ,
+            "_CADLING_SCRIPT": code,
+            "_CADLING_OUTPUT_PATH": str(output_path),
+        }
 
         try:
             proc = subprocess.run(
@@ -508,6 +580,7 @@ class GenerationPipeline:
                 capture_output=True,
                 text=True,
                 timeout=timeout,
+                env=wrapper_env,
             )
 
             if proc.returncode == 0 and proc.stdout.strip():

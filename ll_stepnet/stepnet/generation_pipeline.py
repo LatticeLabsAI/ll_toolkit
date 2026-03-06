@@ -29,6 +29,13 @@ from typing import Any, Callable, Dict, List, Optional
 import torch
 import torch.nn as nn
 
+from stepnet.config import (
+    NUM_COMMAND_TYPES,
+    NUM_PARAM_SLOTS,
+    DEFAULT_MAX_SEQ_LEN,
+)
+from stepnet.training.unified_trainer import ModelType
+
 from stepnet.generation.errors import (
     CADGenerationError,
     DependencyMissingError,
@@ -48,7 +55,7 @@ from stepnet.generation.fallbacks import (
 _log = logging.getLogger(__name__)
 
 
-class CADGenerationPipeline:
+class CADGenerationPipeline(nn.Module):
     """End-to-end CAD generation pipeline.
 
     Connects ll_stepnet generative models → geotoken decoding → cadling reconstruction.
@@ -87,6 +94,8 @@ class CADGenerationPipeline:
             ValueError: If mode is not one of the supported modes.
             TypeError: If model is not a recognized generative model.
         """
+        super().__init__()
+
         if mode not in ('vae', 'vqvae', 'diffusion'):
             raise ValueError(
                 f"mode must be one of ('vae', 'vqvae', 'diffusion'), got {mode!r}"
@@ -94,7 +103,7 @@ class CADGenerationPipeline:
 
         self.model = model.to(device)
         self.mode = mode
-        self.device = device
+        self._device_str = device
         self.executor_tolerance = executor_tolerance
         self.quantization_levels = quantization_levels
         self.fallback_config = fallback_config or FallbackConfig()
@@ -110,9 +119,11 @@ class CADGenerationPipeline:
         # Cached projection layers (created lazily on first use so input dim
         # is known). Once created they are reused across generate() calls so
         # weights are consistent and could be fine-tuned.
+        # Registered as submodules so state_dict(), .to(), and .parameters()
+        # see them.
         self._command_proj: Optional[nn.Linear] = None
         self._param_projs: Optional[nn.ModuleList] = None
-        self._latent_mlps: Dict[tuple, nn.Sequential] = {}
+        self._latent_mlps: nn.ModuleDict = nn.ModuleDict()
 
         _log.info(
             "CADGenerationPipeline initialised: mode=%s, model_type=%s, "
@@ -121,24 +132,30 @@ class CADGenerationPipeline:
         )
 
     @staticmethod
-    def _infer_model_type(model: nn.Module) -> str:
+    def _infer_model_type(model: nn.Module) -> ModelType:
         """Infer the generative model type from the model class name.
 
         Args:
             model: The generative model instance.
 
         Returns:
-            String identifying the model type.
+            ModelType enum member identifying the model type.
         """
         class_name = model.__class__.__name__
-        if 'VAE' in class_name and 'VQ' not in class_name:
-            return 'STEPVAE'
-        elif 'VQVAE' in class_name:
-            return 'VQVAEModel'
+        if 'VQVAE' in class_name:
+            return ModelType.VQVAE
+        elif 'VAE' in class_name:
+            return ModelType.VAE
         elif 'Diffusion' in class_name:
-            return 'StructuredDiffusion'
+            return ModelType.DIFFUSION
+        elif 'GAN' in class_name:
+            return ModelType.GAN
         else:
-            return class_name
+            _log.warning(
+                "Could not infer ModelType from class %s, defaulting to VAE",
+                class_name,
+            )
+            return ModelType.VAE
 
     def _validate_latent(
         self,
@@ -213,9 +230,12 @@ class CADGenerationPipeline:
             # Step 3: Build result list by decoding each sample
             results = []
             for batch_idx in range(num_samples):
+                # Slice per-sample logits and clone to avoid shared references
+                sample_cmd_logits = command_logits[batch_idx].clone()
+                sample_param_logits = [p[batch_idx].clone() for p in param_logits]
                 result = {
-                    'command_logits': command_logits,
-                    'param_logits': param_logits,
+                    'command_logits': sample_cmd_logits,
+                    'param_logits': sample_param_logits,
                     'batch_index': batch_idx,
                 }
 
@@ -319,7 +339,7 @@ class CADGenerationPipeline:
             sample_output = self.model.sample(
                 num_samples=num_samples,
                 seq_len=seq_len,
-                device=self.device,
+                device=self._device_str,
             )
         except Exception as e:
             raise ModelSamplingError(
@@ -354,9 +374,9 @@ class CADGenerationPipeline:
         base_logit = 0.1 / max(temperature, 1e-6)
 
         command_logits = torch.full(
-            (batch_size, actual_seq_len, 6),
+            (batch_size, actual_seq_len, NUM_COMMAND_TYPES),
             base_logit,
-            device=self.device,
+            device=self._device_str,
         )
         command_logits.scatter_(
             2,
@@ -367,13 +387,13 @@ class CADGenerationPipeline:
         # Build parameter logits with same temperature scaling
         param_logits = []
         if param_preds is not None:
-            # param_preds is [batch_size, seq_len, 16]
-            for param_slot in range(16):
+            # param_preds is [batch_size, seq_len, NUM_PARAM_SLOTS]
+            for param_slot in range(NUM_PARAM_SLOTS):
                 slot_preds = param_preds[..., param_slot].long()  # [B, S]
                 slot_logits = torch.full(
                     (batch_size, actual_seq_len, self.quantization_levels),
                     base_logit,
-                    device=self.device,
+                    device=self._device_str,
                 )
                 slot_logits.scatter_(
                     2,
@@ -565,7 +585,7 @@ class CADGenerationPipeline:
 
         sample_output = self.model.sample(
             batch_size=num_samples,
-            device=torch.device(self.device),
+            device=torch.device(self._device_str),
             **sample_kwargs,
         )
 
@@ -629,12 +649,12 @@ class CADGenerationPipeline:
 
         # Strategy 2: Project through a latent-to-sequence MLP.
         # This converts the flat latent [B, D] into [B, S, C] logits.
-        target_seq_len = seq_len or 60  # DeepCAD uses 60-length sequences
+        target_seq_len = seq_len or DEFAULT_MAX_SEQ_LEN
         command_logits = self._latent_to_sequence_logits(
-            concatenated, target_seq_len, 6,
+            concatenated, target_seq_len, NUM_COMMAND_TYPES,
         )
         param_logits = []
-        for _ in range(16):
+        for _ in range(NUM_PARAM_SLOTS):
             slot_logits = self._latent_to_sequence_logits(
                 concatenated, target_seq_len, self.quantization_levels,
             )
@@ -660,7 +680,7 @@ class CADGenerationPipeline:
     def _project_to_command_logits(
         self, decoded: torch.Tensor,
     ) -> torch.Tensor:
-        """Project decoded features to command logits [B, S, 6].
+        """Project decoded features to command logits [B, S, NUM_COMMAND_TYPES].
 
         Uses model's command_head if available, otherwise a linear projection.
 
@@ -668,7 +688,7 @@ class CADGenerationPipeline:
             decoded: Decoded features [B, S, D] or [B, D].
 
         Returns:
-            Command logits tensor [B, S, 6].
+            Command logits tensor [B, S, NUM_COMMAND_TYPES].
         """
         if hasattr(self.model, 'command_head'):
             return self.model.command_head(decoded)
@@ -679,14 +699,15 @@ class CADGenerationPipeline:
 
         feat_dim = decoded.shape[-1]
         if self._command_proj is None or self._command_proj.in_features != feat_dim:
-            self._command_proj = nn.Linear(feat_dim, 6, bias=True).to(decoded.device)
-            nn.init.xavier_uniform_(self._command_proj.weight)
+            with torch.enable_grad():
+                self._command_proj = nn.Linear(feat_dim, NUM_COMMAND_TYPES, bias=True).to(decoded.device)
+                nn.init.xavier_uniform_(self._command_proj.weight)
         return self._command_proj(decoded)
 
     def _project_to_param_logits(
         self, decoded: torch.Tensor,
     ) -> List[torch.Tensor]:
-        """Project decoded features to parameter logits [16 x [B, S, Q]].
+        """Project decoded features to parameter logits [NUM_PARAM_SLOTS x [B, S, Q]].
 
         Uses model's param_heads if available, otherwise linear projections.
 
@@ -694,7 +715,7 @@ class CADGenerationPipeline:
             decoded: Decoded features [B, S, D] or [B, D].
 
         Returns:
-            List of 16 parameter logit tensors [B, S, quantization_levels].
+            List of NUM_PARAM_SLOTS parameter logit tensors [B, S, quantization_levels].
         """
         if hasattr(self.model, 'param_heads'):
             return [head(decoded) for head in self.model.param_heads]
@@ -705,12 +726,13 @@ class CADGenerationPipeline:
 
         feat_dim = decoded.shape[-1]
         if self._param_projs is None or self._param_projs[0].in_features != feat_dim:
-            self._param_projs = nn.ModuleList([
-                nn.Linear(feat_dim, self.quantization_levels, bias=True).to(decoded.device)
-                for _ in range(16)
-            ])
-            for proj in self._param_projs:
-                nn.init.xavier_uniform_(proj.weight)
+            with torch.enable_grad():
+                self._param_projs = nn.ModuleList([
+                    nn.Linear(feat_dim, self.quantization_levels, bias=True).to(decoded.device)
+                    for _ in range(NUM_PARAM_SLOTS)
+                ])
+                for proj in self._param_projs:
+                    nn.init.xavier_uniform_(proj.weight)
 
         return [proj(decoded) for proj in self._param_projs]
 
@@ -738,21 +760,27 @@ class CADGenerationPipeline:
         output_dim = target_seq_len * num_classes
 
         # Cache MLP keyed by (latent_dim, target_seq_len, num_classes)
-        cache_key = (latent_dim, target_seq_len, num_classes)
+        # nn.ModuleDict requires string keys.
+        cache_key = f"{latent_dim}_{target_seq_len}_{num_classes}"
         if cache_key not in self._latent_mlps:
-            mlp = nn.Sequential(
-                nn.Linear(latent_dim, hidden_dim),
-                nn.GELU(),
-                nn.Linear(hidden_dim, hidden_dim),
-                nn.GELU(),
-                nn.Linear(hidden_dim, output_dim),
-            ).to(latent.device)
+            # Create MLP inside enable_grad() so parameters are properly
+            # initialized even when the caller is inside torch.no_grad().
+            # Without this, parameters are frozen at random values because
+            # the no_grad context suppresses gradient tracking on creation.
+            with torch.enable_grad():
+                mlp = nn.Sequential(
+                    nn.Linear(latent_dim, hidden_dim),
+                    nn.GELU(),
+                    nn.Linear(hidden_dim, hidden_dim),
+                    nn.GELU(),
+                    nn.Linear(hidden_dim, output_dim),
+                ).to(latent.device)
 
-            # Initialize weights for reasonable output range
-            for layer in mlp:
-                if isinstance(layer, nn.Linear):
-                    nn.init.xavier_uniform_(layer.weight)
-                    nn.init.zeros_(layer.bias)
+                # Initialize weights for reasonable output range
+                for layer in mlp:
+                    if isinstance(layer, nn.Linear):
+                        nn.init.xavier_uniform_(layer.weight)
+                        nn.init.zeros_(layer.bias)
 
             self._latent_mlps[cache_key] = mlp
 
@@ -772,8 +800,8 @@ class CADGenerationPipeline:
         stop at EOS token.
 
         Args:
-            command_logits: [batch, seq_len, 6] command type logits.
-            param_logits: List of 16 [batch, seq_len, num_levels] parameter logits.
+            command_logits: [batch, seq_len, NUM_COMMAND_TYPES] command type logits.
+            param_logits: List of NUM_PARAM_SLOTS [batch, seq_len, num_levels] parameter logits.
             batch_index: Which sample in the batch to decode.
 
         Returns:
@@ -798,6 +826,9 @@ class CADGenerationPipeline:
         seq_len = command_logits.shape[1]
         cmd_indices = command_logits[batch_index].argmax(dim=-1)  # [S]
 
+        # Import parameter masks once before the loop (not per-iteration)
+        from .output_heads import PARAMETER_MASKS, CommandType as StepCommandType
+
         command_tokens = []
         for s in range(seq_len):
             cmd_idx = int(cmd_indices[s].item())
@@ -806,7 +837,7 @@ class CADGenerationPipeline:
 
             # Argmax each parameter
             params = []
-            for p in range(16):
+            for p in range(NUM_PARAM_SLOTS):
                 if p < len(param_logits):
                     val = int(param_logits[p][batch_index, s].argmax(dim=-1).item())
                 else:
@@ -814,11 +845,9 @@ class CADGenerationPipeline:
                 params.append(val)
 
             # Get parameter mask for this command type
-            # (import the masks from output_heads)
-            from .output_heads import PARAMETER_MASKS, CommandType as StepCommandType
             step_cmd = StepCommandType(cmd_idx)
             active = PARAMETER_MASKS.get(step_cmd, [])
-            mask = [i in active for i in range(16)]
+            mask = [i in active for i in range(NUM_PARAM_SLOTS)]
 
             command_tokens.append(CommandToken(
                 command_type=geo_cmd,

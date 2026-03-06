@@ -5,6 +5,7 @@ Constructs topological graph from STEP entity references.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 
 import torch
@@ -72,13 +73,16 @@ class STEPTopologyBuilder:
 
     def build_adjacency_matrix(self, reference_graph: Dict) -> torch.Tensor:
         """
-        Convert reference graph to adjacency matrix.
+        Convert reference graph to sparse adjacency matrix.
+
+        Returns a sparse COO tensor to avoid O(N^2) memory on large
+        B-Rep graphs.
 
         Args:
             reference_graph: Output from build_reference_graph
 
         Returns:
-            Adjacency matrix [N, N] where N = num_nodes
+            Sparse COO adjacency matrix [N, N] where N = num_nodes
         """
         node_ids = reference_graph['node_ids']
         num_nodes = len(node_ids)
@@ -86,16 +90,26 @@ class STEPTopologyBuilder:
         # Create ID to index mapping
         id_to_idx = {node_id: idx for idx, node_id in enumerate(node_ids)}
 
-        # Build adjacency matrix
-        adj_matrix = torch.zeros(num_nodes, num_nodes, dtype=torch.float32)
-
+        # Collect edge indices
+        rows: List[int] = []
+        cols: List[int] = []
         for from_id, to_id in reference_graph['edge_list']:
             if from_id in id_to_idx and to_id in id_to_idx:
-                from_idx = id_to_idx[from_id]
-                to_idx = id_to_idx[to_id]
-                adj_matrix[from_idx, to_idx] = 1.0
+                rows.append(id_to_idx[from_id])
+                cols.append(id_to_idx[to_id])
 
-        return adj_matrix
+        if rows:
+            indices = torch.tensor([rows, cols], dtype=torch.long)
+            values = torch.ones(len(rows), dtype=torch.float32)
+            return torch.sparse_coo_tensor(
+                indices, values, (num_nodes, num_nodes),
+            ).coalesce()
+        else:
+            return torch.sparse_coo_tensor(
+                torch.zeros(2, 0, dtype=torch.long),
+                torch.zeros(0, dtype=torch.float32),
+                (num_nodes, num_nodes),
+            )
 
     def build_edge_index(self, reference_graph: Dict) -> torch.Tensor:
         """
@@ -219,8 +233,8 @@ class STEPTopologyBuilder:
             # Entity type as hashed feature (last dimension)
             entity_type = features.get('entity_type', '')
             if entity_type:
-                # Simple hash to [0, 1] range
-                type_hash = (hash(entity_type) % 10000) / 10000.0
+                # Deterministic hash to [0, 1] range (hashlib is process-independent)
+                type_hash = (int(hashlib.sha256(entity_type.encode()).hexdigest(), 16) % 10000) / 10000.0
                 node_features[idx, -1] = type_hash
 
         return node_features
@@ -312,6 +326,13 @@ class STEPTopologyBuilder:
             if eid is not None:
                 id_to_features[eid] = features
 
+        # Precompute set of EDGE_CURVE IDs for O(1) membership tests
+        edge_curve_ids: set = {
+            eid for eid, feat in id_to_features.items()
+            if feat.get('entity_type', '') == 'EDGE_CURVE'
+        }
+        edge_ids_set: set = set(edge_ids)
+
         # Build face -> ordered edge references
         # Each face entity (ADVANCED_FACE) references bounds, which reference edge loops,
         # which reference oriented edges, which reference edge curves.
@@ -360,7 +381,7 @@ class STEPTopologyBuilder:
                                         ordered_edges.append(oe_id)
                                 elif oe_type == 'EDGE_CURVE':
                                     ordered_edges.append(oe_id)
-                        elif loop_id in edge_ids:
+                        elif loop_id in edge_ids_set:
                             ordered_edges.append(loop_id)
 
                 elif ref_type in ('EDGE_LOOP', 'ORIENTED_EDGE', 'EDGE_CURVE'):
@@ -369,10 +390,7 @@ class STEPTopologyBuilder:
             # If no edges found via hierarchy, try direct edge references
             if not ordered_edges:
                 for ref_id in refs:
-                    if ref_id in edge_ids or ref_id in [
-                        eid for eid in id_to_features
-                        if id_to_features[eid].get('entity_type', '') == 'EDGE_CURVE'
-                    ]:
+                    if ref_id in edge_ids_set or ref_id in edge_curve_ids:
                         ordered_edges.append(ref_id)
 
             face_to_edges[face_id] = ordered_edges
@@ -383,14 +401,18 @@ class STEPTopologyBuilder:
             for eid in edge_list:
                 edge_to_faces[eid].append(face_id)
 
-        # Create coedges: each (face_id, edge_id) pair
+        # Create coedges: each (face_id, edge_id, pos) occurrence
         coedge_list: List[Dict] = []
-        coedge_key_to_idx: Dict[Tuple[int, int], int] = {}
+        # Position-based index for next/prev navigation (always unique)
+        coedge_pos_to_idx: Dict[Tuple[int, int], int] = {}
+        # Edge-based index for mate detection across faces
+        coedge_edge_to_idx: Dict[Tuple[int, int], List[int]] = defaultdict(list)
 
         for face_id, edge_list in face_to_edges.items():
             for pos, edge_id in enumerate(edge_list):
                 ci = len(coedge_list)
-                coedge_key_to_idx[(face_id, edge_id)] = ci
+                coedge_pos_to_idx[(face_id, pos)] = ci
+                coedge_edge_to_idx[(face_id, edge_id)].append(ci)
                 coedge_list.append({
                     'face_id': face_id,
                     'edge_id': edge_id,
@@ -429,31 +451,23 @@ class STEPTopologyBuilder:
 
             face_indices_t[ci] = face_id_to_idx.get(face_id, 0)
 
-            # Next in loop (cyclic)
+            # Next in loop (cyclic) — use position-based key
             next_pos = (pos + 1) % loop_size
-            if next_pos < len(edges_in_face):
-                next_edge = edges_in_face[next_pos]
-                next_key = (face_id, next_edge)
-                next_indices[ci] = coedge_key_to_idx.get(next_key, ci)
-            else:
-                next_indices[ci] = ci
+            next_key = (face_id, next_pos)
+            next_indices[ci] = coedge_pos_to_idx.get(next_key, ci)
 
-            # Prev in loop (cyclic)
+            # Prev in loop (cyclic) — use position-based key
             prev_pos = (pos - 1) % loop_size
-            if prev_pos < len(edges_in_face):
-                prev_edge = edges_in_face[prev_pos]
-                prev_key = (face_id, prev_edge)
-                prev_indices[ci] = coedge_key_to_idx.get(prev_key, ci)
-            else:
-                prev_indices[ci] = ci
+            prev_key = (face_id, prev_pos)
+            prev_indices[ci] = coedge_pos_to_idx.get(prev_key, ci)
 
             # Mate: same edge, different face
             mate_idx = ci  # default self (boundary)
             for other_face_id in edge_to_faces.get(edge_id, []):
                 if other_face_id != face_id:
-                    other_key = (other_face_id, edge_id)
-                    if other_key in coedge_key_to_idx:
-                        mate_idx = coedge_key_to_idx[other_key]
+                    other_coedges = coedge_edge_to_idx.get((other_face_id, edge_id), [])
+                    if other_coedges:
+                        mate_idx = other_coedges[0]
                         break
             mate_indices[ci] = mate_idx
 
@@ -577,7 +591,7 @@ class STEPTopologyBuilder:
 
         node_feats = np.zeros((num_nodes, feature_dim), dtype=np.float32)
 
-        for feat in features_list:
+        for list_idx, feat in enumerate(features_list):
             entity_id = feat.get('entity_id')
 
             # Determine the node index
@@ -587,7 +601,7 @@ class STEPTopologyBuilder:
                 idx = id_to_idx[entity_id]
             else:
                 # Legacy: features_list index ordering
-                idx = features_list.index(feat)
+                idx = list_idx
                 if idx >= num_nodes:
                     continue
 
@@ -630,27 +644,40 @@ class STEPTopologyBuilder:
         adj = topo_dict['adjacency_matrix']
         node_feats = topo_dict['node_features']
 
-        # Convert to numpy if tensors
-        if hasattr(adj, 'cpu'):
-            adj = adj.detach().cpu().numpy()
+        # Convert to numpy if tensors (handle sparse adjacency gracefully)
+        if hasattr(adj, 'is_sparse') and adj.is_sparse:
+            adj = adj.coalesce()
+            rows_t, cols_t = adj.indices()
+            rows_list = rows_t.tolist()
+            cols_list = cols_t.tolist()
+        elif hasattr(adj, 'layout') and adj.layout == torch.sparse_csr:
+            adj = adj.to_sparse_coo().coalesce()
+            rows_t, cols_t = adj.indices()
+            rows_list = rows_t.tolist()
+            cols_list = cols_t.tolist()
+        else:
+            if hasattr(adj, 'cpu'):
+                adj = adj.detach().cpu().numpy()
+            nonzero = adj.nonzero()
+            # numpy nonzero returns tuple of arrays; torch nonzero returns (K,2)
+            if isinstance(nonzero, tuple):
+                rows_np, cols_np = nonzero
+            else:
+                rows_np, cols_np = nonzero[:, 0], nonzero[:, 1]
+            rows_list = rows_np.tolist() if hasattr(rows_np, 'tolist') else list(rows_np)
+            cols_list = cols_np.tolist() if hasattr(cols_np, 'tolist') else list(cols_np)
+
         if hasattr(node_feats, 'cpu'):
             node_feats = node_feats.detach().cpu().numpy()
 
         num_nodes = int(node_feats.shape[0])
 
-        # Build adjacency_list: Dict[int, List[int]] from dense matrix
+        # Build adjacency_list: Dict[int, List[int]]
         adjacency_list: Dict[int, List[int]] = {}
-        nonzero = adj.nonzero()
-        # numpy nonzero returns tuple of arrays; torch nonzero returns (K,2)
-        if isinstance(nonzero, tuple):
-            rows, cols = nonzero
-        else:
-            rows, cols = nonzero[:, 0], nonzero[:, 1]
-
-        for src, dst in zip(rows.tolist(), cols.tolist()):
+        for src, dst in zip(rows_list, cols_list):
             adjacency_list.setdefault(src, []).append(dst)
 
-        num_edges = int(len(rows))
+        num_edges = len(rows_list)
 
         # Convert node features to list of lists
         node_features_list = node_feats.tolist()

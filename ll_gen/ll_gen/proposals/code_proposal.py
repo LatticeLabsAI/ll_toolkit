@@ -188,11 +188,8 @@ class CodeProposal(BaseProposal):
         Returns:
             New CodeProposal ready for retry generation.
         """
-        new = copy.deepcopy(self)
-        new.proposal_id = uuid.uuid4().hex
-        new.attempt = self.next_attempt()
-        new.error_context = error
-        new.timestamp = datetime.now(timezone.utc).isoformat()
+        # Delegate to base which uses shallow copy to preserve tensor grad_fn
+        new = super().with_error_context(error)
         new.code = ""  # Generator must produce new code
         new.syntax_valid = None
         new.imports_required = []

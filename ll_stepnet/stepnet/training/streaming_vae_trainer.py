@@ -131,6 +131,11 @@ class StreamingVAETrainer:
         else:
             self.optimizer = optimizer
 
+        # Track optimizer param ids for detecting lazily-added parameters
+        self._optimizer_param_ids: set = {
+            id(p) for group in self.optimizer.param_groups for p in group['params']
+        }
+
         # Default scheduler: cosine decay with warmup
         if scheduler is None:
             self.scheduler = self._create_scheduler()
@@ -170,6 +175,19 @@ class StreamingVAETrainer:
             self.total_steps,
             self.warmup_steps,
         )
+
+    def _sync_optimizer_params(self) -> None:
+        """Add any lazily-created model parameters to the optimizer."""
+        new_params = [
+            p for p in self.model.parameters()
+            if id(p) not in self._optimizer_param_ids and p.requires_grad
+        ]
+        if new_params:
+            self.optimizer.add_param_group({'params': new_params})
+            self._optimizer_param_ids.update(id(p) for p in new_params)
+            _log.info(
+                "Added %d lazily-created parameters to optimizer", len(new_params)
+            )
 
     def _create_scheduler(self) -> "LambdaLR":
         """Create a learning rate scheduler with linear warmup and cosine decay."""
@@ -304,6 +322,9 @@ class StreamingVAETrainer:
         # Scale loss for gradient accumulation
         scaled_loss = total_loss / self.gradient_accumulation_steps
         scaled_loss.backward()
+
+        # Sync lazily-created parameters before weight update
+        self._sync_optimizer_params()
 
         # Update weights every gradient_accumulation_steps
         if (self.global_step + 1) % self.gradient_accumulation_steps == 0:

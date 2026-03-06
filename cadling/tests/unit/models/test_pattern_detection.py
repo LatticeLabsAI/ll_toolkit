@@ -22,7 +22,6 @@ class TestPatternDetectionModel:
         assert model.position_tolerance == 0.01
         assert model.angle_tolerance == 1.0
         assert model.min_pattern_count == 3
-        assert model.has_numpy is True
 
     def test_init_custom_parameters(self):
         """Test model initialization with custom parameters."""
@@ -36,11 +35,9 @@ class TestPatternDetectionModel:
         assert model.angle_tolerance == 2.0
         assert model.min_pattern_count == 5
 
-    def test_call_without_numpy(self, monkeypatch):
-        """Test __call__ gracefully handles missing numpy."""
-        # Temporarily disable numpy detection
+    def test_call_with_empty_batch(self):
+        """Test __call__ with empty item batch returns early."""
         model = PatternDetectionModel()
-        model.has_numpy = False
 
         doc = Mock(spec=CADlingDocument)
         doc.properties = {}

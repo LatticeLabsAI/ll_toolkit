@@ -8,7 +8,7 @@ Transformers have unique scaling properties compared to traditional neural netwo
 
 ## Transformer Scaling Laws: The Mathematics
 
-### OpenAI Scaling Laws [GPT](1)[2][3]
+### OpenAI Scaling Laws [GPT][1](2)[3]
 
 **Loss as a function of parameters** (\(N\)):
 
@@ -993,7 +993,7 @@ Training above this batch size wastes compute without improving performance.[1]
 
 5. **Data quality matters**: High-quality, diverse data reduces requirements significantly[15][16]
 
-6. **Domain adaptation requires less data** than training from scratch [typically 10-50× less](13)[8]
+6. **Domain adaptation requires less data** than training from scratch [typically 10-50× less][13](8)
 
 This transformer-specific guide provides the mathematical foundations and practical implementations needed to determine optimal training data requirements for modern language models.
 

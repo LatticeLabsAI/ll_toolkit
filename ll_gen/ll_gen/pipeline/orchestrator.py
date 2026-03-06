@@ -189,20 +189,21 @@ class GenerationOrchestrator:
                 })
                 continue
 
-            # Dispose — validate first, then export on success or final attempt
+            # Single-pass dispose. The engine guards STEP/STL export
+            # behind `result.is_valid` (engine.py L225), so passing
+            # export=True is always safe — invalid shapes skip export.
+            #
+            # For render: pass True on the final attempt (render invalid
+            # shapes for debugging) but False on non-final attempts.
+            # Valid results break out of the loop immediately, so we
+            # re-dispose with render=True only if the user requested it
+            # and the result is valid (see post-loop below).
+            is_final_attempt = attempt == retries
             result = self.disposal_engine.dispose(
                 proposal=proposal,
-                export=False,
-                render=False,
+                export=export,
+                render=render and is_final_attempt,
             )
-            should_export = export and (result.is_valid or attempt == retries)
-            should_render = render and (result.is_valid or attempt == retries)
-            if should_export or should_render:
-                result = self.disposal_engine.dispose(
-                    proposal=proposal,
-                    export=should_export,
-                    render=should_render,
-                )
 
             history.attempts.append({
                 "attempt": attempt,
@@ -238,7 +239,31 @@ class GenerationOrchestrator:
                     result.error_category.value if result.error_category else "unknown",
                 )
 
-        # --- Step 5: Visual verification (optional) ---
+        # --- Step 5a: Render valid early-exit results ---
+        # When a valid result was found before the final attempt, render
+        # was deferred to avoid rendering invalid intermediate attempts.
+        if (
+            best_result is not None
+            and best_result.is_valid
+            and render
+            and not best_result.render_paths
+            and best_result.shape is not None
+        ):
+            try:
+                from ll_gen.disposal.exporter import render_views
+
+                render_dir = self.disposal_engine.output_dir / "renders"
+                best_result.render_paths = render_views(
+                    best_result.shape,
+                    render_dir,
+                    self.config.export.render_views,
+                    self.config.export.render_resolution,
+                    prefix=best_result.proposal_id,
+                )
+            except Exception as exc:
+                _log.warning("Post-loop rendering failed: %s", exc)
+
+        # --- Step 5b: Visual verification (optional) ---
         if (
             best_result is not None
             and best_result.is_valid
@@ -264,6 +289,10 @@ class GenerationOrchestrator:
         history.total_time_ms = (time.monotonic() - start_time) * 1000
         history.final_result = best_result
 
+        # Attach history to the result so callers can inspect retry telemetry.
+        if best_result is not None:
+            best_result.generation_history = history
+
         if best_result is None:
             _log.error(
                 "All %d attempts failed for prompt: %s",
@@ -272,6 +301,7 @@ class GenerationOrchestrator:
             best_result = DisposalResult(
                 error_message=f"All {retries} generation attempts failed.",
                 suggestion="Try simplifying the prompt or using a different route.",
+                generation_history=history,
             )
 
         _log.info(
@@ -321,13 +351,18 @@ class GenerationOrchestrator:
                     image_path=image_path,
                     attempt=1,
                 )
-                result = self.disposal_engine.dispose(proposal, export=True)
+                result = self.disposal_engine.dispose(proposal, export=False)
                 results.append(result)
             except Exception as exc:
                 _log.warning("Candidate %d failed: %s", i + 1, exc)
 
         # Sort by reward (best first)
         results.sort(key=lambda r: r.reward_signal, reverse=True)
+
+        # Export only the best candidate to disk
+        if results:
+            self.disposal_engine.export_result(results[0])
+
         return results
 
     # ------------------------------------------------------------------
@@ -576,7 +611,7 @@ class GenerationOrchestrator:
             return {
                 "type": "code_feedback",
                 "error_message": feedback_text,
-                "original_code": proposal.code,
+                "old_code": proposal.code,
                 "error_category": (
                     result.error_category.value if result.error_category else None
                 ),

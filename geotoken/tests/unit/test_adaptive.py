@@ -63,3 +63,33 @@ class TestAdaptiveQuantizer:
         assert q.shape == (3, 3)
         # The two close vertices must remain distinct after quantization
         assert not np.array_equal(q[0], q[1])
+
+    def test_feature_collapse_no_churn_loop(self):
+        """Regression: nudging should not create new collisions (churn).
+
+        Set up multiple vertices that quantize to the same cell at low
+        precision. The fix should resolve all collisions in a single pass
+        without nudging into already-occupied cells.
+        """
+        # 5 vertices spread along x, all very close in y/z — at low
+        # precision they'll all collapse to the same quantized cell.
+        vertices = np.array([
+            [0.00, 0.5, 0.5],
+            [0.04, 0.5, 0.5],
+            [0.08, 0.5, 0.5],
+            [0.12, 0.5, 0.5],
+            [0.16, 0.5, 0.5],
+        ])
+        config = QuantizationConfig(
+            tier=PrecisionTier.DRAFT,
+            minimum_feature_threshold=0.01,
+        )
+        quantizer = AdaptiveQuantizer(config)
+        result = quantizer.quantize(vertices)
+        q = result.quantized_vertices
+
+        # All 5 must be distinct after collapse prevention
+        unique_rows = set(map(tuple, q.tolist()))
+        assert len(unique_rows) == 5, (
+            f"Expected 5 distinct quantized vertices, got {len(unique_rows)}"
+        )

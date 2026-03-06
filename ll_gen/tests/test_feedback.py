@@ -629,14 +629,14 @@ class TestComputeReward:
         assert reward > 0.0
         assert reward < 1.0
 
-    def test_compute_reward_clamped_range(
+    def test_compute_reward_floored_at_negative_one(
         self,
         disposal_result_invalid: DisposalResult,
     ) -> None:
-        """Reward is always in [-1.0, 1.0] range."""
+        """Reward is floored at -1.0 but has no upper clamp."""
         reward = compute_reward(disposal_result_invalid)
 
-        assert -1.0 <= reward <= 1.0
+        assert reward >= -1.0
 
     def test_compute_reward_with_target_dimensions_match(
         self,
@@ -646,8 +646,8 @@ class TestComputeReward:
         target_dims = (100.0, 50.0, 20.0)  # Box dimensions from fixture
         reward = compute_reward(disposal_result_valid, target_dimensions=target_dims)
 
-        # Should include semantic_match_reward (0.2)
-        assert reward == 1.0  # Clamped
+        # validity(0.8) + shape(0.16) + semantic(0.2) = 1.16 (uncapped upper bound)
+        assert reward == 1.16
 
     def test_compute_reward_with_target_dimensions_no_match(
         self,
@@ -668,8 +668,28 @@ class TestComputeReward:
         target_volume = 100000.0  # Box volume from fixture
         reward = compute_reward(disposal_result_valid, target_volume=target_volume)
 
-        # Should include semantic_match_reward * 0.5
-        assert reward == 1.0  # Clamped
+        # validity(0.8) + shape(0.16) + semantic*0.5(0.1) = 1.06 (uncapped upper bound)
+        assert reward == 1.06
+
+    def test_compute_reward_dimensions_and_volume_both_match(
+        self,
+        disposal_result_valid: DisposalResult,
+    ) -> None:
+        """Volume bonus is reachable when dimensions also match.
+
+        Regression test: previously min(semantic, budget) capped at 0.2
+        which swallowed the 0.1 volume bonus when dimensions matched.
+        """
+        target_dims = (100.0, 50.0, 20.0)
+        target_volume = 100000.0
+        reward = compute_reward(
+            disposal_result_valid,
+            target_dimensions=target_dims,
+            target_volume=target_volume,
+        )
+
+        # validity(0.8) + shape(0.16) + dim(0.2) + vol(0.1) = 1.26
+        assert reward == 1.26
 
     def test_compute_reward_custom_config(
         self,

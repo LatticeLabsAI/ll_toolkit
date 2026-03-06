@@ -11,7 +11,7 @@ from typing import Optional
 
 import numpy as np
 
-from ..config import NormalizationConfig
+from geotoken.config import NormalizationConfig
 
 _log = logging.getLogger(__name__)
 
@@ -33,6 +33,7 @@ class NormalizationResult:
         """
         scale_val = self.scale.tolist() if isinstance(self.scale, np.ndarray) else self.scale
         return {
+            "normalized_vertices": self.normalized_vertices.tolist(),
             "center": self.center.tolist(),
             "scale": scale_val,
             "original_bbox_min": self.original_bbox_min.tolist(),
@@ -40,7 +41,7 @@ class NormalizationResult:
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "NormalizationResult":
+    def from_dict(cls, data: dict) -> NormalizationResult:
         """Deserialize normalization result from dictionary.
 
         Args:
@@ -102,10 +103,7 @@ class RelationshipPreservingNormalizer:
         if self.config.preserve_aspect_ratio:
             # Uniform scale: same factor for all axes
             max_extent = np.max(extent)
-            if max_extent < 1e-12:
-                scale = 1.0
-            else:
-                scale = target_range / max_extent
+            scale = 1.0 if max_extent < 1e-12 else target_range / max_extent
         else:
             # Non-uniform scale: independent factor per axis
             safe_extent = np.where(extent < 1e-12, 1.0, extent)
@@ -146,19 +144,17 @@ class RelationshipPreservingNormalizer:
         else:
             centered = normalized_vertices.copy()
 
-        # Check for degenerate scale
-        scale_is_degenerate = (
-            np.all(np.abs(result.scale) < 1e-12)
-            if isinstance(result.scale, np.ndarray)
-            else abs(result.scale) < 1e-12
-        )
-        if scale_is_degenerate:
-            if self.config.center:
-                return centered + result.center
-            return centered
+        # Check for degenerate scale — handle per-axis arrays where
+        # individual axes may be zero even if others are not.
+        if isinstance(result.scale, np.ndarray):
+            degenerate_mask = np.abs(result.scale) < 1e-12
+            if np.all(degenerate_mask):
+                return centered + result.center if self.config.center else centered
+            safe_scale = np.where(degenerate_mask, 1.0, result.scale)
+            unscaled = centered / safe_scale
+        elif abs(result.scale) < 1e-12:
+            return centered + result.center if self.config.center else centered
+        else:
+            unscaled = centered / result.scale
 
-        unscaled = centered / result.scale
-
-        if self.config.center:
-            return unscaled + result.center
-        return unscaled
+        return unscaled + result.center if self.config.center else unscaled

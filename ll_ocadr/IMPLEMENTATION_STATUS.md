@@ -187,7 +187,7 @@ Core integration:
 | Global Encoder | CLIP (768 dims) | ShapeNet/Point-BERT (768 dims) | ✅ |
 | Projection | MLP: 2048→1280 | MLP: 1024→1280 | ✅ |
 | Token | `<image>` | `<mesh>` | ✅ |
-| Special Tokens | `image_newline`, `view_seperator` | `mesh_boundary`, `view_seperator` | ✅ |
+| Special Tokens | `image_newline`, `view_separator` | `mesh_boundary`, `view_separator` | ✅ |
 | vLLM Integration | MultiModalProcessor | LLOCADRMultiModalProcessor | ✅ |
 
 ---

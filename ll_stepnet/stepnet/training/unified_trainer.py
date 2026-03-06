@@ -401,8 +401,9 @@ class STEPNetTrainer:
             Epoch number from checkpoint.
         """
         self._inner_trainer.load_checkpoint(path)
-        _log.info("Loaded checkpoint from %s", path)
-        return 0
+        epoch = getattr(self._inner_trainer, "epoch", 0)
+        _log.info("Loaded checkpoint from %s (epoch %d)", path, epoch)
+        return epoch
 
     def finish(self) -> None:
         """Clean up resources."""

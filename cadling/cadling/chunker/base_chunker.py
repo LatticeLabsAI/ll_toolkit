@@ -83,6 +83,7 @@ class CADChunk(BaseModel):
         doc_name: Name of source document
         items: List of CADItem objects in this chunk
         metadata: Dictionary metadata for this chunk
+        token_count: Approximate token count for this chunk
     """
 
     text: str
@@ -91,6 +92,7 @@ class CADChunk(BaseModel):
     doc_name: Optional[str] = None
     items: list = Field(default_factory=list)
     metadata: dict = Field(default_factory=dict)
+    token_count: int = 0
 
 
 class BaseCADChunker(ABC):

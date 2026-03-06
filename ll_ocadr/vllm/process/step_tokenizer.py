@@ -8,11 +8,26 @@ Extracts:
 - ALL numeric values, entity references, keywords, and structural elements
 """
 
+import logging
+import hashlib
 import re
+import struct
 import torch
 import numpy as np
 from typing import List, Dict, Tuple, Optional, Set
 from collections import defaultdict
+
+_log = logging.getLogger(__name__)
+
+
+def _deterministic_hash(s: str) -> int:
+    """Return a deterministic integer hash for a string.
+
+    Unlike Python's built-in hash(), this is stable across processes
+    and Python invocations regardless of PYTHONHASHSEED.
+    """
+    digest = hashlib.md5(s.encode("utf-8")).digest()
+    return struct.unpack("<Q", digest[:8])[0]
 
 
 class STEPCompleteTokenizer:
@@ -36,6 +51,21 @@ class STEPCompleteTokenizer:
             vocab_size: Maximum vocabulary size for entity types and keywords
         """
         self.vocab_size = vocab_size
+
+        # Pre-compile entity tokenization regex (avoid recompiling per entity)
+        _patterns = [
+            (r'#\d+=', 'ENTITY_ID'),
+            (r'#\d+', 'REFERENCE'),
+            (r'[A-Z_][A-Z0-9_]*', 'ENTITY_TYPE'),
+            (r'-?\d+\.?\d*(?:[Ee][+-]?\d+)?', 'NUMERIC'),
+            (r'\.[A-Z_]+\.', 'KEYWORD'),
+            (r"'[^']*'", 'STRING'),
+            (r'[=(),;]', 'OPERATOR'),
+            (r'\$|\*', 'SPECIAL'),
+            (r'\n', 'NEWLINE'),
+        ]
+        combined = '|'.join(f'(?P<{name}>{pattern})' for pattern, name in _patterns)
+        self._entity_regex = re.compile(combined)
 
         # Build vocabulary from STEP AP203/AP214 specification
         self._build_vocabulary()
@@ -260,22 +290,8 @@ class STEPCompleteTokenizer:
         types = []
         values = []
 
-        # Regex patterns for all token types (no capturing groups inside)
-        patterns = [
-            (r'#\d+=', 'ENTITY_ID'),  # #123=
-            (r'#\d+', 'REFERENCE'),   # #456 (reference)
-            (r'[A-Z_][A-Z0-9_]*', 'ENTITY_TYPE'),  # CYLINDER, B_SPLINE_CURVE
-            (r'-?\d+\.?\d*(?:[Ee][+-]?\d+)?', 'NUMERIC'),  # Numbers (non-capturing group)
-            (r'\.[A-Z_]+\.', 'KEYWORD'),  # .T., .UNSPECIFIED.
-            (r"'[^']*'", 'STRING'),  # 'text'
-            (r'[=(),;]', 'OPERATOR'),  # Operators
-            (r'\$|\*', 'SPECIAL'),  # Special keywords $, *
-            (r'\n', 'NEWLINE'),  # Newlines
-        ]
-
-        # Combined regex
-        combined = '|'.join(f'(?P<{name}>{pattern})' for pattern, name in patterns)
-        regex = re.compile(combined)
+        # Use pre-compiled regex from __init__
+        regex = self._entity_regex
 
         # Track current context for parameter name inference
         current_entity_type = None
@@ -340,7 +356,8 @@ class STEPCompleteTokenizer:
 
                     param_index += 1
 
-                except:
+                except (ValueError, TypeError):
+                    _log.debug("Could not parse numeric token %r, defaulting to 0.0", token_text)
                     num_val = 0.0
 
                 tokens.append(token_text)
@@ -407,7 +424,7 @@ class STEPCompleteTokenizer:
                 - geometric_tensor: [num_geometric_features, 4] - (entity_id, param_id, value, type)
         """
         # Hash tokens to IDs
-        token_ids = [hash(t) % self.vocab_size for t in tokenized['tokens']]
+        token_ids = [_deterministic_hash(t) % self.vocab_size for t in tokenized['tokens']]
 
         # Token types
         token_types = tokenized['token_types']
@@ -440,13 +457,14 @@ class STEPCompleteTokenizer:
         # Geometric features tensor
         geom_features = tokenized['geometric_features']
         if geom_features:
-            geom_tensor = torch.zeros(len(geom_features), 3)
+            geom_tensor = torch.zeros(len(geom_features), 4, dtype=torch.float64)
             for i, feat in enumerate(geom_features):
                 geom_tensor[i, 0] = feat['entity_id']
-                geom_tensor[i, 1] = hash(feat['parameter']) % 1000
+                geom_tensor[i, 1] = _deterministic_hash(feat['parameter']) % 1000
                 geom_tensor[i, 2] = feat['value']
+                geom_tensor[i, 3] = _deterministic_hash(feat.get('entity_type', '')) % 1000
         else:
-            geom_tensor = torch.zeros(1, 3)
+            geom_tensor = torch.zeros(1, 4, dtype=torch.float64)
 
         return {
             'token_ids': torch.tensor(token_ids, dtype=torch.long),

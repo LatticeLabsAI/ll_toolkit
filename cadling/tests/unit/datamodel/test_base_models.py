@@ -79,7 +79,7 @@ class TestTopologyGraph:
 
     def test_creation(self):
         """Test creating a topology graph."""
-        graph = TopologyGraph(num_nodes=3, num_edges=0)
+        graph = TopologyGraph(num_nodes=3)
 
         assert graph.num_nodes == 3
         assert graph.num_edges == 0
@@ -87,7 +87,7 @@ class TestTopologyGraph:
 
     def test_add_edge(self):
         """Test adding edges to graph."""
-        graph = TopologyGraph(num_nodes=3, num_edges=0)
+        graph = TopologyGraph(num_nodes=3)
 
         graph.add_edge(1, 2)
         graph.add_edge(1, 3)
@@ -97,7 +97,7 @@ class TestTopologyGraph:
 
     def test_get_neighbors(self):
         """Test getting neighbors."""
-        graph = TopologyGraph(num_nodes=3, num_edges=0)
+        graph = TopologyGraph(num_nodes=3)
 
         graph.add_edge(1, 2)
         graph.add_edge(1, 3)

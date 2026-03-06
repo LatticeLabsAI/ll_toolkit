@@ -118,12 +118,15 @@ class STLBackend(DeclarativeCADBackend, RenderableCADBackend):
             return False
 
     def _read_file_content(self) -> bytes:
-        """Read file content as bytes."""
+        """Read file content as bytes, using converter cache when available."""
         if self._file_content is not None:
             return self._file_content
 
         try:
-            if isinstance(self.path_or_stream, BytesIO):
+            # Use content cache from document converter to avoid redundant disk read
+            if self.in_doc._content_cache is not None:
+                self._file_content = self.in_doc._content_cache
+            elif isinstance(self.path_or_stream, BytesIO):
                 self._file_content = self.path_or_stream.read()
                 self.path_or_stream.seek(0)  # Reset stream
             else:
@@ -146,10 +149,11 @@ class STLBackend(DeclarativeCADBackend, RenderableCADBackend):
         """
         # ASCII STL starts with "solid"
         if content.startswith(b"solid"):
-            # Check if rest is ASCII text
+            # Sample a prefix to check if content is ASCII text.
+            # Full decode would double peak memory for large files.
+            sample_size = min(len(content), 1024)
             try:
-                # Try to decode as ASCII
-                content.decode("ascii")
+                content[:sample_size].decode("ascii")
                 return True
             except UnicodeDecodeError:
                 # Binary file that happens to start with "solid" in header
@@ -298,70 +302,54 @@ class STLBackend(DeclarativeCADBackend, RenderableCADBackend):
             raise
 
     def _compute_mesh_properties(self, mesh_data: Dict[str, Any]) -> None:
-        """Compute mesh properties like manifold, watertight, volume, surface area."""
-        vertices = mesh_data["vertices"]
-        facets = mesh_data["facets"]
+        """Compute mesh properties like manifold, watertight, volume, surface area.
 
-        # Compute surface area
-        surface_area = 0.0
-        for facet in facets:
-            v1 = vertices[facet[0]]
-            v2 = vertices[facet[1]]
-            v3 = vertices[facet[2]]
+        Uses numpy vectorized operations for performance on large meshes.
+        """
+        import numpy as np
 
-            # Triangle area = 0.5 * ||cross(v2-v1, v3-v1)||
-            edge1 = [v2[i] - v1[i] for i in range(3)]
-            edge2 = [v3[i] - v1[i] for i in range(3)]
+        verts = np.asarray(mesh_data["vertices"], dtype=np.float64)
+        faces = np.asarray(mesh_data["facets"], dtype=np.int64)
 
-            cross = [
-                edge1[1] * edge2[2] - edge1[2] * edge2[1],
-                edge1[2] * edge2[0] - edge1[0] * edge2[2],
-                edge1[0] * edge2[1] - edge1[1] * edge2[0],
-            ]
+        # Gather triangle vertices: (N, 3) each
+        v1 = verts[faces[:, 0]]
+        v2 = verts[faces[:, 1]]
+        v3 = verts[faces[:, 2]]
 
-            area = 0.5 * math.sqrt(sum(c**2 for c in cross))
-            surface_area += area
-
+        # --- Surface area (vectorized cross product) ---
+        edge1 = v2 - v1
+        edge2 = v3 - v1
+        cross_vecs = np.cross(edge1, edge2)
+        tri_areas = 0.5 * np.linalg.norm(cross_vecs, axis=1)
+        surface_area = float(tri_areas.sum())
         mesh_data["surface_area"] = surface_area
 
-        # Check if manifold (each edge shared by exactly 2 faces)
-        edge_count = {}
-        for facet in facets:
-            # Check all 3 edges of the triangle
-            edges = [
-                tuple(sorted([facet[0], facet[1]])),
-                tuple(sorted([facet[1], facet[2]])),
-                tuple(sorted([facet[2], facet[0]])),
-            ]
-            for edge in edges:
-                edge_count[edge] = edge_count.get(edge, 0) + 1
+        # --- Manifold check (each edge shared by exactly 2 faces) ---
+        # Build sorted edge pairs, then count occurrences
+        e0 = np.sort(faces[:, [0, 1]], axis=1)
+        e1 = np.sort(faces[:, [1, 2]], axis=1)
+        e2 = np.sort(faces[:, [2, 0]], axis=1)
+        all_edges = np.concatenate([e0, e1, e2], axis=0)
 
-        # Manifold if all edges have exactly 2 faces
-        is_manifold = all(count == 2 for count in edge_count.values())
+        # Use structured array for unique counting
+        edge_view = np.ascontiguousarray(all_edges).view(
+            np.dtype((np.void, all_edges.dtype.itemsize * 2))
+        )
+        _, counts = np.unique(edge_view, return_counts=True)
+
+        is_manifold = bool(np.all(counts == 2))
         mesh_data["is_manifold"] = is_manifold
 
         # Watertight means manifold and no boundary edges
         is_watertight = is_manifold
         mesh_data["is_watertight"] = is_watertight
 
-        # Compute volume if watertight (using signed volume method)
+        # --- Volume (signed tetrahedron method, vectorized) ---
         if is_watertight:
-            volume = 0.0
-            for facet in facets:
-                v1 = vertices[facet[0]]
-                v2 = vertices[facet[1]]
-                v3 = vertices[facet[2]]
-
-                # Signed volume of tetrahedron formed by origin and triangle
-                # V = (1/6) * dot(v1, cross(v2, v3))
-                cross = [
-                    v2[1] * v3[2] - v2[2] * v3[1],
-                    v2[2] * v3[0] - v2[0] * v3[2],
-                    v2[0] * v3[1] - v2[1] * v3[0],
-                ]
-                volume += (v1[0] * cross[0] + v1[1] * cross[1] + v1[2] * cross[2]) / 6.0
-
-            mesh_data["volume"] = abs(volume)
+            # V = (1/6) * sum( v1 . (v2 x v3) )
+            cross_v2v3 = np.cross(v2, v3)
+            signed_volumes = np.einsum("ij,ij->i", v1, cross_v2v3) / 6.0
+            mesh_data["volume"] = float(abs(signed_volumes.sum()))
         else:
             mesh_data["volume"] = None
 
@@ -462,7 +450,6 @@ class STLBackend(DeclarativeCADBackend, RenderableCADBackend):
             "left",
             "isometric",
             "isometric2",
-            "isometric_back",
         ]
 
     def load_view(self, view_name: str) -> CADViewBackend:
@@ -539,7 +526,6 @@ class STLViewBackend(CADViewBackend):
 
             # Apply camera transform using computed parameters
             # Build rotation angles from camera direction
-            import math
             dx, dy, dz = camera_dir
             elevation = math.degrees(math.atan2(dz, math.sqrt(dx * dx + dy * dy)))
             azimuth = math.degrees(math.atan2(dy, dx))

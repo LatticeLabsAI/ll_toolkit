@@ -245,15 +245,10 @@ class BaseCADPipeline(ABC):
             _log.debug(f"Applying enrichment model: {model_name}")
 
             try:
-                # Apply model to all items (models can filter internally)
+                # Apply model to all items (models can filter internally).
+                # Provenance is the model's responsibility — each model stamps
+                # only the items it actually processed (per EnrichmentModel contract).
                 model(doc, items)
-
-                # Add provenance to items
-                for item in items:
-                    item.add_provenance(
-                        component_type="enrichment_model",
-                        component_name=model_name,
-                    )
 
             except Exception as e:
                 _log.error(

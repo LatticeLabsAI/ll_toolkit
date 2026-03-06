@@ -6,13 +6,15 @@ Detects repeating patterns in CAD geometry:
 - Mirror patterns (symmetric features across planes)
 """
 
+from __future__ import annotations
+
 import logging
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 import numpy as np
 
 if TYPE_CHECKING:
     from cadling.datamodel.base_models import CADItem
-    from cadling.core import CADlingDocument
+    from cadling.datamodel.base_models import CADlingDocument
 
 from cadling.models.base_model import EnrichmentModel
 
@@ -31,7 +33,6 @@ class PatternDetectionModel(EnrichmentModel):
         position_tolerance: Distance threshold for grouping features (default 0.01)
         angle_tolerance: Angle threshold in degrees for circular patterns (default 1.0)
         min_pattern_count: Minimum instances to consider a pattern (default 3)
-        has_numpy: Whether numpy is available
     """
 
     def __init__(
@@ -52,14 +53,6 @@ class PatternDetectionModel(EnrichmentModel):
         self.position_tolerance = position_tolerance
         self.angle_tolerance = angle_tolerance
         self.min_pattern_count = min_pattern_count
-        
-        # Check numpy availability
-        try:
-            import numpy as np
-            self.has_numpy = True
-        except ImportError:
-            _log.warning("numpy not available, pattern detection disabled")
-            self.has_numpy = False
 
     def __call__(self, doc: "CADlingDocument", item_batch: List["CADItem"]) -> None:
         """Detect patterns in CAD items.
@@ -68,8 +61,7 @@ class PatternDetectionModel(EnrichmentModel):
             doc: CADling document containing items
             item_batch: Batch of items to process
         """
-        if not self.has_numpy:
-            _log.debug("Pattern detection skipped: numpy not available")
+        if not item_batch:
             return
         
         try:
@@ -82,7 +74,14 @@ class PatternDetectionModel(EnrichmentModel):
                     doc.properties = {}
                 
                 doc.properties["pattern_detection"] = pattern_result
-                
+
+                # Stamp provenance on items that contributed to patterns
+                for item in item_batch:
+                    item.add_provenance(
+                        component_type="enrichment_model",
+                        component_name=self.__class__.__name__,
+                    )
+
                 _log.debug(
                     f"Detected {len(pattern_result.get('linear_patterns', []))} linear, "
                     f"{len(pattern_result.get('circular_patterns', []))} circular, "
@@ -290,58 +289,82 @@ class PatternDetectionModel(EnrichmentModel):
         positions: np.ndarray
     ) -> List[List[int]]:
         """Find linear patterns within a feature group.
-        
+
+        Uses vectorized collinearity checks to avoid O(n³) triple-nested
+        loops.  For each seed pair (i, j) the perpendicular distances of
+        every remaining candidate to line(i→j) are computed in a single
+        NumPy operation, reducing the inner scan from O(n) scalar work to
+        a vectorized O(n) pass.  Spacing consistency is then verified only
+        on the small set of collinear candidates.
+
+        Complexity: O(n²) seed pairs × O(n) vectorized scan = O(n²·n)
+        in wall-clock terms, but the constant factor is dramatically
+        smaller because the inner loop is pure NumPy rather than Python
+        iteration, and early-exit via ``used`` prunes the search space.
+
         Args:
             features: Features in the group
             positions: Position array
-            
+
         Returns:
             List of index lists, each representing a linear pattern
         """
-        if len(positions) < self.min_pattern_count:
+        n = len(positions)
+        if n < self.min_pattern_count:
             return []
-        
-        patterns = []
+
+        patterns: List[List[int]] = []
         used = set()
-        
-        # Try each pair as potential pattern seed
-        for i in range(len(positions)):
+
+        # Pre-build index array for masking
+        all_indices = np.arange(n)
+
+        for i in range(n):
             if i in used:
                 continue
-            
-            for j in range(i + 1, len(positions)):
+
+            for j in range(i + 1, n):
                 if j in used:
                     continue
-                
+
                 # Compute direction from i to j
                 direction = positions[j] - positions[i]
                 dist = np.linalg.norm(direction)
-                
+
                 if dist < 1e-9:
                     continue
-                
+
                 direction = direction / dist
-                
-                # Find all features aligned with this direction
+
+                # --- Vectorised collinearity check ----------------------
+                # Compute vectors from position[i] to every other point
+                vecs = positions - positions[i]              # (n, 3)
+                projs = vecs @ direction                     # (n,)
+                rejections = vecs - np.outer(projs, direction)  # (n, 3)
+                perp_dists = np.linalg.norm(rejections, axis=1)  # (n,)
+
+                # Mask: within tolerance AND not already consumed
+                mask = perp_dists < self.position_tolerance
+                # Exclude used indices (vectorized)
+                if used:
+                    mask[list(used)] = False
+                # Always include seed pair
+                mask[i] = True
+                mask[j] = True
+
+                candidate_indices = all_indices[mask].tolist()
+
+                if len(candidate_indices) < self.min_pattern_count:
+                    continue
+
+                # Verify spacing consistency on the small candidate set
                 aligned = [i, j]
-                
-                for k in range(len(positions)):
-                    if k in aligned or k in used:
+                for k in candidate_indices:
+                    if k == i or k == j:
                         continue
-                    
-                    # Check if k is aligned with i-j direction
-                    vec = positions[k] - positions[i]
-                    proj = np.dot(vec, direction)
-                    
-                    # Distance from k to line i-j
-                    rejection = vec - proj * direction
-                    perp_dist = np.linalg.norm(rejection)
-                    
-                    if perp_dist < self.position_tolerance:
-                        # Check if spacing is consistent
-                        if self._is_consistent_spacing(positions, aligned, k, direction):
-                            aligned.append(k)
-                
+                    if self._is_consistent_spacing(positions, aligned, k, direction):
+                        aligned.append(k)
+
                 # If we found enough aligned features, it's a pattern
                 if len(aligned) >= self.min_pattern_count:
                     # Sort by position along direction
@@ -349,7 +372,7 @@ class PatternDetectionModel(EnrichmentModel):
                     patterns.append(aligned)
                     used.update(aligned)
                     break
-        
+
         return patterns
 
     def _is_consistent_spacing(

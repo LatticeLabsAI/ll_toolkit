@@ -13,7 +13,12 @@ import json
 from .tokenizer import STEPTokenizer
 from .features import STEPFeatureExtractor
 from .topology import STEPTopologyBuilder
-from .config import STEPReserializationConfig, STEPAnnotationConfig
+from .config import (
+    STEPReserializationConfig,
+    STEPAnnotationConfig,
+    NUM_PARAM_SLOTS,
+    DEFAULT_MAX_SEQ_LEN,
+)
 from .reserialization import STEPEntityGraph, STEPDFSSerializer
 from .annotations import STEPStructuralAnnotator
 
@@ -286,8 +291,8 @@ class GeoTokenDataset(Dataset):
 
     Each item is a dictionary containing:
         - command_types: [seq_len] integer command type IDs
-        - parameters: [seq_len, 16] quantized parameter values
-        - parameter_mask: [seq_len, 16] boolean active-parameter mask
+        - parameters: [seq_len, NUM_PARAM_SLOTS] quantized parameter values
+        - parameter_mask: [seq_len, NUM_PARAM_SLOTS] boolean active-parameter mask
         - attention_mask: [seq_len] validity mask (1=real, 0=padding)
 
     When ``encode_graph_tokens=True`` and the TokenSequence has graph
@@ -300,7 +305,7 @@ class GeoTokenDataset(Dataset):
 
     Args:
         token_sequences: List of geotoken TokenSequence objects.
-        max_commands: Maximum command sequence length (pad/truncate). Default 60.
+        max_commands: Maximum command sequence length (pad/truncate).
         labels: Optional labels for supervised learning.
         encode_graph_tokens: Encode graph tokens via CADVocabulary. Default False.
         encode_constraint_tokens: Encode constraint tokens via CADVocabulary. Default False.
@@ -313,7 +318,7 @@ class GeoTokenDataset(Dataset):
     def __init__(
         self,
         token_sequences: List,
-        max_commands: int = 60,
+        max_commands: int = DEFAULT_MAX_SEQ_LEN,
         labels: Optional[List] = None,
         encode_graph_tokens: bool = False,
         encode_constraint_tokens: bool = False,
@@ -351,19 +356,19 @@ class GeoTokenDataset(Dataset):
             type_name = ct.command_type.value if hasattr(ct.command_type, 'value') else str(ct.command_type)
             cmd_types.append(self._type_to_int.get(type_name, 5))
 
-            p = list(ct.parameters[:16])
-            p.extend([0] * (16 - len(p)))
+            p = list(ct.parameters[:NUM_PARAM_SLOTS])
+            p.extend([0] * (NUM_PARAM_SLOTS - len(p)))
             params.append(p)
 
-            m = list(ct.parameter_mask[:16])
-            m.extend([False] * (16 - len(m)))
+            m = list(ct.parameter_mask[:NUM_PARAM_SLOTS])
+            m.extend([False] * (NUM_PARAM_SLOTS - len(m)))
             param_masks.append(m)
 
         actual_len = len(cmd_types)
         while len(cmd_types) < self.max_commands:
             cmd_types.append(0)
-            params.append([0] * 16)
-            param_masks.append([False] * 16)
+            params.append([0] * NUM_PARAM_SLOTS)
+            param_masks.append([False] * NUM_PARAM_SLOTS)
 
         attention_mask = [1] * actual_len + [0] * (self.max_commands - actual_len)
 
@@ -419,14 +424,14 @@ class CadlingDataset(Dataset):
 
     Each ``__getitem__`` returns:
         - command_types: ``[max_commands]`` integer command type IDs
-        - parameters: ``[max_commands, 16]`` parameter values
-        - parameter_mask: ``[max_commands, 16]`` active-parameter mask
+        - parameters: ``[max_commands, NUM_PARAM_SLOTS]`` parameter values
+        - parameter_mask: ``[max_commands, NUM_PARAM_SLOTS]`` active-parameter mask
         - attention_mask: ``[max_commands]`` validity mask
 
     Args:
         sketch_items: List of cadling Sketch2DItem objects (or any object
             with a ``to_geotoken_commands()`` method).
-        max_commands: Maximum command sequence length. Default 60.
+        max_commands: Maximum command sequence length.
         include_topology: If True, build topology and include in output.
         labels: Optional labels for supervised learning.
     """
@@ -446,7 +451,7 @@ class CadlingDataset(Dataset):
     def __init__(
         self,
         sketch_items: List,
-        max_commands: int = 60,
+        max_commands: int = DEFAULT_MAX_SEQ_LEN,
         include_topology: bool = False,
         labels: Optional[List] = None,
     ) -> None:
@@ -473,21 +478,21 @@ class CadlingDataset(Dataset):
             cmd_type_str = cmd.get("type", "EOS")
             cmd_types.append(self._type_to_int.get(cmd_type_str, 5))
 
-            # Extract parameters (padded to 16)
-            p = list(cmd.get("params", []))[:16]
-            p.extend([0] * (16 - len(p)))
+            # Extract parameters (padded to NUM_PARAM_SLOTS)
+            p = list(cmd.get("params", []))[:NUM_PARAM_SLOTS]
+            p.extend([0] * (NUM_PARAM_SLOTS - len(p)))
             # Convert to int (quantised values expected)
             params.append([int(v) if isinstance(v, (int, float)) else 0 for v in p])
 
             # Build parameter mask from known active indices
             active = self._ACTIVE_INDICES.get(cmd_type_str, set())
-            param_masks.append([i in active for i in range(16)])
+            param_masks.append([i in active for i in range(NUM_PARAM_SLOTS)])
 
         actual_len = len(cmd_types)
         while len(cmd_types) < self.max_commands:
             cmd_types.append(0)
-            params.append([0] * 16)
-            param_masks.append([False] * 16)
+            params.append([0] * NUM_PARAM_SLOTS)
+            param_masks.append([False] * NUM_PARAM_SLOTS)
 
         attention_mask = [1] * actual_len + [0] * (self.max_commands - actual_len)
 

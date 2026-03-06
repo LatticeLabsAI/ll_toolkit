@@ -161,3 +161,4 @@ resources
 test_data
 research
 results
+.ruff_cache

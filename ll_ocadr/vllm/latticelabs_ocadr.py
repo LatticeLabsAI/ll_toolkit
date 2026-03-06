@@ -3,14 +3,15 @@ LatticeLabs OCADR - Main model implementation.
 Integrates GeometryNet, ShapeNet, and LLM for 3D CAD/Mesh understanding.
 """
 
+from typing import Dict, List, Optional, Tuple
+
 import torch
 import torch.nn as nn
-from typing import Dict, List, Optional, Tuple
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
+from .lattice_encoder.build_linear import MlpProjector
 from .lattice_encoder.geometry_net import build_geometry_net
 from .lattice_encoder.shape_net import build_shape_net
-from .lattice_encoder.build_linear import MlpProjector
 
 
 class LatticelabsOCADRForCausalLM(nn.Module):
@@ -43,7 +44,7 @@ class LatticelabsOCADRForCausalLM(nn.Module):
         self.mesh_boundary = nn.Parameter(
             torch.randn(1, config.n_embed)
         )  # Separates chunk layers
-        self.view_seperator = nn.Parameter(
+        self.view_separator = nn.Parameter(
             torch.randn(1, config.n_embed)
         )  # Separates local from global
 
@@ -71,7 +72,10 @@ class LatticelabsOCADRForCausalLM(nn.Module):
         Returns:
             List of [num_tokens, n_embed] embeddings per mesh
         """
-        with torch.no_grad():  # Inference mode
+        # Only disable gradients during inference; during training,
+        # encoder gradients must flow for fine-tuning convergence.
+        context = torch.no_grad() if not self.training else torch.enable_grad()
+        with context:
             batch_size = vertex_coords.shape[0]
             device = vertex_coords.device
             embeddings_list = []
@@ -124,45 +128,35 @@ class LatticelabsOCADRForCausalLM(nn.Module):
                 global_features = global_features.squeeze(0)  # [256, n_embed]
 
                 # ===== LOCAL FEATURES (from chunks) =====
-                if chunks_coords is not None and torch.sum(chunks_coords[batch_idx]) != 0:
+                if chunks_coords is not None and chunks_normals is not None and mesh_spatial_partition is not None and torch.sum(chunks_coords[batch_idx]) != 0:
                     chunks_c = chunks_coords[batch_idx]  # [num_chunks, M, 3]
                     chunks_n = chunks_normals[batch_idx]  # [num_chunks, M, 3]
                     num_chunks = chunks_c.shape[0]
 
-                    # Process all chunks
-                    chunk_features_list = []
-                    for chunk_idx in range(num_chunks):
-                        c_coords = chunks_c[chunk_idx].unsqueeze(0)  # [1, M, 3]
-                        c_normals = chunks_n[chunk_idx].unsqueeze(0)  # [1, M, 3]
+                    # Process all chunks in parallel (batched encoder calls)
+                    chunk_feat_geom = self.geometry_model(chunks_c, chunks_n)  # [num_chunks, 128, 256]
+                    chunk_feat_shape = self.shape_model(chunks_c, chunks_n)  # [num_chunks, 257, 768]
 
-                        # Encode chunk
-                        chunk_feat_geom = self.geometry_model(c_coords, c_normals)  # [1, 128, 256]
-                        chunk_feat_shape = self.shape_model(c_coords, c_normals)  # [1, 257, 768]
+                    # Skip CLS token
+                    chunk_feat_shape_no_cls = chunk_feat_shape[:, 1:]  # [num_chunks, 256, 768]
 
-                        # Skip CLS, concatenate
-                        chunk_feat_shape_no_cls = chunk_feat_shape[:, 1:]  # [1, 256, 768]
+                    # Align dimensions
+                    geom_tokens = chunk_feat_geom.shape[1]
+                    shape_tokens = chunk_feat_shape_no_cls.shape[1]
 
-                        # Align dimensions
-                        geom_tokens = chunk_feat_geom.shape[1]
-                        shape_tokens = chunk_feat_shape_no_cls.shape[1]
+                    if geom_tokens < shape_tokens:
+                        padding = torch.zeros(num_chunks, shape_tokens - geom_tokens, 256, device=device)
+                        chunk_feat_geom = torch.cat([chunk_feat_geom, padding], dim=1)
+                    else:
+                        chunk_feat_geom = chunk_feat_geom[:, :shape_tokens]
 
-                        if geom_tokens < shape_tokens:
-                            padding = torch.zeros(1, shape_tokens - geom_tokens, 256, device=device)
-                            chunk_feat_geom = torch.cat([chunk_feat_geom, padding], dim=1)
-                        else:
-                            chunk_feat_geom = chunk_feat_geom[:, :shape_tokens]
+                    # Concatenate and project
+                    chunk_features = torch.cat([
+                        chunk_feat_shape_no_cls,
+                        chunk_feat_geom
+                    ], dim=-1)  # [num_chunks, 256, 1024]
 
-                        # Concatenate and project
-                        chunk_features = torch.cat([
-                            chunk_feat_shape_no_cls,
-                            chunk_feat_geom
-                        ], dim=-1)  # [1, 256, 1024]
-
-                        chunk_features = self.projector(chunk_features)  # [1, 256, n_embed]
-                        chunk_features_list.append(chunk_features.squeeze(0))  # [256, n_embed]
-
-                    # Stack chunks and add boundary tokens
-                    local_features = torch.stack(chunk_features_list, dim=0)  # [num_chunks, 256, n_embed]
+                    local_features = self.projector(chunk_features)  # [num_chunks, 256, n_embed]
 
                     # Flatten chunks and add boundaries between layers
                     nx, ny, nz = mesh_spatial_partition[batch_idx].tolist()
@@ -172,13 +166,13 @@ class LatticelabsOCADRForCausalLM(nn.Module):
                     combined = torch.cat([
                         formatted_local,
                         global_features,
-                        self.view_seperator.squeeze(0).unsqueeze(0)
+                        self.view_separator.squeeze(0).unsqueeze(0)
                     ], dim=0)
                 else:
                     # No chunking, just global + separator
                     combined = torch.cat([
                         global_features,
-                        self.view_seperator.squeeze(0).unsqueeze(0)
+                        self.view_separator.squeeze(0).unsqueeze(0)
                     ], dim=0)
 
                 embeddings_list.append(combined)
@@ -218,10 +212,7 @@ class LatticelabsOCADRForCausalLM(nn.Module):
                 if z < nz - 1:
                     formatted_parts.append(self.mesh_boundary.squeeze(0).unsqueeze(0))
 
-        if formatted_parts:
-            return torch.cat(formatted_parts, dim=0)
-        else:
-            return flattened
+        return torch.cat(formatted_parts, dim=0) if formatted_parts else flattened
 
     def get_input_embeddings(
         self,
@@ -316,6 +307,58 @@ class LatticelabsOCADRForCausalLM(nn.Module):
 
         return outputs
 
+    @torch.no_grad()
+    def generate(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        vertex_coords: Optional[torch.Tensor] = None,
+        vertex_normals: Optional[torch.Tensor] = None,
+        chunks_coords: Optional[torch.Tensor] = None,
+        chunks_normals: Optional[torch.Tensor] = None,
+        mesh_spatial_partition: Optional[torch.Tensor] = None,
+        **kwargs
+    ):
+        """
+        Autoregressive generation with 3D mesh conditioning.
+
+        Processes mesh inputs through the 3D encoders, merges the resulting
+        embeddings with text token embeddings, then delegates to the inner
+        language model's generate() (which inherits from GenerationMixin).
+
+        Accepts all keyword arguments supported by
+        ``transformers.GenerationMixin.generate`` (e.g. max_new_tokens,
+        temperature, top_p, do_sample).
+
+        Returns:
+            Generated token IDs from the language model.
+        """
+        # Process mesh data if provided
+        if vertex_coords is not None:
+            mesh_embeddings = self._mesh_to_embedding(
+                vertex_coords=vertex_coords,
+                vertex_normals=vertex_normals,
+                chunks_coords=chunks_coords,
+                chunks_normals=chunks_normals,
+                mesh_spatial_partition=mesh_spatial_partition,
+            )
+        else:
+            mesh_embeddings = None
+
+        # Merge mesh embeddings with text token embeddings
+        inputs_embeds = self.get_input_embeddings(
+            input_ids=input_ids,
+            multimodal_embeddings=mesh_embeddings,
+        )
+
+        # Delegate to the language model's generate(), passing inputs_embeds
+        # instead of input_ids so the mesh tokens are already resolved.
+        return self.language_model.generate(
+            inputs_embeds=inputs_embeds,
+            attention_mask=attention_mask,
+            **kwargs,
+        )
+
 
 def build_ll_ocadr_model(config):
     """Build LatticeLabs OCADR model."""
@@ -390,6 +433,22 @@ class LLOCADRMultiModalProcessor:
         self.config = config
         self.info = LLOCADRProcessingInfo(config)
 
+        # Cache tokenizer once — AutoTokenizer.from_pretrained is expensive
+        self._tokenizer = AutoTokenizer.from_pretrained(config.language_model_name)
+
+        # Add mesh token to tokenizer if not present
+        if config.mesh_token not in self._tokenizer.get_vocab():
+            self._tokenizer.add_tokens([config.mesh_token])
+            config.mesh_token_id = self._tokenizer.vocab[config.mesh_token]
+
+        # Cache processor once — avoid re-instantiation on every call
+        from .process.mesh_process import LLOCADRProcessor
+
+        self._processor = LLOCADRProcessor(
+            tokenizer=self._tokenizer,
+            mesh_token_id=self.config.mesh_token_id
+        )
+
     def _call_hf_processor(self, prompt: str, mm_data: Dict, mm_kwargs: Dict):
         """
         Call LLOCADRProcessor to preprocess meshes.
@@ -402,23 +461,9 @@ class LLOCADRMultiModalProcessor:
         Returns:
             Processed tensors
         """
-        from .process.mesh_process import LLOCADRProcessor
-        from transformers import AutoTokenizer
-
-        tokenizer = AutoTokenizer.from_pretrained(self.config.language_model_name)
-
-        # Add mesh token to tokenizer if not present
-        if self.config.mesh_token not in tokenizer.get_vocab():
-            tokenizer.add_tokens([self.config.mesh_token])
-            self.config.mesh_token_id = tokenizer.vocab[self.config.mesh_token]
-
-        processor = LLOCADRProcessor(
-            tokenizer=tokenizer,
-            mesh_token_id=self.config.mesh_token_id
-        )
 
         mesh_files = mm_data.get("mesh", [])
-        return processor.tokenize_with_meshes(
+        return self._processor.tokenize_with_meshes(
             mesh_files=mesh_files,
             conversation=prompt,
             cropping=mm_kwargs.get("cropping", True)

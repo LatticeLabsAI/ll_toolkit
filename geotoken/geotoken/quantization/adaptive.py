@@ -12,11 +12,12 @@ from typing import Optional
 
 import numpy as np
 
-from ..config import QuantizationConfig
-from ..analysis.curvature import CurvatureAnalyzer
-from ..analysis.feature_density import FeatureDensityAnalyzer
+from geotoken.analysis.curvature import CurvatureAnalyzer
+from geotoken.analysis.feature_density import FeatureDensityAnalyzer
+from geotoken.config import QuantizationConfig
+
 from .bit_allocator import BitAllocator
-from .normalizer import RelationshipPreservingNormalizer, NormalizationResult
+from .normalizer import NormalizationResult, RelationshipPreservingNormalizer
 
 _log = logging.getLogger(__name__)
 
@@ -99,7 +100,7 @@ class AdaptiveQuantizer:
             # Analyze point cloud density
             density_result = self.density_analyzer.analyze_point_cloud(normalized)
             density_vals = density_result.density
-            from ..analysis.feature_density import FeatureDensityResult
+            from geotoken.analysis.feature_density import FeatureDensityResult
             density = FeatureDensityResult(
                 density=density_vals,
                 edge_length_variance=density_result.edge_length_variance,
@@ -173,9 +174,9 @@ class AdaptiveQuantizer:
     ) -> np.ndarray:
         """Prevent distinct vertices from collapsing to same quantized value.
 
-        Uses spatial hashing for O(n) collision detection instead of O(n²)
-        pairwise comparison. If two originally-distinct vertices map to the
-        same quantized value and their normalized distance exceeds
+        Uses vectorized spatial hashing for O(n) collision detection instead
+        of O(n²) pairwise comparison. If two originally-distinct vertices map
+        to the same quantized value and their normalized distance exceeds
         minimum_feature_threshold, nudge one by 1 quantization level.
 
         Args:
@@ -193,64 +194,128 @@ class AdaptiveQuantizer:
         if n == 0:
             return result
 
-        max_iterations = 100
-        changed = True
-        iteration = 0
-        while changed:
-            if iteration >= max_iterations:
-                _log.warning(
-                    "Feature collapse prevention reached max iterations (%d)",
-                    max_iterations,
-                )
-                break
-            iteration += 1
-            changed = False
-            coord_to_indices = AdaptiveQuantizer._build_spatial_hash(
-                result, bits_per_vertex
+        # Precompute max levels per vertex (avoids repeated 2**bits)
+        max_levels = (2 ** bits_per_vertex.astype(int) - 1).astype(int)
+
+        # Build occupancy set: tracks which (x, y, z, bits) cells are taken.
+        # This lets us nudge into guaranteed-unoccupied cells in one pass.
+        bits_int = bits_per_vertex.astype(int)
+        occupied: set[tuple[int, int, int, int]] = set()
+        for i in range(n):
+            occupied.add(
+                (int(result[i, 0]), int(result[i, 1]), int(result[i, 2]),
+                 int(bits_int[i]))
             )
 
-            # Only process buckets with collisions (more than one vertex)
-            for key, indices in coord_to_indices.items():
-                if len(indices) <= 1:
+        # Single-pass collision resolution: detect collisions once,
+        # then nudge each collider to the nearest unoccupied cell.
+        collision_groups = AdaptiveQuantizer._build_collision_groups(
+            result, bits_per_vertex
+        )
+
+        for indices in collision_groups:
+            anchor = indices[0]
+            anchor_norm = normalized_vertices[anchor]
+
+            for k in range(1, len(indices)):
+                j = indices[k]
+
+                # Skip if already resolved (prior nudge made them differ)
+                if not np.array_equal(result[anchor], result[j]):
                     continue
 
-                # Check all pairs within this collision bucket
-                for idx_a in range(len(indices)):
-                    i = indices[idx_a]
-                    for idx_b in range(idx_a + 1, len(indices)):
-                        j = indices[idx_b]
+                delta = normalized_vertices[j] - anchor_norm
+                norm_dist = np.linalg.norm(delta)
+                if norm_dist <= threshold:
+                    continue
 
-                        # Skip if already different (from previous nudge)
-                        if not np.array_equal(result[i], result[j]):
-                            continue
+                # Nudge vertex j: try cells at increasing Manhattan distance
+                # along the dimension of largest difference, then others.
+                dims_ranked = np.argsort(-np.abs(delta))
+                ml = max_levels[j]
+                b = int(bits_int[j])
+                nudged = False
 
-                        norm_dist = np.linalg.norm(
-                            normalized_vertices[i] - normalized_vertices[j]
-                        )
-                        if norm_dist > threshold:
-                            # Nudge vertex j by 1 level in the dimension
-                            # with largest normalized difference
-                            diff = np.abs(
-                                normalized_vertices[i] - normalized_vertices[j]
-                            )
-                            dim = np.argmax(diff)
-                            bits = int(bits_per_vertex[j])
-                            max_level = 2 ** bits - 1
+                max_radius = min(ml + 1, 8)  # cap to avoid O(n*65535)
+                for radius in range(1, max(max_radius, 2)):
+                    if nudged:
+                        break
+                    for dim in dims_ranked:
+                        for sign in (1, -1):
+                            candidate = result[j].copy()
+                            new_val = int(candidate[dim]) + sign * radius
+                            if new_val < 0 or new_val > max_levels[j]:
+                                continue
+                            candidate[dim] = new_val
+                            key = (int(candidate[0]), int(candidate[1]),
+                                   int(candidate[2]), b)
+                            if key not in occupied:
+                                # Remove old occupancy, apply nudge, add new
+                                old_key = (int(result[j, 0]), int(result[j, 1]),
+                                           int(result[j, 2]), b)
+                                occupied.discard(old_key)
+                                result[j] = candidate
+                                occupied.add(key)
+                                nudged = True
+                                break
+                    # Also try combinations for radius > 1 would be expensive;
+                    # single-axis probing covers the common case.
 
-                            if result[j, dim] < max_level:
-                                result[j, dim] += 1
-                                changed = True
-                            elif result[j, dim] > 0:
-                                result[j, dim] -= 1
-                                changed = True
+                if not nudged:
+                    _log.debug(
+                        "Could not resolve collision for vertex %d", j
+                    )
 
         return result
+
+    @staticmethod
+    def _build_collision_groups(
+        result: np.ndarray, bits_per_vertex: np.ndarray
+    ) -> list[np.ndarray]:
+        """Find groups of vertices sharing the same quantized coords + bit width.
+
+        Uses vectorized NumPy operations instead of Python-level iteration.
+        Returns only groups with 2+ vertices (actual collisions).
+        """
+        n = len(result)
+        if n == 0:
+            return []
+
+        # Pack (x, y, z, bits) into a structured array for lexicographic sort
+        # Use int64 to handle all quantization levels safely
+        keys = np.empty(n, dtype=[
+            ('x', np.int64), ('y', np.int64), ('z', np.int64), ('b', np.int64)
+        ])
+        keys['x'] = result[:, 0]
+        keys['y'] = result[:, 1]
+        keys['z'] = result[:, 2]
+        keys['b'] = bits_per_vertex.astype(np.int64)
+
+        # Sort by key; find where keys change to delimit groups
+        order = np.argsort(keys, order=('x', 'y', 'z', 'b'))
+        sorted_keys = keys[order]
+
+        # Boolean mask of group boundaries
+        diff_mask = np.empty(n, dtype=bool)
+        diff_mask[0] = True
+        diff_mask[1:] = sorted_keys[1:] != sorted_keys[:-1]
+
+        # Split order array into groups at boundaries
+        group_starts = np.nonzero(diff_mask)[0]
+        groups = np.split(order, group_starts[1:])
+
+        # Return only collision groups (size >= 2)
+        return [g for g in groups if len(g) >= 2]
 
     @staticmethod
     def _build_spatial_hash(
         result: np.ndarray, bits_per_vertex: np.ndarray
     ) -> dict[tuple[int, int, int, int], list[int]]:
-        """Build spatial hash: map quantized coords + bit width to vertex indices."""
+        """Build spatial hash: map quantized coords + bit width to vertex indices.
+
+        Legacy Python-level implementation kept for compatibility.
+        Prefer _build_collision_groups for performance.
+        """
         mapping: dict[tuple[int, int, int, int], list[int]] = {}
         for i in range(len(result)):
             key = (

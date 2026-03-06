@@ -1,5 +1,3 @@
-Now I'll create a comprehensive guide with implementations.
-
 # Empirical Learning Curves: Complete Guide with PyTorch Implementation
 
 ## What Are Learning Curves?

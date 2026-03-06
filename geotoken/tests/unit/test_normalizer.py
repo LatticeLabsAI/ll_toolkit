@@ -46,3 +46,26 @@ class TestNormalizer:
         normalizer = RelationshipPreservingNormalizer()
         result = normalizer.normalize(vertices)
         assert result.scale == 1.0
+
+    def test_denormalize_single_axis_degenerate(self):
+        """Denormalize must not produce inf when one axis has zero scale.
+
+        This covers the case where a NormalizationResult is deserialized
+        or constructed with a zero in a per-axis scale array.
+        """
+        from geotoken.quantization.normalizer import NormalizationResult
+
+        normalizer = RelationshipPreservingNormalizer()
+        norm_verts = np.array([[0.5, 0.5, 0.5], [1.0, 0.5, 1.0]], dtype=float)
+
+        # Simulate a result where Y-axis scale is zero (degenerate)
+        result = NormalizationResult(
+            normalized_vertices=norm_verts,
+            center=np.array([2.0, 5.0, 1.5]),
+            scale=np.array([4.0, 0.0, 3.0]),  # Y is degenerate
+            original_bbox_min=np.array([0.0, 5.0, 0.0]),
+            original_bbox_max=np.array([4.0, 5.0, 3.0]),
+        )
+
+        recovered = normalizer.denormalize(norm_verts, result)
+        assert np.all(np.isfinite(recovered)), "denormalize produced inf/nan on single-axis zero scale"

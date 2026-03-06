@@ -10,9 +10,53 @@ from __future__ import annotations
 
 import torch
 import torch.nn as nn
-from typing import Optional, Dict
+from typing import Dict, List, Optional
 
 from .encoder import STEPTransformerEncoder, STEPTransformerDecoder, STEPGraphEncoder
+
+
+def _encode_topology_batch(
+    topology_data: Optional[Dict],
+    graph_encoder: STEPGraphEncoder,
+    batch_size: int,
+    seq_len: int,
+    device: torch.device,
+    graph_node_dim: int,
+) -> Optional[torch.Tensor]:
+    """Encode per-sample topology and return [batch, seq_len, node_dim] or None.
+
+    Accepts topology_data as a single dict (backward compat) or a list of dicts
+    (one per batch item, from collate).  Returns None when no topology is available.
+    """
+    topo_list: Optional[List[Optional[Dict]]] = None
+    if topology_data is not None:
+        if isinstance(topology_data, list):
+            topo_list = topology_data
+        elif 'adjacency_matrix' in topology_data:
+            topo_list = [topology_data]
+
+    if topo_list is None:
+        return None
+
+    while len(topo_list) < batch_size:
+        topo_list.append(None)
+
+    per_sample: List[torch.Tensor] = []
+    for topo in topo_list[:batch_size]:
+        if topo is not None and 'adjacency_matrix' in topo:
+            adj_matrix = topo['adjacency_matrix']
+            node_features = topo.get('node_features')
+            if node_features is None:
+                num_nodes = adj_matrix.shape[0]
+                node_features = torch.zeros(num_nodes, graph_node_dim, device=device)
+            graph_features = graph_encoder(node_features, adj_matrix)
+            per_sample.append(graph_features.mean(dim=0))
+        else:
+            per_sample.append(torch.zeros(graph_node_dim, device=device))
+
+    # [batch, node_dim] -> [batch, seq_len, node_dim]
+    pooled = torch.stack(per_sample, dim=0)
+    return pooled.unsqueeze(1).expand(batch_size, seq_len, -1)
 
 
 class STEPForCausalLM(nn.Module):
@@ -98,25 +142,11 @@ class STEPForCausalLM(nn.Module):
         hidden_states = self.transformer_decoder(input_ids, attention_mask)
 
         # Encode topology if provided (STEP-specific!)
-        if topology_data is not None and 'adjacency_matrix' in topology_data:
-            adj_matrix = topology_data['adjacency_matrix']
-            node_features = topology_data.get('node_features')
-
-            if node_features is None:
-                # Create default node features
-                num_nodes = adj_matrix.shape[0]
-                node_features = torch.zeros(num_nodes, self.graph_node_dim, device=input_ids.device)
-
-            # Graph encoding
-            graph_features = self.graph_encoder(node_features, adj_matrix)  # [num_nodes, node_dim]
-
-            # Pool graph features
-            graph_pooled = graph_features.mean(dim=0)  # [node_dim]
-
-            # Expand to match sequence length
-            graph_pooled = graph_pooled.unsqueeze(0).unsqueeze(0).expand(batch_size, seq_len, -1)
-
-            # Fuse token and graph features
+        graph_pooled = _encode_topology_batch(
+            topology_data, self.graph_encoder, batch_size, seq_len,
+            input_ids.device, self.graph_node_dim,
+        )
+        if graph_pooled is not None:
             combined = torch.cat([hidden_states, graph_pooled], dim=-1)
             hidden_states = self.fusion(combined)
 
@@ -280,25 +310,11 @@ class STEPForMaskedLM(nn.Module):
         hidden_states = self.transformer_encoder(input_ids, attention_mask)  # [batch, seq_len, embed_dim]
 
         # Encode topology if provided (STEP-specific!)
-        if topology_data is not None and 'adjacency_matrix' in topology_data:
-            adj_matrix = topology_data['adjacency_matrix']
-            node_features = topology_data.get('node_features')
-
-            if node_features is None:
-                # Create default node features
-                num_nodes = adj_matrix.shape[0]
-                node_features = torch.zeros(num_nodes, self.graph_node_dim, device=input_ids.device)
-
-            # Graph encoding
-            graph_features = self.graph_encoder(node_features, adj_matrix)  # [num_nodes, node_dim]
-
-            # Pool graph features
-            graph_pooled = graph_features.mean(dim=0)  # [node_dim]
-
-            # Expand to match sequence length
-            graph_pooled = graph_pooled.unsqueeze(0).unsqueeze(0).expand(batch_size, seq_len, -1)
-
-            # Fuse token and graph features
+        graph_pooled = _encode_topology_batch(
+            topology_data, self.graph_encoder, batch_size, seq_len,
+            input_ids.device, self.graph_node_dim,
+        )
+        if graph_pooled is not None:
             combined = torch.cat([hidden_states, graph_pooled], dim=-1)
             hidden_states = self.fusion(combined)
 
@@ -321,7 +337,8 @@ class STEPForHybridLM(nn.Module):
     Hybrid model combining causal and masked prediction.
     Best of both worlds for pre-training.
 
-    Both models use STEP-aware architecture with topology understanding!
+    Both objectives share a single graph encoder so topology understanding
+    learned from one objective transfers to the other.
     """
 
     def __init__(
@@ -358,6 +375,12 @@ class STEPForHybridLM(nn.Module):
             graph_node_dim=graph_node_dim,
             num_graph_layers=num_graph_layers
         )
+
+        # Share a single graph encoder between both objectives so topology
+        # understanding is unified. Use the causal_lm's encoder as the
+        # canonical instance and replace the masked_lm's duplicate.
+        self.shared_graph_encoder = self.causal_lm.graph_encoder
+        self.masked_lm.graph_encoder = self.shared_graph_encoder
 
     def forward(
         self,
@@ -398,7 +421,7 @@ class STEPForHybridLM(nn.Module):
                 outputs['masked_loss'] = masked_outputs['loss']
                 total_loss += masked_outputs['loss']
 
-        if total_loss > 0:
+        if isinstance(total_loss, torch.Tensor):
             outputs['loss'] = total_loss
 
         return outputs
