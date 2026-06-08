@@ -70,7 +70,7 @@ dev = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["./*"]
+include = ["ll_clouds*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -81,6 +81,7 @@ markers = [
     "requires_pythonocc: marks tests that need pythonocc-core",
     "requires_cadquery: marks tests that need cadquery",
     "requires_torch: marks tests that need PyTorch",
+    "requires_trimesh: marks tests that need trimesh",
     "requires_cadling: marks tests that need cadling package",
     "requires_geotoken: marks tests that need geotoken package",
     "integration: marks integration tests",
