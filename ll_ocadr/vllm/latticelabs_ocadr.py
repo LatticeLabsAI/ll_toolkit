@@ -366,7 +366,14 @@ def build_ll_ocadr_model(config):
 
 
 # =============================================================================
-# vLLM Integration Classes
+# vLLM Integration Classes — EXPERIMENTAL / NOT WIRED
+# =============================================================================
+# These classes mirror vLLM's multimodal integration surface but are NOT
+# functional today: LatticelabsOCADRForCausalLM is not registered via vLLM's
+# ``ModelRegistry`` and does not implement ``SupportsMultiModal``, so the model
+# cannot be served by the vLLM engine as written. Use the HF-native path
+# (``ll_ocadr/run_ll_ocadr_hf.py``) for real inference. Completing the vLLM
+# runtime integration is planned future work.
 # =============================================================================
 
 class LLOCADRProcessingInfo:

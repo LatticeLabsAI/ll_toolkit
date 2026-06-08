@@ -50,7 +50,23 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["ll_ocadr", "ll_ocadr.vllm", "ll_ocadr.vllm.process"]
+packages = [
+    "ll_ocadr",
+    "ll_ocadr.vllm",
+    "ll_ocadr.vllm.process",
+    "ll_ocadr.vllm.lattice_encoder",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "slow: marks tests as slow (deselect with -m 'not slow')",
+    "requires_torch: marks tests that need PyTorch",
+    "requires_pythonocc: marks tests that need pythonocc-core (conda-only)",
+    "requires_trimesh: marks tests that need trimesh",
+    "integration: marks integration tests",
+    "unit: marks unit tests",
+]
 
 [tool.black]
 line-length = 100
