@@ -4,7 +4,7 @@
 |---|---|
 | **Spec ID** | SPEC-1 |
 | **Title** | Make `ll_gen`, `ll_ocadr`, and `ll_clouds` 100% working and real |
-| **Status** | Draft → Ready for execution |
+| **Status** | In progress — M1 ✅ (PR #4, merged) · M4 ✅ (PR #5, merged) · M5 ✅ (PR #6, merged) · M2 ✅ (PR #7, in review) · M6 ◐ (quality gate + truth-up) · M3 ⬜ (training, pending data+compute) |
 | **Author** | LatticeLabs (LayerDynamics) |
 | **Owner** | Maintainer (solo) |
 | **Created** | 2026-06-08 |
@@ -253,11 +253,11 @@ A milestone-complete spec is satisfied when **all** hold:
 
 | # | Question | Owner | Default if unanswered |
 |---|---|---|---|
-| OQ1 | Which exact DeepCAD/ABC subset + size for G2 training? | Maintainer | Smallest subset that fits one short GPU run; documented at M3.T3.1. |
-| OQ2 | Point-cloud backend for `ll_clouds`: numpy/scipy/trimesh only, or optional open3d accelerator? | Maintainer | numpy/scipy/trimesh required; open3d optional (R4). |
-| OQ3 | Commit checkpoints to git or host on HF Hub? | Maintainer | HF Hub + documented reproduce command if >50 MB; else commit under `checkpoints/`. |
-| OQ4 | Smallest HF LLM to use for `ll_ocadr` tests/inference default? | Maintainer | A tiny public causal LM pinned in test config; documented at M4.T4.2. |
-| OQ5 | Should `ll_clouds` bridges live in `ll_clouds` or in `cadling`/`ll_ocadr` (dependency direction)? | Maintainer | In `ll_clouds` with lazy imports (FR-C6), so `ll_clouds` stays installable standalone. |
+| OQ1 | Which exact DeepCAD/ABC subset + size for G2 training? | Maintainer | ⬜ OPEN (M3) — to be decided at M3.T3.1 when data+compute are available. |
+| OQ2 | Point-cloud backend for `ll_clouds`: numpy/scipy/trimesh only, or optional open3d accelerator? | Maintainer | ✅ RESOLVED (M5) — numpy/scipy/trimesh required; open3d not used (optional accelerator only). |
+| OQ3 | Commit checkpoints to git or host on HF Hub? | Maintainer | ⬜ OPEN (M3) — decide when the first checkpoints exist. |
+| OQ4 | Smallest HF LLM to use for `ll_ocadr` tests/inference default? | Maintainer | ✅ RESOLVED (M4) — a tiny **offline** GPT-2 (n_embd 64) built in the test fixtures; no network/download. |
+| OQ5 | Should `ll_clouds` bridges live in `ll_clouds` or in `cadling`/`ll_ocadr`? | Maintainer | ✅ RESOLVED (M5) — in `ll_clouds`, lazily imported; verified `import ll_clouds` pulls in none of cadling/ll_ocadr/torch/trimesh. |
 
 ---
 

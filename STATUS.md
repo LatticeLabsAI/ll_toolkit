@@ -2,12 +2,36 @@
 
 > Reality-based assessment of the codebase against the real-world state of the art (2024–2026).
 > Generated 2026-06-08. Findings verified by reading/running the actual code and by web research.
+> **Updated 2026-06-08** after milestones M1, M2, M4, M5 (see the "Update" section) — the
+> original audit's "partially unwired / empty ll_clouds" findings are now resolved; the
+> *untrained* finding stands (training is M3).
 
 ---
 
 ## One-sentence verdict
 
-The code is impressively **real** and the ideas are mostly **grounded in current research** — but it is **untrained, partially unwired, and aimed at a market dominated by funded teams**, so "real code" is a long way from "viable product."
+The code is impressively **real** and the ideas are mostly **grounded in current research**; the neural-propose track and training loop now **wire up and run end-to-end**, but the models remain **untrained** (so outputs are noise until M3) and the project is **aimed at a market dominated by funded teams** — "runs end-to-end" is still a step short of "viable product."
+
+---
+
+## Update — milestones since the initial audit (2026-06-08)
+
+The four "critical wiring defects" below were the original audit's findings; they have been
+addressed. Status of each spec milestone (`docs/specs/SPEC-1-...md`):
+
+| Milestone | Scope | Status | Evidence |
+|---|---|---|---|
+| **M1** | Fix the dead `ll_gen` neural-propose imports + surfaced API bugs | ✅ merged (PR #4) | VAE/diffusion/VQ-VAE now construct, propose, and reach dispose on CPU; `ll_gen/tests/test_neural_imports.py`, `test_orchestrator_neural.py`. Defect #1 below is **resolved**. |
+| **M2** | `ll_gen` RL training loop runnable | ✅ open (PR #7) | Live-graph log-probs (VAE/VQ-VAE), real `train_step` gradient update, `python -m ll_gen.training.run` CLI, checkpoint round-trip; `test_generate_for_training.py`, `test_rl_trainer.py`, `test_training_cli.py`, `test_checkpoint_roundtrip.py`. |
+| **M4** | `ll_ocadr` HF-native inference + pytest suite | ✅ merged (PR #5) | `run_ll_ocadr_hf.py` runs mesh→text on a tiny offline LM; 21 passed / 2 skipped. vLLM now documented as future (defect #3 **resolved/clarified**). |
+| **M5** | `ll_clouds` core point-cloud library | ✅ merged (PR #6) | Built from the empty scaffold: I/O, preprocessing, features, ICP, RANSAC/clustering, lazy bridges; **74 tests, 93% coverage**, ruff/black/mypy clean. Defect #4 below is **resolved**. |
+| **M3** | Train proof-of-life checkpoints | ⬜ pending | Needs a dataset subset + compute (OCC/cadquery for the dispose reward). The *untrained* finding stands until this runs. |
+| **M6** | Cross-cutting quality gate + this truth-up | ◐ in progress | ll_clouds + ll_gen are ruff/black clean; stub scan = 0; full mypy + ll_ocadr ruff scoped as a follow-up. |
+
+**Net change to the verdict:** the original "two of five headline paths don't execute as wired"
+and "ll_clouds is an empty scaffold" are no longer true. What has **not** changed: no trained
+checkpoints exist (every neural output is still noise until M3), and the commercial reality is
+unchanged.
 
 ---
 
@@ -16,7 +40,7 @@ The code is impressively **real** and the ideas are mostly **grounded in current
 | Axis | Verdict | Evidence |
 |---|---|---|
 | **Is it real code, not stubs?** | ✅ Largely yes | Real GCN message-passing, WGAN-GP / DDPM / REINFORCE loops, PointNet++ / ViT encoders, sandboxed subprocess CadQuery execution, OCC-based geometry analysis. `cadling/docs/RequiredToBeCorrected.md` placeholders are genuinely built out; **0** `raise NotImplementedError`, **~1** TODO tree-wide. geotoken passes **357 tests at 82.7% coverage**. |
-| **Does it run end-to-end today?** | ❌ No | **Nothing is trained** (no checkpoints exist → every neural output is noise until the loops are run on real data). Two of five headline paths don't execute as wired (see Critical Wiring Defects). `ll_clouds/` is an empty `pyproject.toml`. |
+| **Does it run end-to-end today?** | ◐ Wires + runs, but untrained | **Now wired:** the neural propose→dispose path, the RL `train_step`/`train_epoch` loop, the `ll_ocadr` HF-native mesh→text path, and the `ll_clouds` library all run end-to-end (M1/M2/M4/M5). **Still untrained:** no checkpoints exist, so every neural *output* is noise until the loops are run on real data (M3). The original "two paths don't execute / ll_clouds empty" defects are resolved. |
 | **Are the approaches grounded in reality?** | ✅ 4 of 5 | See Technical Bets below. |
 | **Is it commercially winnable solo?** | ⚠️ Hard on the strongest axes | Science is open and reproducible, but the moat (proprietary CAD datasets, kernel access, platform distribution, trust) favors Autodesk / Onshape-PTC / Zoo.dev. Industry's own 2026 verdict: *"most AI CAD tools solve problems engineers don't actually have."* ([Leo AI](https://www.getleo.ai/blog/ai-cad-design-2026-whats-real)) |
 
@@ -24,7 +48,11 @@ The code is impressively **real** and the ideas are mostly **grounded in current
 
 ## Critical wiring defects (verified by hand, not inferred)
 
-### 1. ll_gen neural-propose / RL track imports nonexistent modules — entire track is dead code
+> **Historical (original audit).** Defects #1, #3, #4 below are **RESOLVED** (M1, M4, M5);
+> #2 (no trained weights) **still stands** — training is M3. Kept here for the record and to
+> document what the fixes addressed.
+
+### 1. ll_gen neural-propose / RL track imports nonexistent modules — entire track is dead code  — ✅ RESOLVED (M1)
 
 - `ll_gen/ll_gen/generators/neural_vae.py:430` → `from ll_stepnet.stepnet.models import STEPVAE`
 - `ll_gen/ll_gen/generators/neural_diffusion.py:418` → `from ll_stepnet.stepnet.models import StructuredDiffusion`
@@ -64,9 +92,9 @@ Both are external third-party CAD-feature-detection assets — **nothing for ll_
 | **geotoken** | ~15K | ✅ **REAL & COMPLETE** | Strongest package. Real adaptive quantization (`geotoken/quantization/adaptive.py`), verified round-trip (`tests/unit/test_adaptive.py:18-26`, `assert np.max(errors) < 0.05`). 357 tests pass, 82.7% coverage. |
 | **ll_stepnet** | ~28K | ✅ **REAL BUT UNTRAINED** | Correct symmetric-normalized sparse GCN (`encoder.py:397-451`, forward+backward verified), real `nn.TransformerEncoder` (`encoder.py:38-73`), real CE losses in pretrain (`pretrain.py:62-330`), genuine WGAN-GP (`training/gan_trainer.py:166-200`) and DDPM. No checkpoints. |
 | **cadling** | ~121K | ✅ **PARTIAL → REAL** | Real OCC `STEPControl_Reader` path + text fallback (`backend/step/step_backend.py:336-389`); flagged placeholders now genuinely implemented — mate detection via OCC `BRepExtrema` (`models/assembly_analysis.py:416-593`), 1682-line graph builder, 1719-line geometry extractors. SDG is real LLM calls (`sdg/qa/generate.py:277,289,357,391`), not templated filler. |
-| **ll_gen** | ~34K | ⚠️ **PARTIAL** | Deterministic dispose + LLM-code propose are **real** (`disposal/code_executor.py` real `subprocess.run(timeout=...)` sandbox; `codegen/cadquery_proposer.py` real multi-provider LLM client; correct REINFORCE in `training/rl_trainer.py:194-219`). Neural-latent propose + RL track is **dead** (broken imports above). |
-| **ll_ocadr** | ~5K | ⚠️ **PARTIAL** | Real PointNet++ (`vllm/lattice_encoder/geometry_net.py`, FPS + set abstraction, forward verified) and ViT encoder (`shape_net.py`). vLLM headline aspirational; no pytest suite. |
-| **ll_clouds** | 0 | ❌ **EMPTY** | `pyproject.toml` only. |
+| **ll_gen** | ~34K | ✅ **REAL, WIRED, UNTRAINED** (M1+M2) | Deterministic dispose + LLM-code propose real; **neural-latent propose + RL track now wired** (M1) and the RL loop runs (M2): live-graph log-probs (VAE/VQ-VAE), real `train_step` update, `python -m ll_gen.training.run` CLI, checkpoint round-trip. Diffusion RL is a documented decoupled exception. Untrained (M3). ruff/black clean. |
+| **ll_ocadr** | ~5K | ✅ **REAL, HF-NATIVE, TESTED** (M4) | Real PointNet++ + ViT encoders; **HF-native inference path** (`run_ll_ocadr_hf.py`) runs mesh→text; **real pytest suite** (21 passed / 2 skipped). vLLM honestly documented as experimental/future. 3D encoders untrained. |
+| **ll_clouds** | ~1.5K | ✅ **REAL & COMPLETE** (M5) | Built from empty: PointCloud models, PLY/PCD/XYZ I/O + mesh sampling, normalize/voxel/FPS/outlier preprocessing, k-NN PCA normals + curvature, ICP, RANSAC plane + DBSCAN clustering, lazy cadling/ll_ocadr bridges. 74 tests, 93% coverage, ruff/black/mypy clean. |
 
 > Note: a subagent estimated "~85–90% of the codebase is genuine implementation." That is a hand-wave, not a measured figure — treat it as directional. What is *measured*: geotoken's 357 passing tests, the verified forward/backward passes, and the verified-by-hand defects above.
 
