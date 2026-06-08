@@ -17,6 +17,7 @@ Examples:
         --dataset deepcad --data-path latticelabs/deepcad \
         --max-samples 256 --epochs 1 --save checkpoints/vqvae.pt
 """
+
 from __future__ import annotations
 
 import argparse
@@ -58,7 +59,7 @@ def build_generator(name: str, device: str) -> BaseNeuralGenerator:
     return generator
 
 
-def _sample_to_record(sample: Any, idx: int) -> dict[str, Any]:
+def _sample_to_record(sample: Any) -> dict[str, Any]:
     """Adapt a dataset sample into a {prompt, target_dimensions?} record."""
     if isinstance(sample, dict):
         prompt = sample.get("prompt") or sample.get("caption") or _DEFAULT_PROMPT
@@ -75,7 +76,16 @@ def load_dataset_records(
     data_path: str | None,
     max_samples: int | None,
 ) -> list[dict[str, Any]]:
-    """Build the list of training records from a prompts file or a CAD dataset."""
+    """Build the list of training records from a prompts file or a CAD dataset.
+
+    ``--prompts-file`` and ``--dataset`` are mutually exclusive; supplying both
+    is a misconfiguration and fails fast.
+    """
+    if prompts_file and dataset:
+        raise ValueError(
+            "--prompts-file and --dataset are mutually exclusive; provide only one."
+        )
+
     if prompts_file:
         records = []
         with open(prompts_file) as fh:
@@ -84,7 +94,7 @@ def load_dataset_records(
                 if not line:
                     continue
                 obj = json.loads(line)
-                records.append(_sample_to_record(obj, len(records)))
+                records.append(_sample_to_record(obj))
                 if max_samples is not None and len(records) >= max_samples:
                     break
         if not records:
@@ -94,7 +104,9 @@ def load_dataset_records(
     if dataset == "deepcad":
         from ll_gen.datasets.deepcad_loader import load_deepcad
 
-        data = load_deepcad(path=data_path or "latticelabs/deepcad", max_samples=max_samples)
+        data = load_deepcad(
+            path=data_path or "latticelabs/deepcad", max_samples=max_samples
+        )
     elif dataset == "abc":
         from ll_gen.datasets.abc_loader import load_abc
 
@@ -102,7 +114,7 @@ def load_dataset_records(
     else:
         raise ValueError("Provide either --prompts-file or --dataset {deepcad,abc}.")
 
-    records = [_sample_to_record(data[i], i) for i in range(len(data))]
+    records = [_sample_to_record(data[i]) for i in range(len(data))]
     if max_samples is not None:
         records = records[:max_samples]
     return records
@@ -146,8 +158,12 @@ def train(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="ll_gen RL alignment training.")
-    parser.add_argument("--generator", required=True, choices=["vae", "vqvae", "diffusion"])
-    parser.add_argument("--prompts-file", default=None, help="JSONL file of {prompt,...} records.")
+    parser.add_argument(
+        "--generator", required=True, choices=["vae", "vqvae", "diffusion"]
+    )
+    parser.add_argument(
+        "--prompts-file", default=None, help="JSONL file of {prompt,...} records."
+    )
     parser.add_argument("--dataset", default=None, choices=["deepcad", "abc"])
     parser.add_argument("--data-path", default=None, help="Dataset path/HF id.")
     parser.add_argument("--max-samples", type=int, default=None)

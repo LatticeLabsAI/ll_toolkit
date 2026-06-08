@@ -5,6 +5,7 @@ step count) is saved and loaded into a *fresh* trainer/generator; the restored
 model must match the saved one bit-for-bit, and the bookkeeping must round-trip.
 Guards against the "load always restarts from scratch" class of bug.
 """
+
 from __future__ import annotations
 
 import types
@@ -25,7 +26,8 @@ def _stub_reward(trainer: RLAlignmentTrainer, monkeypatch) -> None:
         lambda proposal, export=False: types.SimpleNamespace(is_valid=False),
     )
     monkeypatch.setattr(
-        rl_mod, "compute_reward",
+        rl_mod,
+        "compute_reward",
         lambda result, config=None, target_dimensions=None: 1.0,
     )
 
@@ -69,3 +71,30 @@ def test_checkpoint_roundtrip_restores_state(tmp_path, monkeypatch) -> None:
     # Bookkeeping restored.
     assert trainer_b._step_count == trainer_a._step_count == 1
     assert trainer_b._baseline == pytest.approx(trainer_a._baseline)
+
+
+@pytest.mark.requires_torch
+def test_resume_rejects_mismatched_generator(tmp_path, monkeypatch) -> None:
+    """A checkpoint saved for one generator must not load into a different
+    architecture (weights would not align)."""
+    from ll_gen.generators.neural_vqvae import NeuralVQVAEGenerator
+
+    # Save a VAE checkpoint.
+    gen_vae = NeuralVAEGenerator(device="cpu")
+    gen_vae._init_model()
+    trainer_vae = RLAlignmentTrainer(
+        gen_vae, device="cpu", output_dir=str(tmp_path / "vae"), seed=0
+    )
+    trainer_vae._init_training()
+    ckpt = tmp_path / "vae.pt"
+    trainer_vae.save_checkpoint(ckpt)
+
+    # Attempt to resume it into a VQ-VAE trainer.
+    gen_vq = NeuralVQVAEGenerator(device="cpu")
+    gen_vq._init_model()
+    trainer_vq = RLAlignmentTrainer(
+        gen_vq, device="cpu", output_dir=str(tmp_path / "vq"), seed=0
+    )
+    trainer_vq._init_training()
+    with pytest.raises(ValueError, match="cannot resume across architectures"):
+        trainer_vq.load_checkpoint(ckpt)
