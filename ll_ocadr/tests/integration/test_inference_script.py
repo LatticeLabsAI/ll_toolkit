@@ -49,7 +49,10 @@ def test_cli_generates_text_from_stl(tiny_lm_with_tokenizer_dir, sphere_stl_file
     assert result.returncode == 0, (
         f"script failed (exit {result.returncode}).\nSTDERR:\n{result.stderr[-3000:]}"
     )
-    # The script prints the decoded generation. Untrained output may be short,
-    # but the pipeline must have run and produced a string line of stdout.
-    assert result.stdout is not None
+    # The script prints the decoded generation. Even with the tiny untrained
+    # model the pipeline must produce some actual (non-whitespace) text.
     assert isinstance(result.stdout, str)
+    assert result.stdout.strip(), (
+        "expected the CLI to print non-empty generated text, got "
+        f"{result.stdout!r}"
+    )

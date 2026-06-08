@@ -19,7 +19,7 @@ the appropriate number of mesh tokens automatically.
 from __future__ import annotations
 
 import argparse
-from typing import Optional, Tuple
+from typing import Optional, Sequence, Tuple, Union
 
 import torch
 from transformers import AutoConfig, AutoTokenizer
@@ -31,15 +31,20 @@ from ll_ocadr.vllm.process.mesh_process import LLOCADRProcessor
 
 def _derive_hidden_size(lm_config) -> int:
     """Return the language model's hidden/embedding size across architectures."""
-    hidden = getattr(lm_config, "hidden_size", None)
-    if hidden is None:
-        hidden = getattr(lm_config, "n_embd", None)
-    if hidden is None:
-        raise ValueError(
-            "Could not determine the language model's hidden size "
-            "(no 'hidden_size' or 'n_embd' on its config)."
-        )
-    return int(hidden)
+    # Cover the common attribute names across architectures:
+    #   hidden_size -> Llama/Qwen/Mistral/BERT-style
+    #   n_embd      -> GPT-2/GPT-Neo-style
+    #   d_model     -> T5/encoder-decoder/BART-style
+    for attr in ("hidden_size", "n_embd", "d_model"):
+        value = getattr(lm_config, attr, None)
+        if value is not None:
+            return int(value)
+    raise ValueError(
+        f"Could not determine the language model's hidden size for config "
+        f"'{type(lm_config).__name__}': none of hidden_size / n_embd / d_model "
+        f"are set. Pass a model whose config exposes one of these, or set "
+        f"LLOCADRConfig.n_embed explicitly to the LM's embedding dimension."
+    )
 
 
 def build_model_and_tokenizer(
@@ -63,14 +68,17 @@ def build_model_and_tokenizer(
     model = LatticelabsOCADRForCausalLM(config).to(device).eval()
 
     tokenizer = AutoTokenizer.from_pretrained(model_name)
+    mesh_tokens_added = 0
     if config.mesh_token not in tokenizer.get_vocab():
-        tokenizer.add_tokens([config.mesh_token])
+        mesh_tokens_added = tokenizer.add_tokens([config.mesh_token])
     config.mesh_token_id = tokenizer.convert_tokens_to_ids(config.mesh_token)
 
     # The model caches the mesh token id (config.mesh_token_id was None at build
-    # time); update it, and resize the LM embeddings to cover the new token.
+    # time); update it. Resize the LM embeddings only when we actually added a
+    # new token — resizing reinitializes the matrix, so skip it otherwise.
     model.mesh_token_id = config.mesh_token_id
-    model.language_model.resize_token_embeddings(len(tokenizer))
+    if mesh_tokens_added > 0:
+        model.language_model.resize_token_embeddings(len(tokenizer))
 
     processor = LLOCADRProcessor(
         tokenizer=tokenizer,
@@ -86,27 +94,44 @@ def run_inference(
     model: LatticelabsOCADRForCausalLM,
     processor: LLOCADRProcessor,
     tokenizer,
-    mesh_file: str,
+    mesh_file: Union[str, Sequence[str]],
     prompt: str,
     max_new_tokens: int = 64,
-    device: str = "cpu",
     cropping: bool = True,
     do_sample: bool = False,
 ) -> str:
-    """Run the full mesh-file -> text pipeline and return the decoded output."""
-    if "<mesh>" not in prompt:
-        # Ensure there is a placeholder for the mesh.
+    """Run the full mesh-file -> text pipeline and return the decoded output.
+
+    ``mesh_file`` may be a single path or a sequence of paths. The number of
+    ``<mesh>`` placeholders in ``prompt`` must equal the number of mesh files;
+    as a convenience, a single mesh with no placeholder gets one appended.
+
+    The target device is taken from the model itself (single source of truth),
+    so the inputs always land on the same device as the model.
+    """
+    model_device = next(model.parameters()).device
+    mesh_files = [mesh_file] if isinstance(mesh_file, str) else list(mesh_file)
+
+    placeholder_count = prompt.count("<mesh>")
+    if placeholder_count == 0 and len(mesh_files) == 1:
         prompt = f"{prompt} <mesh>"
+        placeholder_count = 1
+    if placeholder_count != len(mesh_files):
+        raise ValueError(
+            f"prompt contains {placeholder_count} '<mesh>' placeholder(s) but "
+            f"{len(mesh_files)} mesh file(s) were provided; they must match "
+            f"one-to-one."
+        )
 
     inputs = processor.tokenize_with_meshes(
-        mesh_files=[mesh_file],
+        mesh_files=mesh_files,
         conversation=prompt,
         cropping=cropping,
     )
     # num_mesh_tokens is metadata, not a generate() argument.
     inputs.pop("num_mesh_tokens", None)
     tensors = {
-        key: (value.to(device) if isinstance(value, torch.Tensor) else value)
+        key: (value.to(model_device) if isinstance(value, torch.Tensor) else value)
         for key, value in inputs.items()
     }
 
@@ -160,7 +185,6 @@ def main() -> None:
         mesh_file=args.mesh,
         prompt=args.prompt,
         max_new_tokens=args.max_new_tokens,
-        device=args.device,
         cropping=args.cropping,
         do_sample=args.do_sample,
     )

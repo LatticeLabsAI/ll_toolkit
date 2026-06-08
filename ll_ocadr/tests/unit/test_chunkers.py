@@ -61,6 +61,30 @@ class TestSTLContentChunker:
         assert all(isinstance(c, dict) for c in chunks)
         assert all(c.get("format") == "binary_stl" for c in chunks)
 
+    def test_chunk_ascii_stl_path(self, tmp_path) -> None:
+        """Exercise the ASCII chunking logic (not just detection): chunk_stl
+        auto-routes an ASCII file to chunk_ascii_stl, yielding ascii_stl chunks
+        with parsed facets and non-empty raw content."""
+        ascii_stl = tmp_path / "two_tri.stl"
+        facet = (
+            "  facet normal 0 0 1\n"
+            "    outer loop\n"
+            "      vertex 0 0 0\n"
+            "      vertex 1 0 0\n"
+            "      vertex 0 1 0\n"
+            "    endloop\n"
+            "  endfacet\n"
+        )
+        ascii_stl.write_text("solid tri\n" + facet + facet + "endsolid tri\n")
+
+        chunks = STLContentChunker(chunk_size=1).chunk_stl(str(ascii_stl))
+        assert isinstance(chunks, list) and len(chunks) == 2  # two facets, 1/chunk
+        for chunk in chunks:
+            assert chunk["format"] == "ascii_stl"
+            assert chunk["raw_content"].strip()  # non-empty text
+            assert len(chunk["facets"]) == 1
+            assert "vertex" in chunk["raw_content"]
+
 
 @pytest.mark.unit
 class TestOBJContentChunker:
