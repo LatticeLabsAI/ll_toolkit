@@ -17,23 +17,18 @@ The orchestrator coordinates between:
 - ``VisualVerifier`` — optional VLM-based semantic checking
 - ``ll_stepnet`` generators — VAE/diffusion/VQ-VAE (lazy import)
 """
+
 from __future__ import annotations
 
 import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from ll_gen.codegen.cadquery_proposer import CadQueryProposer
 from ll_gen.codegen.openscad_proposer import OpenSCADProposer
 from ll_gen.config import (
-    CodegenConfig,
-    ConditioningConfig,
-    DisposalConfig,
-    ExportConfig,
-    FeedbackConfig,
-    GeneratorConfig,
     GenerationRoute,
     LLGenConfig,
 )
@@ -60,10 +55,10 @@ class GenerationHistory:
         final_result: The best DisposalResult from all attempts.
     """
 
-    routing_decision: Optional[RoutingDecision] = None
-    attempts: List[Dict[str, Any]] = field(default_factory=list)
+    routing_decision: RoutingDecision | None = None
+    attempts: list[dict[str, Any]] = field(default_factory=list)
     total_time_ms: float = 0.0
-    final_result: Optional[DisposalResult] = None
+    final_result: DisposalResult | None = None
 
 
 class GenerationOrchestrator:
@@ -85,7 +80,7 @@ class GenerationOrchestrator:
             print(f"STEP file: {result.step_path}")
     """
 
-    def __init__(self, config: Optional[LLGenConfig] = None) -> None:
+    def __init__(self, config: LLGenConfig | None = None) -> None:
         self.config = config or LLGenConfig()
 
         self.router = GenerationRouter(self.config.routing)
@@ -97,8 +92,8 @@ class GenerationOrchestrator:
         )
 
         # Lazy-initialized proposers (created on first use)
-        self._cadquery_proposer: Optional[CadQueryProposer] = None
-        self._openscad_proposer: Optional[OpenSCADProposer] = None
+        self._cadquery_proposer: CadQueryProposer | None = None
+        self._openscad_proposer: OpenSCADProposer | None = None
 
         # Lazy-initialized neural generators (created on first use)
         self._vae_generator = None
@@ -113,9 +108,9 @@ class GenerationOrchestrator:
     def generate(
         self,
         prompt: str,
-        image_path: Optional[Path] = None,
-        force_route: Optional[GenerationRoute] = None,
-        max_retries: Optional[int] = None,
+        image_path: Path | None = None,
+        force_route: GenerationRoute | None = None,
+        max_retries: int | None = None,
         export: bool = True,
         render: bool = False,
     ) -> DisposalResult:
@@ -162,13 +157,15 @@ class GenerationOrchestrator:
         )
 
         # --- Step 2-4: Propose → Dispose → Retry loop ---
-        best_result: Optional[DisposalResult] = None
-        error_context: Optional[Dict[str, Any]] = None
+        best_result: DisposalResult | None = None
+        error_context: dict[str, Any] | None = None
 
         for attempt in range(1, retries + 1):
             _log.info(
                 "Attempt %d/%d (route=%s)",
-                attempt, retries, decision.route.value,
+                attempt,
+                retries,
+                decision.route.value,
             )
 
             # Generate proposal
@@ -182,11 +179,13 @@ class GenerationOrchestrator:
                 )
             except Exception as exc:
                 _log.error("Proposal generation failed: %s", exc)
-                history.attempts.append({
-                    "attempt": attempt,
-                    "error": str(exc),
-                    "stage": "propose",
-                })
+                history.attempts.append(
+                    {
+                        "attempt": attempt,
+                        "error": str(exc),
+                        "stage": "propose",
+                    }
+                )
                 continue
 
             # Single-pass dispose. The engine guards STEP/STL export
@@ -205,17 +204,19 @@ class GenerationOrchestrator:
                 render=render and is_final_attempt,
             )
 
-            history.attempts.append({
-                "attempt": attempt,
-                "proposal_id": proposal.proposal_id,
-                "proposal_type": type(proposal).__name__,
-                "is_valid": result.is_valid,
-                "reward_signal": result.reward_signal,
-                "error_category": (
-                    result.error_category.value if result.error_category else None
-                ),
-                "execution_time_ms": result.execution_time_ms,
-            })
+            history.attempts.append(
+                {
+                    "attempt": attempt,
+                    "proposal_id": proposal.proposal_id,
+                    "proposal_type": type(proposal).__name__,
+                    "is_valid": result.is_valid,
+                    "reward_signal": result.reward_signal,
+                    "error_category": (
+                        result.error_category.value if result.error_category else None
+                    ),
+                    "execution_time_ms": result.execution_time_ms,
+                }
+            )
 
             # Track best result (highest reward)
             if best_result is None or result.reward_signal > best_result.reward_signal:
@@ -225,15 +226,14 @@ class GenerationOrchestrator:
             if result.is_valid:
                 _log.info(
                     "Generation succeeded on attempt %d/%d",
-                    attempt, retries,
+                    attempt,
+                    retries,
                 )
                 break
 
             # Build feedback for next attempt
             if attempt < retries:
-                error_context = self._build_feedback(
-                    result, proposal, decision.route
-                )
+                error_context = self._build_feedback(result, proposal, decision.route)
                 _log.info(
                     "Building feedback for retry: %s",
                     result.error_category.value if result.error_category else "unknown",
@@ -274,9 +274,7 @@ class GenerationOrchestrator:
                 from ll_gen.pipeline.verification import VisualVerifier
 
                 verifier = VisualVerifier()
-                verification = verifier.verify(
-                    best_result.render_paths, prompt
-                )
+                verification = verifier.verify(best_result.render_paths, prompt)
                 if not verification.matches_intent:
                     _log.warning(
                         "Visual verification failed: %s",
@@ -296,7 +294,8 @@ class GenerationOrchestrator:
         if best_result is None:
             _log.error(
                 "All %d attempts failed for prompt: %s",
-                retries, prompt[:100],
+                retries,
+                prompt[:100],
             )
             best_result = DisposalResult(
                 error_message=f"All {retries} generation attempts failed.",
@@ -317,9 +316,9 @@ class GenerationOrchestrator:
         self,
         prompt: str,
         num_candidates: int = 3,
-        image_path: Optional[Path] = None,
-        force_route: Optional[GenerationRoute] = None,
-    ) -> List[DisposalResult]:
+        image_path: Path | None = None,
+        force_route: GenerationRoute | None = None,
+    ) -> list[DisposalResult]:
         """Generate multiple candidate shapes and return all results.
 
         Unlike ``generate()`` which retries on failure, this method
@@ -341,7 +340,7 @@ class GenerationOrchestrator:
             force_route=force_route,
         )
 
-        results: List[DisposalResult] = []
+        results: list[DisposalResult] = []
 
         for i in range(num_candidates):
             try:
@@ -373,8 +372,8 @@ class GenerationOrchestrator:
         self,
         route: GenerationRoute,
         prompt: str,
-        image_path: Optional[Path] = None,
-        error_context: Optional[Dict[str, Any]] = None,
+        image_path: Path | None = None,
+        error_context: dict[str, Any] | None = None,
         attempt: int = 1,
     ) -> BaseProposal:
         """Generate a proposal via the selected route.
@@ -399,13 +398,19 @@ class GenerationOrchestrator:
             return self._propose_openscad(prompt, image_path, error_context, attempt)
 
         elif route == GenerationRoute.NEURAL_VAE:
-            return self._propose_neural_vae(prompt, error_context, image_path=image_path)
+            return self._propose_neural_vae(
+                prompt, error_context, image_path=image_path
+            )
 
         elif route == GenerationRoute.NEURAL_DIFFUSION:
-            return self._propose_neural_diffusion(prompt, error_context, image_path=image_path)
+            return self._propose_neural_diffusion(
+                prompt, error_context, image_path=image_path
+            )
 
         elif route == GenerationRoute.NEURAL_VQVAE:
-            return self._propose_neural_vqvae(prompt, error_context, image_path=image_path)
+            return self._propose_neural_vqvae(
+                prompt, error_context, image_path=image_path
+            )
 
         else:
             raise RuntimeError(f"Unsupported generation route: {route}")
@@ -413,8 +418,8 @@ class GenerationOrchestrator:
     def _propose_cadquery(
         self,
         prompt: str,
-        image_path: Optional[Path],
-        error_context: Optional[Dict[str, Any]],
+        image_path: Path | None,
+        error_context: dict[str, Any] | None,
         attempt: int,
     ) -> CodeProposal:
         """Generate a CadQuery CodeProposal."""
@@ -430,8 +435,8 @@ class GenerationOrchestrator:
     def _propose_openscad(
         self,
         prompt: str,
-        image_path: Optional[Path],
-        error_context: Optional[Dict[str, Any]],
+        image_path: Path | None,
+        error_context: dict[str, Any] | None,
         attempt: int,
     ) -> CodeProposal:
         """Generate an OpenSCAD CodeProposal."""
@@ -447,8 +452,8 @@ class GenerationOrchestrator:
     def _propose_neural_vae(
         self,
         prompt: str,
-        error_context: Optional[Dict[str, Any]],
-        image_path: Optional[Path] = None,
+        error_context: dict[str, Any] | None,
+        image_path: Path | None = None,
     ) -> CommandSequenceProposal:
         """Generate a CommandSequenceProposal via VAE sampling."""
         if self._vae_generator is None:
@@ -456,11 +461,10 @@ class GenerationOrchestrator:
                 from ll_gen.generators.neural_vae import NeuralVAEGenerator
             except ImportError as exc:
                 raise RuntimeError(
-                    "ll_gen.generators requires ll_stepnet. "
-                    f"Import error: {exc}"
+                    "ll_gen.generators requires ll_stepnet. " f"Import error: {exc}"
                 ) from exc
 
-            gen_config = getattr(self.config, 'generators', None)
+            gen_config = getattr(self.config, "generators", None)
             self._vae_generator = NeuralVAEGenerator(
                 checkpoint_path=(
                     Path(gen_config.vae_checkpoint)
@@ -482,8 +486,8 @@ class GenerationOrchestrator:
     def _propose_neural_diffusion(
         self,
         prompt: str,
-        error_context: Optional[Dict[str, Any]],
-        image_path: Optional[Path] = None,
+        error_context: dict[str, Any] | None,
+        image_path: Path | None = None,
     ) -> LatentProposal:
         """Generate a LatentProposal via structured diffusion."""
         if self._diffusion_generator is None:
@@ -491,11 +495,10 @@ class GenerationOrchestrator:
                 from ll_gen.generators.neural_diffusion import NeuralDiffusionGenerator
             except ImportError as exc:
                 raise RuntimeError(
-                    "ll_gen.generators requires ll_stepnet. "
-                    f"Import error: {exc}"
+                    "ll_gen.generators requires ll_stepnet. " f"Import error: {exc}"
                 ) from exc
 
-            gen_config = getattr(self.config, 'generators', None)
+            gen_config = getattr(self.config, "generators", None)
             self._diffusion_generator = NeuralDiffusionGenerator(
                 checkpoint_path=(
                     Path(gen_config.diffusion_checkpoint)
@@ -519,8 +522,8 @@ class GenerationOrchestrator:
     def _propose_neural_vqvae(
         self,
         prompt: str,
-        error_context: Optional[Dict[str, Any]],
-        image_path: Optional[Path] = None,
+        error_context: dict[str, Any] | None,
+        image_path: Path | None = None,
     ) -> CommandSequenceProposal:
         """Generate a CommandSequenceProposal via VQ-VAE codebooks."""
         if self._vqvae_generator is None:
@@ -528,11 +531,10 @@ class GenerationOrchestrator:
                 from ll_gen.generators.neural_vqvae import NeuralVQVAEGenerator
             except ImportError as exc:
                 raise RuntimeError(
-                    "ll_gen.generators requires ll_stepnet. "
-                    f"Import error: {exc}"
+                    "ll_gen.generators requires ll_stepnet. " f"Import error: {exc}"
                 ) from exc
 
-            gen_config = getattr(self.config, 'generators', None)
+            gen_config = getattr(self.config, "generators", None)
             self._vqvae_generator = NeuralVQVAEGenerator(
                 checkpoint_path=(
                     Path(gen_config.vqvae_checkpoint)
@@ -541,9 +543,7 @@ class GenerationOrchestrator:
                 ),
                 device=self.config.device,
                 temperature=gen_config.default_temperature if gen_config else 0.7,
-                codebook_dim=(
-                    gen_config.vqvae_codebook_dim if gen_config else 512
-                ),
+                codebook_dim=(gen_config.vqvae_codebook_dim if gen_config else 512),
             )
 
         conditioning = self._get_conditioning(prompt, image_path=image_path)
@@ -553,7 +553,7 @@ class GenerationOrchestrator:
             error_context=error_context,
         )
 
-    def _get_conditioning(self, prompt: str, image_path: Optional[Path] = None):
+    def _get_conditioning(self, prompt: str, image_path: Path | None = None):
         """Get conditioning embeddings for the prompt.
 
         Lazy-initializes the MultiModalConditioner on first use.
@@ -570,7 +570,7 @@ class GenerationOrchestrator:
             if self._conditioner is None:
                 from ll_gen.conditioning.multimodal import MultiModalConditioner
 
-                cond_config = getattr(self.config, 'conditioning', None)
+                cond_config = getattr(self.config, "conditioning", None)
                 self._conditioner = MultiModalConditioner(
                     text_model=(
                         cond_config.text_model if cond_config else "bert-base-uncased"
@@ -600,7 +600,7 @@ class GenerationOrchestrator:
         result: DisposalResult,
         proposal: BaseProposal,
         route: GenerationRoute,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Build structured feedback for the next retry attempt.
 
         For code proposals: builds an LLM-readable error message.

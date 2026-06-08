@@ -13,13 +13,14 @@ Provides two verification strategies:
 The VLM approach is optional; dimensional checking is always available
 when a GeometryReport is present.
 """
+
 from __future__ import annotations
 
 import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from ll_gen.proposals.disposal_result import GeometryReport
 
@@ -42,9 +43,9 @@ class VerificationResult:
     matches_intent: bool = True
     confidence: float = 0.5
     method: str = "dimensional"
-    dimension_checks: List[Dict[str, Any]] = field(default_factory=list)
-    issues: List[str] = field(default_factory=list)
-    vlm_response: Optional[str] = None
+    dimension_checks: list[dict[str, Any]] = field(default_factory=list)
+    issues: list[str] = field(default_factory=list)
+    vlm_response: str | None = None
 
 
 class VisualVerifier:
@@ -71,7 +72,7 @@ class VisualVerifier:
     def __init__(
         self,
         dimension_tolerance: float = 0.15,
-        vlm_backend: Optional[str] = None,
+        vlm_backend: str | None = None,
     ) -> None:
         self.dimension_tolerance = dimension_tolerance
         self.vlm_backend = vlm_backend
@@ -80,9 +81,9 @@ class VisualVerifier:
 
     def verify(
         self,
-        render_paths: Optional[List[Path]] = None,
+        render_paths: list[Path] | None = None,
         prompt: str = "",
-        geometry_report: Optional[GeometryReport] = None,
+        geometry_report: GeometryReport | None = None,
     ) -> VerificationResult:
         """Run verification against the prompt.
 
@@ -98,7 +99,7 @@ class VisualVerifier:
             VerificationResult with pass/fail and details.
         """
         result = VerificationResult()
-        methods_used: List[str] = []
+        methods_used: list[str] = []
 
         # --- Dimensional verification ---
         if geometry_report is not None and prompt:
@@ -118,11 +119,7 @@ class VisualVerifier:
             methods_used.append("feature_count")
 
         # --- VLM verification ---
-        if (
-            self.vlm_backend is not None
-            and render_paths
-            and len(render_paths) > 0
-        ):
+        if self.vlm_backend is not None and render_paths and len(render_paths) > 0:
             try:
                 vlm_result = self._verify_vlm(render_paths, prompt)
                 result.vlm_response = vlm_result.get("response", "")
@@ -155,7 +152,7 @@ class VisualVerifier:
         self,
         prompt: str,
         report: GeometryReport,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Extract dimensions from the prompt and compare to geometry.
 
         Recognizes patterns like:
@@ -169,8 +166,8 @@ class VisualVerifier:
             Dict with "checks" (list of per-dim results) and
             "issues" (list of mismatch descriptions).
         """
-        checks: List[Dict[str, Any]] = []
-        issues: List[str] = []
+        checks: list[dict[str, Any]] = []
+        issues: list[str] = []
 
         if report.bounding_box is None:
             return {"checks": checks, "issues": issues}
@@ -187,13 +184,16 @@ class VisualVerifier:
             (r"(\d+(?:\.\d+)?)\s*(?:mm|cm|m|in)\s*(?:wide|width)", "width"),
             (r"(\d+(?:\.\d+)?)\s*(?:mm|cm|m|in)\s*(?:long|length)", "length"),
             (r"(\d+(?:\.\d+)?)\s*(?:mm|cm|m|in)\s*(?:tall|height|high)", "height"),
-            (r"(\d+(?:\.\d+)?)\s*(?:mm|cm|m|in)\s*(?:thick|thickness|deep|depth)", "thickness"),
+            (
+                r"(\d+(?:\.\d+)?)\s*(?:mm|cm|m|in)\s*(?:thick|thickness|deep|depth)",
+                "thickness",
+            ),
             (r"(?:wide|width)\s*(?:of\s*)?(\d+(?:\.\d+)?)\s*(?:mm|cm|m|in)", "width"),
             (r"(?:diameter|dia|ø)\s*(\d+(?:\.\d+)?)\s*(?:mm|cm|m|in)?", "diameter"),
             (r"(?:radius|r)\s*(\d+(?:\.\d+)?)\s*(?:mm|cm|m|in)?", "radius"),
         ]
 
-        extracted: List[Tuple[float, str]] = []
+        extracted: list[tuple[float, str]] = []
         for pattern, name in dim_patterns:
             for match in re.finditer(pattern, prompt, re.IGNORECASE):
                 value = float(match.group(1))
@@ -206,7 +206,9 @@ class VisualVerifier:
             prompt,
         )
         if multi_dim:
-            vals = [float(multi_dim.group(i)) for i in range(1, 4) if multi_dim.group(i)]
+            vals = [
+                float(multi_dim.group(i)) for i in range(1, 4) if multi_dim.group(i)
+            ]
             vals.sort(reverse=True)
             for val, actual in zip(vals, sorted_dims):
                 check = {
@@ -266,7 +268,7 @@ class VisualVerifier:
         self,
         prompt: str,
         report: GeometryReport,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Check feature counts mentioned in the prompt.
 
         Recognizes patterns like "4 bolt holes", "6 fins",
@@ -275,12 +277,10 @@ class VisualVerifier:
         Returns:
             Dict with "issues" list.
         """
-        issues: List[str] = []
+        issues: list[str] = []
 
         # Extract feature counts
-        hole_pattern = re.search(
-            r"(\d+)\s*(?:bolt\s*)?holes?", prompt, re.IGNORECASE
-        )
+        hole_pattern = re.search(r"(\d+)\s*(?:bolt\s*)?holes?", prompt, re.IGNORECASE)
         if hole_pattern:
             expected_holes = int(hole_pattern.group(1))
             # Each through-hole typically adds 2 cylindrical faces
@@ -302,9 +302,9 @@ class VisualVerifier:
 
     def _verify_vlm(
         self,
-        render_paths: List[Path],
+        render_paths: list[Path],
         prompt: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Use a vision-language model to verify the geometry.
 
         Supported backends:
@@ -324,9 +324,9 @@ class VisualVerifier:
 
     def _verify_clip(
         self,
-        render_paths: List[Path],
+        render_paths: list[Path],
         prompt: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """CLIP-based similarity between renders and text prompt.
 
         Computes cosine similarity between the CLIP text embedding
@@ -342,7 +342,9 @@ class VisualVerifier:
 
         if self._clip_model is None:
             self._clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
-            self._clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+            self._clip_processor = CLIPProcessor.from_pretrained(
+                "openai/clip-vit-base-patch32"
+            )
         model = self._clip_model
         processor = self._clip_processor
 
@@ -389,9 +391,9 @@ class VisualVerifier:
 
     def _verify_llm_vision(
         self,
-        render_paths: List[Path],
+        render_paths: list[Path],
         prompt: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """LLM-with-vision verification.
 
         Sends renders to an LLM (via cadling's ChatAgent) and asks
@@ -416,7 +418,7 @@ class VisualVerifier:
         # Create a temporary generator to use the ChatAgent
         gen = CadQueryGenerator()
         verification_prompt = (
-            f"I asked for: \"{prompt}\"\n\n"
+            f'I asked for: "{prompt}"\n\n'
             f"The attached image shows the generated 3D CAD geometry. "
             f"Does this shape match the description? Answer with:\n"
             f"- MATCH: if the shape reasonably matches\n"

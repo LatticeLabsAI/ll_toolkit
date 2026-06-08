@@ -4,6 +4,7 @@ Wraps ``ll_stepnet``'s ``ImageConditioner`` when available. Falls back to
 deterministic hash-based embeddings for reproducibility in testing without
 vision models installed.
 """
+
 from __future__ import annotations
 
 import hashlib

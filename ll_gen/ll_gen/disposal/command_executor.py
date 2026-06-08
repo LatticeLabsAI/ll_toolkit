@@ -3,6 +3,7 @@
 This module provides functionality to execute command sequences and produce TopoDS_Shape
 geometry through sketch->extrude->boolean operations.
 """
+
 from __future__ import annotations
 
 import logging
@@ -13,25 +14,33 @@ from ll_gen.proposals.command_proposal import CommandSequenceProposal
 # Lazy imports for OCC
 _OCC_AVAILABLE = False
 try:
-    from OCC.Core.gp import gp_Ax2, gp_Circ, gp_Pnt, gp_Pnt2d, gp_Dir, gp_Vec
-    from OCC.Core.GC import GC_MakeArcOfCircle
+    from OCC.Core.BRepAlgoAPI import (
+        BRepAlgoAPI_Common,
+        BRepAlgoAPI_Cut,
+        BRepAlgoAPI_Fuse,
+    )
     from OCC.Core.BRepBuilderAPI import (
         BRepBuilderAPI_MakeEdge,
-        BRepBuilderAPI_MakeWire,
         BRepBuilderAPI_MakeFace,
+        BRepBuilderAPI_MakeWire,
     )
     from OCC.Core.BRepPrimAPI import BRepPrimAPI_MakePrism
-    from OCC.Core.BRepAlgoAPI import (
-        BRepAlgoAPI_Fuse,
-        BRepAlgoAPI_Cut,
-        BRepAlgoAPI_Common,
+    from OCC.Core.GC import GC_MakeArcOfCircle
+    from OCC.Core.Geom2d import Geom2d_TrimmedCurve  # noqa: F401
+    from OCC.Core.Geom2dAPI import Geom2dAPI_PointsToBSpline  # noqa: F401
+    from OCC.Core.GeomAbs import GeomAbs_C2  # noqa: F401
+    from OCC.Core.GeomAPI import GeomAPI_PointsToBSpline  # noqa: F401
+    from OCC.Core.gp import (  # noqa: F401
+        gp_Ax2,
+        gp_Circ,
+        gp_Dir,
+        gp_Pnt,
+        gp_Pnt2d,
+        gp_Vec,
     )
+    from OCC.Core.TColgp import TColgp_HArray1OfPnt2d  # noqa: F401
     from OCC.Core.TopoDS import TopoDS_Shape
-    from OCC.Core.GeomAPI import GeomAPI_PointsToBSpline
-    from OCC.Core.TColgp import TColgp_HArray1OfPnt2d
-    from OCC.Core.GeomAbs import GeomAbs_C2
-    from OCC.Core.Geom2dAPI import Geom2dAPI_PointsToBSpline
-    from OCC.Core.Geom2d import Geom2d_TrimmedCurve
+
     _OCC_AVAILABLE = True
 except ImportError:
     pass
@@ -41,7 +50,10 @@ _CADLING_EXECUTOR_AVAILABLE = False
 _cadling_executor = None
 CadlingCommandExecutor = None  # sentinel for unittest.mock.patch
 try:
-    from cadling.generation.reconstruction.command_executor import CommandExecutor as CadlingCommandExecutor
+    from cadling.generation.reconstruction.command_executor import (
+        CommandExecutor as CadlingCommandExecutor,
+    )
+
     _CADLING_EXECUTOR_AVAILABLE = True
 except ImportError:
     pass
@@ -76,43 +88,43 @@ def execute_command_proposal(proposal: CommandSequenceProposal) -> Any:
             _log.warning(
                 f"Cadling executor failed, falling back to standalone execution: {e}"
             )
-    
+
     # Standalone execution path
     if not _OCC_AVAILABLE:
         raise RuntimeError(
             "OCC libraries are not available. Cannot execute command proposal. "
             "Install python-occ to enable geometry execution."
         )
-    
+
     _log.debug("Using standalone execution path")
-    
+
     # Dequantize to get continuous parameters
     try:
         commands = proposal.dequantize()
     except Exception as e:
         _log.error(f"Failed to dequantize proposal: {e}")
         raise RuntimeError(f"Failed to dequantize command proposal: {e}") from e
-    
+
     # Extract sketch groups
     try:
         sketch_groups = _extract_sketch_groups(commands)
     except Exception as e:
         _log.error(f"Failed to extract sketch groups: {e}")
         raise RuntimeError(f"Failed to extract sketch groups: {e}") from e
-    
+
     # Execute sketch groups and accumulate results
     current_shape = None
     execution_step = 0
-    
+
     for group_idx, group in enumerate(sketch_groups):
         try:
             group_shape = _execute_sketch_group(group, execution_step)
             execution_step += len(group)
-            
+
             if group_shape is None:
                 _log.warning(f"Sketch group {group_idx} produced no geometry")
                 continue
-            
+
             if current_shape is None:
                 current_shape = group_shape
                 _log.debug(f"Initialized base shape from sketch group {group_idx}")
@@ -121,9 +133,7 @@ def execute_command_proposal(proposal: CommandSequenceProposal) -> Any:
                 current_shape = _apply_boolean_operation(
                     current_shape, group_shape, group
                 )
-                _log.debug(
-                    f"Applied boolean operation after sketch group {group_idx}"
-                )
+                _log.debug(f"Applied boolean operation after sketch group {group_idx}")
         except Exception as e:
             _log.error(
                 f"Error executing sketch group {group_idx} at step {execution_step}: {e}"
@@ -131,16 +141,18 @@ def execute_command_proposal(proposal: CommandSequenceProposal) -> Any:
             raise RuntimeError(
                 f"Error executing sketch group {group_idx} at step {execution_step}: {e}"
             ) from e
-    
+
     if current_shape is None:
         _log.error("No valid geometry generated from command sequence")
         raise RuntimeError("No valid geometry generated from command sequence")
-    
+
     _log.info("Successfully executed command proposal")
     return current_shape
 
 
-def _extract_sketch_groups(commands: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+def _extract_sketch_groups(
+    commands: list[dict[str, Any]],
+) -> list[list[dict[str, Any]]]:
     """Group commands by sketch loops.
 
     Commands are organized between SOL (Start Of Loop) markers. Each group
@@ -154,10 +166,10 @@ def _extract_sketch_groups(commands: list[dict[str, Any]]) -> list[list[dict[str
     """
     groups = []
     current_group = []
-    
+
     for cmd in commands:
         cmd_type = cmd.get("type", "")
-        
+
         if cmd_type == "SOL":
             # Start a new group
             if current_group:
@@ -165,16 +177,16 @@ def _extract_sketch_groups(commands: list[dict[str, Any]]) -> list[list[dict[str
             current_group = [cmd]
         else:
             current_group.append(cmd)
-            
+
             # EOL marks the end of a sketch group
             if cmd_type == "EOL":
                 groups.append(current_group)
                 current_group = []
-    
+
     # Add any remaining commands
     if current_group:
         groups.append(current_group)
-    
+
     _log.debug(f"Extracted {len(groups)} sketch groups from {len(commands)} commands")
     return groups
 
@@ -203,33 +215,33 @@ def _execute_sketch_group(
     if not group:
         _log.warning("Empty sketch group")
         return None
-    
+
     # Separate sketch commands and extrude command
     sketch_commands = []
     extrude_command = None
-    
+
     for cmd in group:
         cmd_type = cmd.get("type", "")
         if cmd_type == "EXTRUDE":
             extrude_command = cmd
         elif cmd_type != "SOL" and cmd_type != "EOL":
             sketch_commands.append(cmd)
-    
+
     if not sketch_commands:
         _log.warning("No sketch commands in group")
         return None
-    
+
     # Build sketch face from commands
     try:
         sketch_face = _build_sketch_face(sketch_commands, step_offset)
     except Exception as e:
         _log.error(f"Failed to build sketch face: {e}")
         raise RuntimeError(f"Failed to build sketch face: {e}") from e
-    
+
     if sketch_face is None:
         _log.warning("Failed to create valid sketch face")
         return None
-    
+
     # Extrude if extrude command exists
     if extrude_command:
         try:
@@ -259,11 +271,11 @@ def _build_sketch_face(
         RuntimeError: If edge or wire creation fails.
     """
     edges = []
-    
+
     for step_idx, cmd in enumerate(sketch_commands):
         cmd_type = cmd.get("type", "")
         params = cmd.get("params", {})
-        
+
         try:
             if cmd_type == "LINE":
                 edge = _create_line_edge(params)
@@ -274,7 +286,7 @@ def _build_sketch_face(
             else:
                 _log.warning(f"Unknown sketch command type: {cmd_type}")
                 continue
-            
+
             if edge is not None:
                 edges.append(edge)
             else:
@@ -288,35 +300,35 @@ def _build_sketch_face(
             raise RuntimeError(
                 f"Error creating {cmd_type} edge at step {step_offset + step_idx}: {e}"
             ) from e
-    
+
     if not edges:
         _log.warning("No valid edges created for sketch")
         return None
-    
+
     # Create wire from edges
     try:
         wire_maker = BRepBuilderAPI_MakeWire()
         for edge in edges:
             wire_maker.Add(edge)
-        
+
         if not wire_maker.IsDone():
             _log.error("Failed to create wire from edges")
             return None
-        
+
         wire = wire_maker.Wire()
         _log.debug(f"Created wire with {len(edges)} edges")
     except Exception as e:
         _log.error(f"Error creating wire: {e}")
         raise RuntimeError(f"Error creating wire: {e}") from e
-    
+
     # Create face from wire
     try:
         face_maker = BRepBuilderAPI_MakeFace(wire, False)
-        
+
         if not face_maker.IsDone():
             _log.error("Failed to create face from wire")
             return None
-        
+
         face = face_maker.Face()
         _log.debug("Created face from wire")
         return face
@@ -339,16 +351,18 @@ def _create_line_edge(params: dict[str, Any]) -> TopoDS_Shape | None:
         y1 = float(params.get("y1", 0.0))
         x2 = float(params.get("x2", 0.0))
         y2 = float(params.get("y2", 0.0))
-        
+
         p1 = gp_Pnt(x1, y1, 0.0)
         p2 = gp_Pnt(x2, y2, 0.0)
-        
+
         edge_maker = BRepBuilderAPI_MakeEdge(p1, p2)
-        
+
         if not edge_maker.IsDone():
-            _log.warning(f"Failed to create line edge from ({x1}, {y1}) to ({x2}, {y2})")
+            _log.warning(
+                f"Failed to create line edge from ({x1}, {y1}) to ({x2}, {y2})"
+            )
             return None
-        
+
         edge = edge_maker.Edge()
         _log.debug(f"Created line edge from ({x1}, {y1}) to ({x2}, {y2})")
         return edge
@@ -377,7 +391,7 @@ def _create_arc_edge(params: dict[str, Any]) -> TopoDS_Shape | None:
         y_mid = float(params.get("y_mid", 0.0))
         x_end = float(params.get("x_end", 0.0))
         y_end = float(params.get("y_end", 0.0))
-        
+
         p_start = gp_Pnt(x_start, y_start, 0.0)
         p_mid = gp_Pnt(x_mid, y_mid, 0.0)
         p_end = gp_Pnt(x_end, y_end, 0.0)
@@ -426,22 +440,24 @@ def _create_circle_edge(params: dict[str, Any]) -> TopoDS_Shape | None:
         cx = float(params.get("cx", 0.0))
         cy = float(params.get("cy", 0.0))
         r = float(params.get("r", 1.0))
-        
+
         if r <= 0:
             _log.warning(f"Invalid circle radius: {r}")
             return None
-        
+
         # Create 3D circle on XY plane at the given center
         axis = gp_Ax2(gp_Pnt(cx, cy, 0.0), gp_Dir(0, 0, 1))
         circle = gp_Circ(axis, r)
 
         # Create circle edge
         edge_maker = BRepBuilderAPI_MakeEdge(circle)
-        
+
         if not edge_maker.IsDone():
-            _log.warning(f"Failed to create circle edge at ({cx}, {cy}) with radius {r}")
+            _log.warning(
+                f"Failed to create circle edge at ({cx}, {cy}) with radius {r}"
+            )
             return None
-        
+
         edge = edge_maker.Edge()
         _log.debug(f"Created circle edge at ({cx}, {cy}) with radius {r}")
         return edge
@@ -471,12 +487,12 @@ def _extrude_sketch(
     """
     try:
         params = extrude_command.get("params", {})
-        
+
         dx = float(params.get("dx", 0.0))
         dy = float(params.get("dy", 0.0))
         dz = float(params.get("dz", 1.0))
         extent = float(params.get("extent", 1.0))
-        
+
         # Normalize direction vector
         magnitude = (dx * dx + dy * dy + dz * dz) ** 0.5
         if magnitude == 0:
@@ -484,18 +500,17 @@ def _extrude_sketch(
             direction = gp_Vec(0, 0, 1)
         else:
             direction = gp_Vec(dx / magnitude, dy / magnitude, dz / magnitude)
-        
+
         # Apply extrusion
         prism_maker = BRepPrimAPI_MakePrism(sketch_face, direction * extent)
-        
+
         if not prism_maker.IsDone():
             _log.error("Failed to create prism")
             raise RuntimeError("Failed to create prism from sketch")
-        
+
         extruded_shape = prism_maker.Shape()
         _log.debug(
-            f"Extruded sketch with direction ({dx}, {dy}, {dz}) "
-            f"and extent {extent}"
+            f"Extruded sketch with direction ({dx}, {dy}, {dz}) " f"and extent {extent}"
         )
         return extruded_shape
     except Exception as e:
@@ -535,11 +550,11 @@ def _apply_boolean_operation(
             if cmd.get("type") == "EXTRUDE":
                 extrude_command = cmd
                 break
-        
+
         if extrude_command is None:
             _log.warning("No extrude command found for boolean operation")
             return base_shape
-        
+
         # Extract operation type from parameters
         parameters = extrude_command.get("params", [])
 
@@ -552,7 +567,7 @@ def _apply_boolean_operation(
         else:
             _log.warning("Boolean operation type not found, defaulting to union")
             operation_type = 1
-        
+
         if operation_type == 0:
             # New: return tool shape
             _log.debug("Boolean operation: New (return tool shape)")
@@ -582,7 +597,9 @@ def _apply_boolean_operation(
                 raise RuntimeError("Failed to create intersection")
             return intersect_maker.Shape()
         else:
-            _log.warning(f"Unknown boolean operation type: {operation_type}, defaulting to union")
+            _log.warning(
+                f"Unknown boolean operation type: {operation_type}, defaulting to union"
+            )
             union_maker = BRepAlgoAPI_Fuse(base_shape, tool_shape)
             if not union_maker.IsDone():
                 raise RuntimeError("Failed to create union as fallback")

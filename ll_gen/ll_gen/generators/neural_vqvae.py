@@ -3,6 +3,7 @@
 Generates command sequences from quantized codebook-based VAE, with
 support for selective codebook re-sampling on retries.
 """
+
 from __future__ import annotations
 
 import logging
@@ -126,7 +127,9 @@ class NeuralVQVAEGenerator(BaseNeuralGenerator):
             _log.warning("VQ-VAE pipeline returned empty result")
             return CommandSequenceProposal(
                 source_prompt=prompt,
-                conditioning_source=conditioning.source_type if conditioning else "unconditional",
+                conditioning_source=(
+                    conditioning.source_type if conditioning else "unconditional"
+                ),
                 confidence=0.0,
                 generation_metadata=self._build_metadata("VQVAE", temperature=temp),
                 error_context=error_context,
@@ -141,7 +144,9 @@ class NeuralVQVAEGenerator(BaseNeuralGenerator):
             token_ids=token_ids,
             command_dicts=command_dicts,
             source_prompt=prompt,
-            conditioning_source=conditioning.source_type if conditioning else "unconditional",
+            conditioning_source=(
+                conditioning.source_type if conditioning else "unconditional"
+            ),
             confidence=confidence,
             generation_metadata=self._build_metadata(
                 "VQVAE",
@@ -200,24 +205,27 @@ class NeuralVQVAEGenerator(BaseNeuralGenerator):
         ) -> torch.Tensor:
             """Sample from one AR decoder, accumulating log-probs."""
             generated = torch.full(
-                (1, 1), decoder.bos_token_id,
-                dtype=torch.long, device=device,
+                (1, 1),
+                decoder.bos_token_id,
+                dtype=torch.long,
+                device=device,
             )
             for _step in range(max_codes):
-                logits = decoder(generated)               # (1, cur_len, vocab)
+                logits = decoder(generated)  # (1, cur_len, vocab)
                 next_logits = logits[:, -1, :] / max(temp, 1e-8)  # (1, vocab)
 
                 dist = torch.distributions.Categorical(logits=next_logits[0])
-                next_token = dist.sample()                # scalar
+                next_token = dist.sample()  # scalar
 
                 log_probs_accum.append(dist.log_prob(next_token))
                 entropy_accum.append(dist.entropy())
 
                 generated = torch.cat(
-                    [generated, next_token.view(1, 1)], dim=1,
+                    [generated, next_token.view(1, 1)],
+                    dim=1,
                 )
             # Strip BOS, keep generated codes
-            return generated[:, 1:]                       # (1, max_codes)
+            return generated[:, 1:]  # (1, max_codes)
 
         from stepnet.vqvae import DisentangledCodebooks
 
@@ -236,18 +244,23 @@ class NeuralVQVAEGenerator(BaseNeuralGenerator):
 
         # Clamp to valid codebook range
         topo_codes = topo_codes.clamp(
-            0, self._model.codebooks.topology_codebook.num_embeddings - 1,
+            0,
+            self._model.codebooks.topology_codebook.num_embeddings - 1,
         )
         geom_codes = geom_codes.clamp(
-            0, self._model.codebooks.geometry_codebook.num_embeddings - 1,
+            0,
+            self._model.codebooks.geometry_codebook.num_embeddings - 1,
         )
         extr_codes = extr_codes.clamp(
-            0, self._model.codebooks.extrusion_codebook.num_embeddings - 1,
+            0,
+            self._model.codebooks.extrusion_codebook.num_embeddings - 1,
         )
 
         # --- Deterministic decode: codes → features → command/param logits ---
         reconstructed = self._model.decode_from_codes(
-            topo_codes, geom_codes, extr_codes,
+            topo_codes,
+            geom_codes,
+            extr_codes,
         )
         # Expand to seq dim for projection: [B, D] → [B, 1, D]
         if reconstructed.dim() == 2:
@@ -261,7 +274,9 @@ class NeuralVQVAEGenerator(BaseNeuralGenerator):
         cmd_logits_2d = command_logits[0]  # [S, C]
         param_logits_2d = [pl[0] for pl in param_logits]  # 16 × [S, P]
         token_ids = self._logits_to_token_ids(
-            cmd_logits_2d.unsqueeze(0), param_logits_2d, max_seq_len=self.max_seq_len,
+            cmd_logits_2d.unsqueeze(0),
+            param_logits_2d,
+            max_seq_len=self.max_seq_len,
         )
 
         # --- Aggregate log-probs and entropy ---
@@ -269,24 +284,31 @@ class NeuralVQVAEGenerator(BaseNeuralGenerator):
         entropy_value = 0.0
         if log_probs_accum:
             total_log_prob = torch.stack(log_probs_accum).sum()
-            entropy_value = float(
-                torch.stack(entropy_accum).mean().detach().cpu()
-            )
+            entropy_value = float(torch.stack(entropy_accum).mean().detach().cpu())
 
         # Codebook indices for metadata
-        codebook_indices = torch.cat(
-            [topo_codes, geom_codes, extr_codes], dim=-1,
-        ).detach().cpu().numpy()
+        codebook_indices = (
+            torch.cat(
+                [topo_codes, geom_codes, extr_codes],
+                dim=-1,
+            )
+            .detach()
+            .cpu()
+            .numpy()
+        )
 
         confidence = self._compute_confidence(
-            command_logits.detach(), [pl.detach() for pl in param_logits_2d],
+            command_logits.detach(),
+            [pl.detach() for pl in param_logits_2d],
         )
 
         return CommandSequenceProposal(
             token_ids=token_ids,
             command_dicts=[],
             source_prompt=prompt,
-            conditioning_source=conditioning.source_type if conditioning else "unconditional",
+            conditioning_source=(
+                conditioning.source_type if conditioning else "unconditional"
+            ),
             confidence=confidence,
             generation_metadata=self._build_metadata(
                 "VQVAE",
@@ -337,7 +359,9 @@ class NeuralVQVAEGenerator(BaseNeuralGenerator):
                 token_ids=token_ids,
                 command_dicts=command_dicts,
                 source_prompt=prompt,
-                conditioning_source=conditioning.source_type if conditioning else "unconditional",
+                conditioning_source=(
+                    conditioning.source_type if conditioning else "unconditional"
+                ),
                 confidence=confidence,
                 generation_metadata=self._build_metadata(
                     "VQVAE",
@@ -391,7 +415,9 @@ class NeuralVQVAEGenerator(BaseNeuralGenerator):
                 temperature=self.temperature * 0.9,
             )
         else:
-            _log.warning("Pipeline does not support masked sampling; standard re-generation")
+            _log.warning(
+                "Pipeline does not support masked sampling; standard re-generation"
+            )
             result_list = self._pipeline.generate(
                 num_samples=1,
                 temperature=self.temperature * 0.9,

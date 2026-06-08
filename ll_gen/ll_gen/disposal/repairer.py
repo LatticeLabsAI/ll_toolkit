@@ -12,11 +12,12 @@ automatically repair common topological and geometric defects:
 For boolean failures, the repairer also retries the failing
 boolean with escalating fuzzy tolerance via ``BOPAlgo_PaveFiller``.
 """
+
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any, List, Optional
+from typing import Any
 
 from ll_gen.config import DisposalConfig, ErrorCategory
 from ll_gen.disposal.validator import ValidationReport, validate_shape
@@ -26,7 +27,9 @@ _log = logging.getLogger(__name__)
 
 _OCC_AVAILABLE = False
 try:
-    from OCC.Core.BRep import BRep_Builder
+    from OCC.Core.BRep import BRep_Builder  # noqa: F401
+    from OCC.Core.ShapeBuild import ShapeBuild_ReShape
+    from OCC.Core.ShapeExtend import ShapeExtend_DONE4
     from OCC.Core.ShapeFix import (
         ShapeFix_Face,
         ShapeFix_Shape,
@@ -34,11 +37,14 @@ try:
         ShapeFix_Solid,
         ShapeFix_Wire,
     )
-    from OCC.Core.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_SHELL, TopAbs_WIRE
+    from OCC.Core.TopAbs import (  # noqa: F401
+        TopAbs_EDGE,
+        TopAbs_FACE,
+        TopAbs_SHELL,
+        TopAbs_WIRE,
+    )
     from OCC.Core.TopExp import TopExp_Explorer
-    from OCC.Core.TopoDS import TopoDS_Shape, topods
-    from OCC.Core.ShapeBuild import ShapeBuild_ReShape
-    from OCC.Core.ShapeExtend import ShapeExtend_DONE4
+    from OCC.Core.TopoDS import TopoDS_Shape, topods  # noqa: F401
 
     _OCC_AVAILABLE = True
 except ImportError:
@@ -58,14 +64,14 @@ class RepairResult:
 
     shape: Any = None
     succeeded: bool = False
-    actions: List[RepairAction] = field(default_factory=list)
-    validation_after: Optional[ValidationReport] = None
+    actions: list[RepairAction] = field(default_factory=list)
+    validation_after: ValidationReport | None = None
 
 
 def repair_shape(
     shape: Any,
     validation_report: ValidationReport,
-    config: Optional[DisposalConfig] = None,
+    config: DisposalConfig | None = None,
 ) -> RepairResult:
     """Attempt deterministic repair of a shape.
 
@@ -117,31 +123,25 @@ def repair_shape(
         _log.info("Repair pass %d/%d", pass_num + 1, config.max_repair_passes)
 
         # --- ShapeFix_Shape (general) ---
-        current_shape, action = _apply_shapefix_shape(
-            current_shape, config
-        )
+        current_shape, action = _apply_shapefix_shape(current_shape, config)
         result.actions.append(action)
 
         # --- Wire-level fixes ---
-        if (ErrorCategory.TOPOLOGY_ERROR in error_categories
-                or ErrorCategory.DEGENERATE_SHAPE in error_categories):
-            current_shape, wire_actions = _apply_wire_fixes(
-                current_shape, config
-            )
+        if (
+            ErrorCategory.TOPOLOGY_ERROR in error_categories
+            or ErrorCategory.DEGENERATE_SHAPE in error_categories
+        ):
+            current_shape, wire_actions = _apply_wire_fixes(current_shape, config)
             result.actions.extend(wire_actions)
 
         # --- Face-level fixes ---
         if ErrorCategory.TOPOLOGY_ERROR in error_categories:
-            current_shape, face_actions = _apply_face_fixes(
-                current_shape, config
-            )
+            current_shape, face_actions = _apply_face_fixes(current_shape, config)
             result.actions.extend(face_actions)
 
         # --- Shell-level fixes ---
         if ErrorCategory.TOPOLOGY_ERROR in error_categories:
-            current_shape, shell_actions = _apply_shell_fixes(
-                current_shape, config
-            )
+            current_shape, shell_actions = _apply_shell_fixes(current_shape, config)
             result.actions.extend(shell_actions)
 
         # --- Solid-level fixes ---
@@ -165,9 +165,7 @@ def repair_shape(
     # --- Boolean tolerance escalation (last resort) ---
     if ErrorCategory.BOOLEAN_FAILURE in error_categories:
         for tol in config.fuzzy_tolerance_steps:
-            current_shape, fuzzy_action = _apply_fuzzy_boolean_retry(
-                current_shape, tol
-            )
+            current_shape, fuzzy_action = _apply_fuzzy_boolean_retry(current_shape, tol)
             result.actions.append(fuzzy_action)
 
             new_report = validate_shape(current_shape, config)
@@ -189,6 +187,7 @@ def repair_shape(
 # ---------------------------------------------------------------------------
 # Individual repair tools
 # ---------------------------------------------------------------------------
+
 
 def _apply_shapefix_shape(
     shape: Any,
@@ -241,7 +240,7 @@ def _apply_wire_fixes(
     Returns:
         (repaired_shape, list of RepairActions)
     """
-    actions: List[RepairAction] = []
+    actions: list[RepairAction] = []
     reshaper = ShapeBuild_ReShape()
     wire_explorer = TopExp_Explorer(shape, TopAbs_WIRE)
     wires_fixed = 0
@@ -281,13 +280,15 @@ def _apply_wire_fixes(
     result = reshaper.Apply(shape)
 
     if wires_fixed > 0:
-        actions.append(RepairAction(
-            tool="ShapeFix_Wire",
-            action=f"Fixed {wires_fixed} wire issues (reorder, small, connected, degenerated)",
-            status="done",
-            tolerance_used=config.shapefix_precision,
-            entities_affected=wires_fixed,
-        ))
+        actions.append(
+            RepairAction(
+                tool="ShapeFix_Wire",
+                action=f"Fixed {wires_fixed} wire issues (reorder, small, connected, degenerated)",
+                status="done",
+                tolerance_used=config.shapefix_precision,
+                entities_affected=wires_fixed,
+            )
+        )
 
     return result, actions
 
@@ -306,7 +307,7 @@ def _apply_face_fixes(
     Returns:
         (repaired_shape, list of RepairActions)
     """
-    actions: List[RepairAction] = []
+    actions: list[RepairAction] = []
     reshaper = ShapeBuild_ReShape()
     face_explorer = TopExp_Explorer(shape, TopAbs_FACE)
     faces_fixed = 0
@@ -334,13 +335,15 @@ def _apply_face_fixes(
     result = reshaper.Apply(shape)
 
     if faces_fixed > 0:
-        actions.append(RepairAction(
-            tool="ShapeFix_Face",
-            action=f"Fixed {faces_fixed} face issues (orientation, bounds)",
-            status="done",
-            tolerance_used=config.shapefix_precision,
-            entities_affected=faces_fixed,
-        ))
+        actions.append(
+            RepairAction(
+                tool="ShapeFix_Face",
+                action=f"Fixed {faces_fixed} face issues (orientation, bounds)",
+                status="done",
+                tolerance_used=config.shapefix_precision,
+                entities_affected=faces_fixed,
+            )
+        )
 
     return result, actions
 
@@ -358,7 +361,7 @@ def _apply_shell_fixes(
     Returns:
         (repaired_shape, list of RepairActions)
     """
-    actions: List[RepairAction] = []
+    actions: list[RepairAction] = []
     reshaper = ShapeBuild_ReShape()
     shell_explorer = TopExp_Explorer(shape, TopAbs_SHELL)
     shells_fixed = 0
@@ -383,13 +386,15 @@ def _apply_shell_fixes(
     result = reshaper.Apply(shape)
 
     if shells_fixed > 0:
-        actions.append(RepairAction(
-            tool="ShapeFix_Shell",
-            action=f"Fixed {shells_fixed} shell orientation issues",
-            status="done",
-            tolerance_used=config.shapefix_precision,
-            entities_affected=shells_fixed,
-        ))
+        actions.append(
+            RepairAction(
+                tool="ShapeFix_Shell",
+                action=f"Fixed {shells_fixed} shell orientation issues",
+                status="done",
+                tolerance_used=config.shapefix_precision,
+                entities_affected=shells_fixed,
+            )
+        )
 
     return result, actions
 

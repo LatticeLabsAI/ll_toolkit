@@ -3,6 +3,7 @@
 Generates command sequences from VAE latent space, with support for
 error-aware latent perturbation on retries.
 """
+
 from __future__ import annotations
 
 import logging
@@ -124,7 +125,9 @@ class NeuralVAEGenerator(BaseNeuralGenerator):
             _log.warning("VAE pipeline returned empty result")
             return CommandSequenceProposal(
                 source_prompt=prompt,
-                conditioning_source=conditioning.source_type if conditioning else "unconditional",
+                conditioning_source=(
+                    conditioning.source_type if conditioning else "unconditional"
+                ),
                 confidence=0.0,
                 generation_metadata=self._build_metadata("STEPVAE", temperature=temp),
                 error_context=error_context,
@@ -139,7 +142,9 @@ class NeuralVAEGenerator(BaseNeuralGenerator):
             token_ids=token_ids,
             command_dicts=command_dicts,
             source_prompt=prompt,
-            conditioning_source=conditioning.source_type if conditioning else "unconditional",
+            conditioning_source=(
+                conditioning.source_type if conditioning else "unconditional"
+            ),
             confidence=confidence,
             generation_metadata=self._build_metadata("STEPVAE", temperature=temp),
             latent_vector=latent_vector,
@@ -191,14 +196,14 @@ class NeuralVAEGenerator(BaseNeuralGenerator):
         self._model.last_latent = z
 
         hidden = self._model.decode(z, seq_len=self.max_seq_len)
-        command_logits = self._model.command_head(hidden)       # [1, S, C]
+        command_logits = self._model.command_head(hidden)  # [1, S, C]
         param_logits = [
-            head(hidden) for head in self._model.param_heads    # 16 × [1, S, P]
+            head(hidden) for head in self._model.param_heads  # 16 × [1, S, P]
         ]
 
         # Strip batch dim → [S, C] and [S, P] respectively
         command_logits = command_logits[0]
-        param_logits_2d = [pl[0] for pl in param_logits]        # 16 × [S, P]
+        param_logits_2d = [pl[0] for pl in param_logits]  # 16 × [S, P]
 
         # --- Single-pass sampling + log-prob accumulation ---
         from ll_gen.generators.base import (
@@ -206,8 +211,6 @@ class NeuralVAEGenerator(BaseNeuralGenerator):
             CMD_TOKEN_MAP,
             EOS_CMD_TOKEN_ID,
             EOS_TOKEN_ID,
-            PARAM_OFFSET,
-            PARAMETER_MASKS,
         )
 
         seq_len = min(command_logits.shape[0], self.max_seq_len)
@@ -217,7 +220,7 @@ class NeuralVAEGenerator(BaseNeuralGenerator):
 
         for pos in range(seq_len):
             cmd_logits_pos = command_logits[pos] / max(temp, 1e-8)
-            cmd_log_probs = functional.log_softmax(cmd_logits_pos, dim=-1)
+            functional.log_softmax(cmd_logits_pos, dim=-1)
 
             # Sample command type (single draw)
             cmd_dist = torch.distributions.Categorical(logits=cmd_logits_pos)
@@ -238,8 +241,13 @@ class NeuralVAEGenerator(BaseNeuralGenerator):
 
             # Sample parameters from the SAME logits (single draw each)
             self._sample_params_with_log_probs(
-                param_logits_2d, pos, cmd_type, temp,
-                token_ids, log_probs_accum, entropy_accum,
+                param_logits_2d,
+                pos,
+                cmd_type,
+                temp,
+                token_ids,
+                log_probs_accum,
+                entropy_accum,
             )
 
         if token_ids[-1] not in (EOS_TOKEN_ID, EOS_CMD_TOKEN_ID):
@@ -249,9 +257,7 @@ class NeuralVAEGenerator(BaseNeuralGenerator):
         entropy_value = 0.0
         if log_probs_accum:
             total_log_prob = torch.stack(log_probs_accum).sum()
-            entropy_value = float(
-                torch.stack(entropy_accum).mean().detach().cpu()
-            )
+            entropy_value = float(torch.stack(entropy_accum).mean().detach().cpu())
 
         # Extract latent vector for metadata
         latent_vector: np.ndarray | None = z.detach().cpu().numpy()
@@ -265,7 +271,9 @@ class NeuralVAEGenerator(BaseNeuralGenerator):
             token_ids=token_ids,
             command_dicts=[],
             source_prompt=prompt,
-            conditioning_source=conditioning.source_type if conditioning else "unconditional",
+            conditioning_source=(
+                conditioning.source_type if conditioning else "unconditional"
+            ),
             confidence=confidence,
             generation_metadata=self._build_metadata("STEPVAE", temperature=temp),
             latent_vector=latent_vector,
@@ -315,7 +323,9 @@ class NeuralVAEGenerator(BaseNeuralGenerator):
                 token_ids=token_ids,
                 command_dicts=command_dicts,
                 source_prompt=prompt,
-                conditioning_source=conditioning.source_type if conditioning else "unconditional",
+                conditioning_source=(
+                    conditioning.source_type if conditioning else "unconditional"
+                ),
                 confidence=confidence,
                 generation_metadata=self._build_metadata(
                     "STEPVAE",
@@ -393,15 +403,21 @@ class NeuralVAEGenerator(BaseNeuralGenerator):
         try:
             import torch as torch_mod
 
-            latent_tensor = torch_mod.from_numpy(
-                perturbed_latent.astype(np.float32)
-            ).unsqueeze(0).to(self.device)
+            latent_tensor = (
+                torch_mod.from_numpy(perturbed_latent.astype(np.float32))
+                .unsqueeze(0)
+                .to(self.device)
+            )
 
             with torch_mod.no_grad():
                 output = self._model.decode(latent_tensor)
 
-            command_logits = output.get("command_logits") if isinstance(output, dict) else None
-            param_logits = output.get("param_logits") if isinstance(output, dict) else None
+            command_logits = (
+                output.get("command_logits") if isinstance(output, dict) else None
+            )
+            param_logits = (
+                output.get("param_logits") if isinstance(output, dict) else None
+            )
 
             if command_logits is not None and param_logits is not None:
                 token_ids = self._logits_to_token_ids(

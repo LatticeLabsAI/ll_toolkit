@@ -4,6 +4,7 @@ Wraps ``ll_stepnet``'s ``TextConditioner`` when available. Falls back to
 deterministic hash-based embeddings for reproducibility in testing and
 pipeline development without transformers installed.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -174,7 +175,9 @@ class TextConditioningEncoder:
                 )
             return results
         except Exception as e:
-            _log.warning(f"Error batch encoding with ll_stepnet: {e}; using fallback loop")
+            _log.warning(
+                f"Error batch encoding with ll_stepnet: {e}; using fallback loop"
+            )
             return [self.encode(prompt) for prompt in prompts]
 
     def _init_conditioner(self) -> None:
@@ -226,7 +229,9 @@ class TextConditioningEncoder:
 
         # Generate embeddings
         token_emb = rng.randn(seq_len, self.conditioning_dim).astype(np.float32)
-        token_emb = token_emb / (np.linalg.norm(token_emb, axis=1, keepdims=True) + 1e-9)
+        token_emb = token_emb / (
+            np.linalg.norm(token_emb, axis=1, keepdims=True) + 1e-9
+        )
 
         pooled = token_emb.mean(axis=0).astype(np.float32)
 

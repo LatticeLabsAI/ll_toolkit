@@ -15,11 +15,12 @@ ValidationFinding
 RepairAction
     Record of a single ``ShapeFix_*`` repair step.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from ll_gen.config import ErrorCategory, ErrorSeverity
 
@@ -56,24 +57,24 @@ class GeometryReport:
              axis3_x, axis3_y, axis3_z).
     """
 
-    volume: Optional[float] = None
-    surface_area: Optional[float] = None
-    bounding_box: Optional[Tuple[float, ...]] = None
-    center_of_mass: Optional[Tuple[float, float, float]] = None
-    inertia_tensor: Optional[Tuple[float, ...]] = None
+    volume: float | None = None
+    surface_area: float | None = None
+    bounding_box: tuple[float, ...] | None = None
+    center_of_mass: tuple[float, float, float] | None = None
+    inertia_tensor: tuple[float, ...] | None = None
     face_count: int = 0
     edge_count: int = 0
     vertex_count: int = 0
     shell_count: int = 0
     solid_count: int = 0
-    surface_types: Dict[str, int] = field(default_factory=dict)
-    curve_types: Dict[str, int] = field(default_factory=dict)
-    euler_characteristic: Optional[int] = None
+    surface_types: dict[str, int] = field(default_factory=dict)
+    curve_types: dict[str, int] = field(default_factory=dict)
+    euler_characteristic: int | None = None
     is_solid: bool = False
-    oriented_bounding_box: Optional[Tuple[float, ...]] = None
+    oriented_bounding_box: tuple[float, ...] | None = None
 
     @property
-    def bbox_dimensions(self) -> Optional[Tuple[float, float, float]]:
+    def bbox_dimensions(self) -> tuple[float, float, float] | None:
         """(width, height, depth) from bounding box."""
         if self.bounding_box is None or len(self.bounding_box) < 6:
             return None
@@ -81,7 +82,7 @@ class GeometryReport:
         return (bb[3] - bb[0], bb[4] - bb[1], bb[5] - bb[2])
 
     @property
-    def bbox_diagonal(self) -> Optional[float]:
+    def bbox_diagonal(self) -> float | None:
         """Diagonal length of the bounding box."""
         dims = self.bbox_dimensions
         if dims is None:
@@ -90,7 +91,7 @@ class GeometryReport:
 
     def matches_dimensions(
         self,
-        target_dims: Tuple[float, float, float],
+        target_dims: tuple[float, float, float],
         tolerance_pct: float = 0.10,
     ) -> bool:
         """Check if bounding box dimensions match a target within tolerance.
@@ -161,7 +162,7 @@ class RepairAction:
     tool: str = ""
     action: str = ""
     status: str = "done"
-    tolerance_used: Optional[float] = None
+    tolerance_used: float | None = None
     entities_affected: int = 0
 
 
@@ -203,18 +204,18 @@ class DisposalResult:
 
     shape: Any = None
     is_valid: bool = False
-    error_category: Optional[ErrorCategory] = None
-    error_details: List[ValidationFinding] = field(default_factory=list)
-    geometry_report: Optional[GeometryReport] = None
+    error_category: ErrorCategory | None = None
+    error_details: list[ValidationFinding] = field(default_factory=list)
+    geometry_report: GeometryReport | None = None
     repair_attempted: bool = False
     repair_succeeded: bool = False
-    repair_actions: List[RepairAction] = field(default_factory=list)
+    repair_actions: list[RepairAction] = field(default_factory=list)
     reward_signal: float = 0.0
-    error_message: Optional[str] = None
-    suggestion: Optional[str] = None
-    step_path: Optional[Path] = None
-    stl_path: Optional[Path] = None
-    render_paths: Optional[List[Path]] = None
+    error_message: str | None = None
+    suggestion: str | None = None
+    step_path: Path | None = None
+    stl_path: Path | None = None
+    render_paths: list[Path] | None = None
     execution_time_ms: float = 0.0
     proposal_id: str = ""
     proposal_type: str = ""
@@ -240,12 +241,9 @@ class DisposalResult:
         return len(self.error_details)
 
     @property
-    def critical_errors(self) -> List[ValidationFinding]:
+    def critical_errors(self) -> list[ValidationFinding]:
         """Validation findings with CRITICAL severity."""
-        return [
-            f for f in self.error_details
-            if f.severity == ErrorSeverity.CRITICAL
-        ]
+        return [f for f in self.error_details if f.severity == ErrorSeverity.CRITICAL]
 
     @property
     def num_critical_errors(self) -> int:
@@ -253,9 +251,9 @@ class DisposalResult:
         return len(self.critical_errors)
 
     @property
-    def errors_by_category(self) -> Dict[ErrorCategory, List[ValidationFinding]]:
+    def errors_by_category(self) -> dict[ErrorCategory, list[ValidationFinding]]:
         """Group validation findings by error category."""
-        grouped: Dict[ErrorCategory, List[ValidationFinding]] = {}
+        grouped: dict[ErrorCategory, list[ValidationFinding]] = {}
         for finding in self.error_details:
             grouped.setdefault(finding.error_category, []).append(finding)
         return grouped
@@ -269,7 +267,7 @@ class DisposalResult:
     # Export helpers
     # ------------------------------------------------------------------
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Serialize to a plain dict (shape excluded).
 
         Useful for JSON logging and training data recording.
@@ -301,9 +299,7 @@ class DisposalResult:
                     "edge_count": self.geometry_report.edge_count,
                     "vertex_count": self.geometry_report.vertex_count,
                     "surface_types": self.geometry_report.surface_types,
-                    "euler_characteristic": (
-                        self.geometry_report.euler_characteristic
-                    ),
+                    "euler_characteristic": (self.geometry_report.euler_characteristic),
                     "is_solid": self.geometry_report.is_solid,
                 }
                 if self.geometry_report
@@ -331,7 +327,7 @@ class DisposalResult:
             "proposal_type": self.proposal_type,
         }
 
-    def summary(self) -> Dict[str, Any]:
+    def summary(self) -> dict[str, Any]:
         """Compact summary for logging."""
         return {
             "proposal_id": self.proposal_id,

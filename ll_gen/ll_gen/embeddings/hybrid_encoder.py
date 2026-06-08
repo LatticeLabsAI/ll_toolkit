@@ -3,6 +3,7 @@
 Fuses conditioning embeddings (text/image) processed through a transformer
 branch with B-Rep topology features processed through a GNN branch.
 """
+
 from __future__ import annotations
 
 import logging
@@ -204,9 +205,7 @@ class HybridShapeEncoder(_Base):
             _log.debug(f"GNN encoder initialized: {self.graph_encoder_type}")
             return True
         except Exception as exc:
-            _log.debug(
-                f"Failed to initialize GNN encoder: {exc}; GNN branch disabled"
-            )
+            _log.debug(f"Failed to initialize GNN encoder: {exc}; GNN branch disabled")
             self._has_gnn = False
             return False
 
@@ -279,9 +278,7 @@ class HybridShapeEncoder(_Base):
             RuntimeError: If GNN encoder is not available.
         """
         if not self._has_gnn or self._gnn_encoder is None:
-            raise RuntimeError(
-                "GNN encoder is not available; cannot encode graph data"
-            )
+            raise RuntimeError("GNN encoder is not available; cannot encode graph data")
 
         # Extract graph components
         node_features = graph_data.get("node_features")
@@ -360,9 +357,7 @@ class HybridShapeEncoder(_Base):
             RuntimeError: If GNN encoder is not available.
         """
         if not self._has_gnn or self._gnn_encoder is None:
-            raise RuntimeError(
-                "GNN encoder is not available; cannot encode graph data"
-            )
+            raise RuntimeError("GNN encoder is not available; cannot encode graph data")
 
         graph_embedding = self._encode_graph(graph_data)
         return graph_embedding.detach().cpu().numpy()

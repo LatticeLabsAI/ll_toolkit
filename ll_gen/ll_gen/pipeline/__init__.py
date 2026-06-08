@@ -3,7 +3,8 @@
 The orchestrator implements the full propose/dispose state machine:
 route → condition → propose → dispose → validate → repair → retry → export.
 """
+
 from ll_gen.pipeline.orchestrator import GenerationOrchestrator
-from ll_gen.pipeline.verification import VisualVerifier, VerificationResult
+from ll_gen.pipeline.verification import VerificationResult, VisualVerifier
 
 __all__ = ["GenerationOrchestrator", "VisualVerifier", "VerificationResult"]

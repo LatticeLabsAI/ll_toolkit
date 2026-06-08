@@ -14,16 +14,16 @@ Three feedback formats serve three consumers:
    RL reward shaping during training.  Includes per-finding penalty
    breakdown and a composite reward.
 """
+
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from ll_gen.config import ErrorCategory, ErrorSeverity
 from ll_gen.proposals.code_proposal import CodeProposal
 from ll_gen.proposals.disposal_result import (
     DisposalResult,
-    GeometryReport,
     ValidationFinding,
 )
 
@@ -33,6 +33,7 @@ _log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # LLM code feedback
 # ---------------------------------------------------------------------------
+
 
 def build_code_feedback(
     result: DisposalResult,
@@ -57,7 +58,7 @@ def build_code_feedback(
     Returns:
         Multi-line string suitable for LLM retry prompting.
     """
-    lines: List[str] = []
+    lines: list[str] = []
     lines.append("=" * 60)
     lines.append("PREVIOUS ATTEMPT FAILED — CORRECTION REQUIRED")
     lines.append("=" * 60)
@@ -71,10 +72,7 @@ def build_code_feedback(
     lines.append("")
 
     # Critical findings
-    critical = [
-        f for f in result.error_details
-        if f.severity == ErrorSeverity.CRITICAL
-    ]
+    critical = [f for f in result.error_details if f.severity == ErrorSeverity.CRITICAL]
     if critical:
         lines.append(f"Critical issues ({len(critical)}):")
         for i, finding in enumerate(critical, 1):
@@ -87,10 +85,7 @@ def build_code_feedback(
         lines.append("")
 
     # Warnings
-    warnings = [
-        f for f in result.error_details
-        if f.severity == ErrorSeverity.WARNING
-    ]
+    warnings = [f for f in result.error_details if f.severity == ErrorSeverity.WARNING]
     if warnings:
         lines.append(f"Warnings ({len(warnings)}):")
         for finding in warnings:
@@ -101,9 +96,7 @@ def build_code_feedback(
     if result.repair_attempted:
         lines.append("Deterministic repair was attempted:")
         for action in result.repair_actions:
-            lines.append(
-                f"  - {action.tool}: {action.action} → {action.status}"
-            )
+            lines.append(f"  - {action.tool}: {action.action} → {action.status}")
         if result.repair_succeeded:
             lines.append("  Repair succeeded but re-check is needed.")
         else:
@@ -173,8 +166,8 @@ def build_code_feedback(
 
 
 def _suggest_from_category(
-    category: Optional[ErrorCategory],
-    critical_findings: List[ValidationFinding],
+    category: ErrorCategory | None,
+    critical_findings: list[ValidationFinding],
 ) -> str:
     """Generate a correction suggestion from the error category.
 
@@ -235,7 +228,8 @@ def _suggest_from_category(
 # Neural generation feedback
 # ---------------------------------------------------------------------------
 
-def build_neural_feedback(result: DisposalResult) -> Dict[str, Any]:
+
+def build_neural_feedback(result: DisposalResult) -> dict[str, Any]:
     """Build structured feedback for neural (VAE/diffusion) retry.
 
     Returns a dict that the neural generator can use to condition its
@@ -255,7 +249,7 @@ def build_neural_feedback(result: DisposalResult) -> Dict[str, Any]:
         Structured feedback dict.
     """
     # Collect failed entity indices by type
-    failed_entities: Dict[str, List[int]] = {}
+    failed_entities: dict[str, list[int]] = {}
     for finding in result.error_details:
         key = finding.entity_type
         failed_entities.setdefault(key, []).append(finding.entity_index)
@@ -267,22 +261,19 @@ def build_neural_feedback(result: DisposalResult) -> Dict[str, Any]:
     # Severity breakdown
     severity_counts = {
         "critical": sum(
-            1 for f in result.error_details
-            if f.severity == ErrorSeverity.CRITICAL
+            1 for f in result.error_details if f.severity == ErrorSeverity.CRITICAL
         ),
         "warning": sum(
-            1 for f in result.error_details
-            if f.severity == ErrorSeverity.WARNING
+            1 for f in result.error_details if f.severity == ErrorSeverity.WARNING
         ),
         "info": sum(
-            1 for f in result.error_details
-            if f.severity == ErrorSeverity.INFO
+            1 for f in result.error_details if f.severity == ErrorSeverity.INFO
         ),
     }
 
     # Parameter adjustment hints based on error categories
     categories = result.errors_by_category
-    hints: Dict[str, str] = {}
+    hints: dict[str, str] = {}
 
     if ErrorCategory.INVALID_PARAMS in categories:
         hints["coordinates"] = "perturb_towards_curves"
@@ -298,7 +289,7 @@ def build_neural_feedback(result: DisposalResult) -> Dict[str, Any]:
         hints["precision"] = "increase_quantization_bits"
 
     # Topology stats from geometry report
-    topology_stats: Dict[str, Any] = {}
+    topology_stats: dict[str, Any] = {}
     if result.geometry_report:
         gr = result.geometry_report
         topology_stats = {
@@ -326,7 +317,8 @@ def build_neural_feedback(result: DisposalResult) -> Dict[str, Any]:
 # Training feedback (RL reward shaping)
 # ---------------------------------------------------------------------------
 
-def build_training_feedback(result: DisposalResult) -> Dict[str, Any]:
+
+def build_training_feedback(result: DisposalResult) -> dict[str, Any]:
     """Build feedback for RL training reward shaping.
 
     Returns a dict containing per-finding penalty breakdown, tier
@@ -339,17 +331,13 @@ def build_training_feedback(result: DisposalResult) -> Dict[str, Any]:
         Training feedback dict.
     """
     # Per-category penalty breakdown
-    category_penalties: Dict[str, float] = {}
+    category_penalties: dict[str, float] = {}
     for cat, findings in result.errors_by_category.items():
         critical_count = sum(
             1 for f in findings if f.severity == ErrorSeverity.CRITICAL
         )
-        warning_count = sum(
-            1 for f in findings if f.severity == ErrorSeverity.WARNING
-        )
-        category_penalties[cat.value] = (
-            -0.1 * critical_count - 0.05 * warning_count
-        )
+        warning_count = sum(1 for f in findings if f.severity == ErrorSeverity.WARNING)
+        category_penalties[cat.value] = -0.1 * critical_count - 0.05 * warning_count
 
     # Validation tier pass/fail
     tiers = {
@@ -385,9 +373,7 @@ def _check_manifold(result: DisposalResult) -> bool:
         "BRepCheck_InvalidMultiConnexity",
         "BRepCheck_FreeEdge",
     }
-    return not any(
-        f.error_code in manifold_codes for f in result.error_details
-    )
+    return not any(f.error_code in manifold_codes for f in result.error_details)
 
 
 def _check_watertight(result: DisposalResult) -> bool:
@@ -396,9 +382,7 @@ def _check_watertight(result: DisposalResult) -> bool:
         "BRepCheck_NotClosed",
         "BRepCheck_NotConnected",
     }
-    return not any(
-        f.error_code in watertight_codes for f in result.error_details
-    )
+    return not any(f.error_code in watertight_codes for f in result.error_details)
 
 
 def _check_euler(result: DisposalResult) -> bool:
@@ -411,7 +395,10 @@ def _check_euler(result: DisposalResult) -> bool:
     indicates cylindrical surfaces are present, we accept χ != 2 as
     valid since the shape likely has intentional through-holes.
     """
-    if result.geometry_report and result.geometry_report.euler_characteristic is not None:
+    if (
+        result.geometry_report
+        and result.geometry_report.euler_characteristic is not None
+    ):
         ec = result.geometry_report.euler_characteristic
         if ec == 2:
             return True
@@ -441,6 +428,4 @@ def _check_no_self_intersection(result: DisposalResult) -> bool:
         "BRepCheck_IntersectingWires",
         "BOPAlgo_AlertSelfInterferingShape",
     }
-    return not any(
-        f.error_code in si_codes for f in result.error_details
-    )
+    return not any(f.error_code in si_codes for f in result.error_details)

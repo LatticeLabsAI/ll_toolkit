@@ -10,13 +10,11 @@ dequantizes the tokens back to continuous parameter values, builds
 sketch→extrude→boolean operations through OpenCASCADE, and
 produces a ``TopoDS_Shape``.
 """
+
 from __future__ import annotations
 
-import copy
-import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from ll_gen.proposals.base import BaseProposal
 
@@ -48,12 +46,12 @@ class CommandSequenceProposal(BaseProposal):
             produce this sequence (if available).  Shape ``(latent_dim,)``.
     """
 
-    token_ids: List[int] = field(default_factory=list)
-    command_dicts: List[Dict[str, Any]] = field(default_factory=list)
+    token_ids: list[int] = field(default_factory=list)
+    command_dicts: list[dict[str, Any]] = field(default_factory=list)
     quantization_bits: int = 8
     normalization_range: float = 2.0
     precision_tier: str = "STANDARD"
-    latent_vector: Optional[Any] = None  # np.ndarray, lazy import
+    latent_vector: Any | None = None  # np.ndarray, lazy import
 
     # ------------------------------------------------------------------
     # Conversion helpers
@@ -95,17 +93,22 @@ class CommandSequenceProposal(BaseProposal):
                     "parameter_mask",
                     CommandToken.get_parameter_mask(ct),
                 )
-                tokens.append(CommandToken(
-                    command_type=ct,
-                    parameters=list(params),
-                    parameter_mask=list(mask),
-                ))
-            return TokenSequence(command_tokens=tokens, metadata={
-                "quantization_bits": self.quantization_bits,
-                "normalization_range": self.normalization_range,
-                "precision_tier": self.precision_tier,
-                "proposal_id": self.proposal_id,
-            })
+                tokens.append(
+                    CommandToken(
+                        command_type=ct,
+                        parameters=list(params),
+                        parameter_mask=list(mask),
+                    )
+                )
+            return TokenSequence(
+                command_tokens=tokens,
+                metadata={
+                    "quantization_bits": self.quantization_bits,
+                    "normalization_range": self.normalization_range,
+                    "precision_tier": self.precision_tier,
+                    "proposal_id": self.proposal_id,
+                },
+            )
 
         # Fallback: decode token_ids → command_dicts first
         return self._decode_token_ids_to_sequence()
@@ -129,7 +132,7 @@ class CommandSequenceProposal(BaseProposal):
             TokenSequence,
         )
 
-        COMMAND_ID_MAP = {
+        COMMAND_ID_MAP = {  # noqa: N806
             6: CommandType.SOL,
             7: CommandType.LINE,
             8: CommandType.ARC,
@@ -137,9 +140,9 @@ class CommandSequenceProposal(BaseProposal):
             10: CommandType.EXTRUDE,
             11: CommandType.EOS,
         }
-        PARAM_OFFSET = 12
+        PARAM_OFFSET = 12  # noqa: N806
 
-        commands: List[CommandToken] = []
+        commands: list[CommandToken] = []
         i = 0
         ids = self.token_ids
 
@@ -148,11 +151,13 @@ class CommandSequenceProposal(BaseProposal):
 
             # EOS sequence token (must check before tid < 6 guard)
             if tid == 2 or tid == 11:
-                commands.append(CommandToken(
-                    command_type=CommandType.EOS,
-                    parameters=[0] * 16,
-                    parameter_mask=[False] * 16,
-                ))
+                commands.append(
+                    CommandToken(
+                        command_type=CommandType.EOS,
+                        parameters=[0] * 16,
+                        parameter_mask=[False] * 16,
+                    )
+                )
                 break
 
             # Skip special tokens (PAD=0, BOS=1, SEP=3, UNK=4, reserved=5)
@@ -166,7 +171,7 @@ class CommandSequenceProposal(BaseProposal):
 
             cmd_type = COMMAND_ID_MAP[tid]
             mask = CommandToken.get_parameter_mask(cmd_type)
-            num_params = sum(mask)
+            sum(mask)
             params = [0] * 16
 
             # Read the next num_params tokens as parameter values
@@ -184,22 +189,27 @@ class CommandSequenceProposal(BaseProposal):
                 k += 1
                 j += 1
 
-            commands.append(CommandToken(
-                command_type=cmd_type,
-                parameters=params,
-                parameter_mask=mask,
-            ))
+            commands.append(
+                CommandToken(
+                    command_type=cmd_type,
+                    parameters=params,
+                    parameter_mask=mask,
+                )
+            )
             i = k
 
-        return TokenSequence(command_tokens=commands, metadata={
-            "quantization_bits": self.quantization_bits,
-            "normalization_range": self.normalization_range,
-            "precision_tier": self.precision_tier,
-            "proposal_id": self.proposal_id,
-            "decoded_from": "token_ids",
-        })
+        return TokenSequence(
+            command_tokens=commands,
+            metadata={
+                "quantization_bits": self.quantization_bits,
+                "normalization_range": self.normalization_range,
+                "precision_tier": self.precision_tier,
+                "proposal_id": self.proposal_id,
+                "decoded_from": "token_ids",
+            },
+        )
 
-    def dequantize(self) -> List[Dict[str, Any]]:
+    def dequantize(self) -> list[dict[str, Any]]:
         """Dequantize command parameters to continuous float values.
 
         Maps quantized integer parameters back to continuous coordinates
@@ -215,7 +225,7 @@ class CommandSequenceProposal(BaseProposal):
             List of dicts with ``command_type`` (str), ``parameters``
             (list of floats), and ``parameter_mask`` (list of bools).
         """
-        levels = 2 ** self.quantization_bits
+        levels = 2**self.quantization_bits
         result = []
 
         source = self.command_dicts
@@ -237,16 +247,20 @@ class CommandSequenceProposal(BaseProposal):
             params_float = []
             for p, m in zip(params_int, mask):
                 if m:
-                    val = (p / (levels - 1)) * 2.0 * self.normalization_range - self.normalization_range
+                    val = (
+                        p / (levels - 1)
+                    ) * 2.0 * self.normalization_range - self.normalization_range
                     params_float.append(float(val))
                 else:
                     params_float.append(0.0)
 
-            result.append({
-                "command_type": cmd["command_type"],
-                "parameters": params_float,
-                "parameter_mask": mask,
-            })
+            result.append(
+                {
+                    "command_type": cmd["command_type"],
+                    "parameters": params_float,
+                    "parameter_mask": mask,
+                }
+            )
 
         return result
 
@@ -265,10 +279,7 @@ class CommandSequenceProposal(BaseProposal):
     def num_sketch_loops(self) -> int:
         """Count the number of sketch loops (SOL commands)."""
         if self.command_dicts:
-            return sum(
-                1 for c in self.command_dicts
-                if c.get("command_type") == "SOL"
-            )
+            return sum(1 for c in self.command_dicts if c.get("command_type") == "SOL")
         # From token IDs: SOL = 6
         return sum(1 for t in self.token_ids if t == 6)
 
@@ -277,8 +288,7 @@ class CommandSequenceProposal(BaseProposal):
         """Count the number of extrusion operations."""
         if self.command_dicts:
             return sum(
-                1 for c in self.command_dicts
-                if c.get("command_type") == "EXTRUDE"
+                1 for c in self.command_dicts if c.get("command_type") == "EXTRUDE"
             )
         # From token IDs: EXTRUDE = 10
         return sum(1 for t in self.token_ids if t == 10)
@@ -287,7 +297,7 @@ class CommandSequenceProposal(BaseProposal):
     # Retry support
     # ------------------------------------------------------------------
 
-    def with_error_context(self, error: Dict[str, Any]) -> "CommandSequenceProposal":
+    def with_error_context(self, error: dict[str, Any]) -> CommandSequenceProposal:
         """Create a retry proposal with error context.
 
         Preserves the latent vector (so the generator can perturb it)
@@ -304,15 +314,17 @@ class CommandSequenceProposal(BaseProposal):
             new.latent_vector = self.latent_vector.copy()
         return new
 
-    def summary(self) -> Dict[str, Any]:
+    def summary(self) -> dict[str, Any]:
         """Extended summary with command-specific fields."""
         base = super().summary()
-        base.update({
-            "sequence_length": self.sequence_length,
-            "num_sketch_loops": self.num_sketch_loops,
-            "num_extrusions": self.num_extrusions,
-            "quantization_bits": self.quantization_bits,
-            "precision_tier": self.precision_tier,
-            "has_latent": self.latent_vector is not None,
-        })
+        base.update(
+            {
+                "sequence_length": self.sequence_length,
+                "num_sketch_loops": self.num_sketch_loops,
+                "num_extrusions": self.num_extrusions,
+                "quantization_bits": self.quantization_bits,
+                "precision_tier": self.precision_tier,
+                "has_latent": self.latent_vector is not None,
+            }
+        )
         return base

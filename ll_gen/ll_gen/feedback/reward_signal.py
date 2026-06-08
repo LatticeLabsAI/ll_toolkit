@@ -16,22 +16,23 @@ Critical error penalty      −0.1     Per critical-severity finding
 
 Weights are configurable via ``FeedbackConfig``.
 """
+
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
-from ll_gen.config import ErrorCategory, ErrorSeverity, FeedbackConfig
-from ll_gen.proposals.disposal_result import DisposalResult, GeometryReport
+from ll_gen.config import ErrorSeverity, FeedbackConfig
+from ll_gen.proposals.disposal_result import DisposalResult
 
 _log = logging.getLogger(__name__)
 
 
 def compute_reward(
     result: DisposalResult,
-    config: Optional[FeedbackConfig] = None,
-    target_dimensions: Optional[Tuple[float, float, float]] = None,
-    target_volume: Optional[float] = None,
+    config: FeedbackConfig | None = None,
+    target_dimensions: tuple[float, float, float] | None = None,
+    target_volume: float | None = None,
 ) -> float:
     """Compute a composite scalar reward from a DisposalResult.
 
@@ -107,9 +108,9 @@ def compute_reward(
 
     if target_volume is not None and result.geometry_report is not None:
         if result.geometry_report.volume is not None:
-            vol_err = abs(
-                result.geometry_report.volume - target_volume
-            ) / max(abs(target_volume), 1e-10)
+            vol_err = abs(result.geometry_report.volume - target_volume) / max(
+                abs(target_volume), 1e-10
+            )
             if vol_err <= config.dimension_tolerance_pct:
                 semantic_reward += config.semantic_match_reward * 0.5
 
@@ -119,8 +120,7 @@ def compute_reward(
 
     # 6. Critical error penalty
     num_critical = sum(
-        1 for f in result.error_details
-        if f.severity == ErrorSeverity.CRITICAL
+        1 for f in result.error_details if f.severity == ErrorSeverity.CRITICAL
     )
     reward += config.critical_error_penalty * num_critical
 
@@ -132,11 +132,11 @@ def compute_reward(
 
 
 def compute_batch_rewards(
-    results: List[DisposalResult],
-    config: Optional[FeedbackConfig] = None,
-    target_dimensions: Optional[Tuple[float, float, float]] = None,
-    target_volume: Optional[float] = None,
-) -> List[float]:
+    results: list[DisposalResult],
+    config: FeedbackConfig | None = None,
+    target_dimensions: tuple[float, float, float] | None = None,
+    target_volume: float | None = None,
+) -> list[float]:
     """Compute rewards for a batch of DisposalResults.
 
     Convenience wrapper that calls ``compute_reward`` on each result.
@@ -151,16 +151,15 @@ def compute_batch_rewards(
         List of scalar rewards, same length as ``results``.
     """
     return [
-        compute_reward(r, config, target_dimensions, target_volume)
-        for r in results
+        compute_reward(r, config, target_dimensions, target_volume) for r in results
     ]
 
 
 def compute_batch_rewards_tensor(
-    results: List[DisposalResult],
-    config: Optional[FeedbackConfig] = None,
-    target_dimensions: Optional[Tuple[float, float, float]] = None,
-    target_volume: Optional[float] = None,
+    results: list[DisposalResult],
+    config: FeedbackConfig | None = None,
+    target_dimensions: tuple[float, float, float] | None = None,
+    target_volume: float | None = None,
 ) -> Any:
     """Compute rewards as a PyTorch tensor.
 
@@ -180,15 +179,14 @@ def compute_batch_rewards_tensor(
     """
     import torch
 
-    rewards = compute_batch_rewards(
-        results, config, target_dimensions, target_volume
-    )
+    rewards = compute_batch_rewards(results, config, target_dimensions, target_volume)
     return torch.tensor(rewards, dtype=torch.float32)
 
 
 # ---------------------------------------------------------------------------
 # Internal tier counting
 # ---------------------------------------------------------------------------
+
 
 def _count_passing_tiers(result: DisposalResult) -> int:
     """Count how many validation tiers pass.

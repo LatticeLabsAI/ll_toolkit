@@ -32,9 +32,9 @@ import subprocess
 import sys
 import tempfile
 import textwrap
-from typing import Any, List, Union
+from typing import Any
 
-from ll_gen.config import CodeLanguage, CodegenConfig
+from ll_gen.config import CodegenConfig, CodeLanguage
 from ll_gen.proposals.code_proposal import CodeProposal
 
 _log = logging.getLogger(__name__)
@@ -50,19 +50,22 @@ _OCP_AVAILABLE = False
 try:
     from OCC.Core.StlAPI import StlAPI_Reader
     from OCC.Core.TopoDS import TopoDS_Shape
+
     _OCC_AVAILABLE = True
 except ImportError:
     pass
 
 try:
-    from OCP.TopoDS import TopoDS_Shape as _OCP_TopoDS_Shape  # noqa: F811
+    from OCP.TopoDS import TopoDS_Shape as _OCP_TopoDS_Shape  # noqa: F401, F811
+
     _OCP_AVAILABLE = True
 except ImportError:
     pass
 
 cadquery = None  # sentinel for unittest.mock.patch
 try:
-    import cadquery
+    import cadquery  # noqa: F401
+
     _CADQUERY_AVAILABLE = True
 except ImportError:
     pass
@@ -91,7 +94,8 @@ def _timeout_handler(signum: int, frame: Any) -> None:
 # Sandbox infrastructure for subprocess wrapper scripts
 # ---------------------------------------------------------------------------
 
-def _build_sandbox_preamble(allowed_modules: List[str]) -> str:
+
+def _build_sandbox_preamble(allowed_modules: list[str]) -> str:
     """Build Python source that sets up restricted builtins and import guard.
 
     The generated code defines ``_safe_builtins`` (a dict) that should be
@@ -139,7 +143,7 @@ def _build_sandbox_preamble(allowed_modules: List[str]) -> str:
     """)
 
 
-def _build_cadquery_wrapper(allowed_modules: List[str]) -> str:
+def _build_cadquery_wrapper(allowed_modules: list[str]) -> str:
     """Build the CadQuery subprocess wrapper script.
 
     Args:
@@ -149,7 +153,8 @@ def _build_cadquery_wrapper(allowed_modules: List[str]) -> str:
         Complete Python source for the CadQuery wrapper.
     """
     sandbox = _build_sandbox_preamble(allowed_modules)
-    return textwrap.dedent("""\
+    return (
+        textwrap.dedent("""\
         import json, sys, math, traceback
         try:
             import numpy
@@ -163,7 +168,9 @@ def _build_cadquery_wrapper(allowed_modules: List[str]) -> str:
             print(json.dumps({"success": False, "error": "CadQuery not available"}))
             sys.exit(0)
 
-    """) + sandbox + textwrap.dedent("""\
+    """)
+        + sandbox
+        + textwrap.dedent("""\
 
         # --- Security boundary ---
         # Everything above this point is TRUSTED wrapper infrastructure.
@@ -296,9 +303,10 @@ def _build_cadquery_wrapper(allowed_modules: List[str]) -> str:
         with open(_result_path, 'w') as _rf:
             _rf.write(json.dumps(meta))
     """)
+    )
 
 
-def _build_pythonocc_wrapper(allowed_modules: List[str]) -> str:
+def _build_pythonocc_wrapper(allowed_modules: list[str]) -> str:
     """Build the pythonocc subprocess wrapper script.
 
     Args:
@@ -308,7 +316,8 @@ def _build_pythonocc_wrapper(allowed_modules: List[str]) -> str:
         Complete Python source for the pythonocc wrapper.
     """
     sandbox = _build_sandbox_preamble(allowed_modules)
-    return textwrap.dedent("""\
+    return (
+        textwrap.dedent("""\
         import json, sys, math, traceback
         try:
             import numpy
@@ -320,7 +329,9 @@ def _build_pythonocc_wrapper(allowed_modules: List[str]) -> str:
             print(json.dumps({"success": False, "error": "pythonocc not available"}))
             sys.exit(0)
 
-    """) + sandbox + textwrap.dedent("""\
+    """)
+        + sandbox
+        + textwrap.dedent("""\
 
         # --- Security boundary ---
         # Everything above this point is TRUSTED wrapper infrastructure.
@@ -495,16 +506,18 @@ def _build_pythonocc_wrapper(allowed_modules: List[str]) -> str:
         with open(_result_path, 'w') as _rf:
             _rf.write(json.dumps(meta))
     """)
+    )
 
 
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
+
 def execute_code_proposal(
     proposal: CodeProposal,
     timeout: int = 30,
-    allowed_modules: List[str] | None = None,
+    allowed_modules: list[str] | None = None,
 ) -> Any:
     """Execute a CodeProposal and return geometry metadata.
 
@@ -537,14 +550,12 @@ def execute_code_proposal(
     elif proposal.language == CodeLanguage.PYTHONOCC:
         return _execute_pythonocc(proposal.code, timeout, allowed_modules)
     else:
-        raise RuntimeError(
-            f"Unsupported code language: {proposal.language}"
-        )
+        raise RuntimeError(f"Unsupported code language: {proposal.language}")
 
 
 def _run_in_subprocess(
     wrapper_script: str, code: str, timeout: int, language_label: str
-) -> Union[dict[str, Any], Any]:
+) -> dict[str, Any] | Any:
     """Write code to a temp file, run wrapper_script in a subprocess, parse JSON.
 
     Args:
@@ -608,7 +619,7 @@ def _run_in_subprocess(
         # Read result from file-based IPC (immune to user print() pollution)
         result_path = os.path.join(tmpdir, "result.json")
         if os.path.isfile(result_path):
-            with open(result_path, "r") as rf:
+            with open(result_path) as rf:
                 result_text = rf.read()
             try:
                 result = json.loads(result_text)
@@ -624,9 +635,7 @@ def _run_in_subprocess(
                 raise RuntimeError(
                     f"{language_label} execution failed: {stderr or stdout}"
                 )
-            raise RuntimeError(
-                f"{language_label} execution produced no output"
-            )
+            raise RuntimeError(f"{language_label} execution produced no output")
 
         if not result.get("success", False):
             error_msg = result.get("error", "Unknown error")
@@ -638,8 +647,8 @@ def _run_in_subprocess(
         brep_path = result.get("brep_path")
         if brep_path and os.path.isfile(brep_path) and _OCC_AVAILABLE:
             try:
-                from OCC.Core.BRepTools import breptools
                 from OCC.Core.BRep import BRep_Builder
+                from OCC.Core.BRepTools import breptools
                 from OCC.Core.TopoDS import TopoDS_Shape as _TopoDS_Shape
 
                 shape = _TopoDS_Shape()
@@ -655,9 +664,7 @@ def _run_in_subprocess(
         return result
 
 
-def _execute_cadquery(
-    code: str, timeout: int, allowed_modules: List[str]
-) -> Any:
+def _execute_cadquery(code: str, timeout: int, allowed_modules: list[str]) -> Any:
     """Execute CadQuery code in a subprocess.
 
     Args:
@@ -711,13 +718,13 @@ def _convert_ocp_to_occ(ocp_shape: Any) -> Any:
     Raises:
         RuntimeError: If conversion fails.
     """
-    import tempfile
     import os
+    import tempfile
 
     # Serialize to BREP using OCP's exporter
     try:
+        from OCP.BRep import BRep_Builder  # noqa: F401
         from OCP.BRepTools import BRepTools
-        from OCP.BRep import BRep_Builder
     except ImportError:
         # If OCP not available, assume the shape is already OCC.Core compatible
         return ocp_shape
@@ -731,8 +738,8 @@ def _convert_ocp_to_occ(ocp_shape: Any) -> Any:
         BRepTools.Write_s(ocp_shape, temp_path)
 
         # Import using pythonocc (OCC.Core)
-        from OCC.Core.BRepTools import breptools
         from OCC.Core.BRep import BRep_Builder as OCC_Builder
+        from OCC.Core.BRepTools import breptools
         from OCC.Core.TopoDS import TopoDS_Shape
 
         occ_shape = TopoDS_Shape()
@@ -763,8 +770,8 @@ def _convert_ocp_to_occ_from_brep(brep_path: str) -> Any:
     Returns:
         OCC.Core TopoDS_Shape, or None if reading fails.
     """
-    from OCC.Core.BRepTools import breptools
     from OCC.Core.BRep import BRep_Builder
+    from OCC.Core.BRepTools import breptools
     from OCC.Core.TopoDS import TopoDS_Shape
 
     shape = TopoDS_Shape()
@@ -823,9 +830,7 @@ def _execute_openscad(code: str, timeout: int) -> Any:
                 f"OpenSCAD execution failed: {e.stderr.decode('utf-8', errors='replace')}"
             ) from e
         except FileNotFoundError as e:
-            raise RuntimeError(
-                "OpenSCAD not found. Please install OpenSCAD."
-            ) from e
+            raise RuntimeError("OpenSCAD not found. Please install OpenSCAD.") from e
         except Exception as e:
             raise RuntimeError(
                 f"OpenSCAD execution failed: {type(e).__name__}: {str(e)}"
@@ -841,9 +846,7 @@ def _execute_openscad(code: str, timeout: int) -> Any:
             stl_reader.Read(shape, output_file)
 
             if shape.IsNull():
-                raise RuntimeError(
-                    "Failed to read STL file or resulting shape is null"
-                )
+                raise RuntimeError("Failed to read STL file or resulting shape is null")
 
             return shape
         except Exception as e:
@@ -852,9 +855,7 @@ def _execute_openscad(code: str, timeout: int) -> Any:
             ) from e
 
 
-def _execute_pythonocc(
-    code: str, timeout: int, allowed_modules: List[str]
-) -> Any:
+def _execute_pythonocc(code: str, timeout: int, allowed_modules: list[str]) -> Any:
     """Execute pythonocc code in a subprocess.
 
     Args:
@@ -881,7 +882,9 @@ def _execute_pythonocc(
     wrapper = _build_pythonocc_wrapper(allowed_modules)
     result = _run_in_subprocess(wrapper, code, timeout, "pythonocc")
     if isinstance(result, dict):
-        _log.debug("pythonocc returned metadata dict with keys: %s", list(result.keys()))
+        _log.debug(
+            "pythonocc returned metadata dict with keys: %s", list(result.keys())
+        )
     else:
         _log.debug("pythonocc returned TopoDS_Shape object")
     return result

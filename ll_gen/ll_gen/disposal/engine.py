@@ -7,28 +7,25 @@ Every proposal produces a ``DisposalResult`` containing the shape
 (or None), validation findings, repair history, geometry report,
 export paths, and reward signal.
 """
+
 from __future__ import annotations
 
 import logging
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from ll_gen.config import DisposalConfig, ErrorCategory, ExportConfig, FeedbackConfig
 from ll_gen.disposal.exporter import export_step, export_stl
 from ll_gen.disposal.introspector import introspect
 from ll_gen.disposal.repairer import repair_shape
 from ll_gen.disposal.validator import validate_shape
-from ll_gen.feedback.error_mapper import categorize_errors
 from ll_gen.feedback.reward_signal import compute_reward
 from ll_gen.proposals.base import BaseProposal
 from ll_gen.proposals.code_proposal import CodeProposal
 from ll_gen.proposals.command_proposal import CommandSequenceProposal
 from ll_gen.proposals.disposal_result import (
     DisposalResult,
-    GeometryReport,
-    RepairAction,
-    ValidationFinding,
 )
 from ll_gen.proposals.latent_proposal import LatentProposal
 
@@ -61,10 +58,10 @@ class DisposalEngine:
 
     def __init__(
         self,
-        disposal_config: Optional[DisposalConfig] = None,
-        export_config: Optional[ExportConfig] = None,
-        feedback_config: Optional[FeedbackConfig] = None,
-        output_dir: Optional[str] = None,
+        disposal_config: DisposalConfig | None = None,
+        export_config: ExportConfig | None = None,
+        feedback_config: FeedbackConfig | None = None,
+        output_dir: str | None = None,
     ) -> None:
         self.disposal_config = disposal_config or DisposalConfig()
         self.export_config = export_config or ExportConfig()
@@ -173,7 +170,9 @@ class DisposalEngine:
         ):
             try:
                 repair_result = repair_shape(
-                    shape, val_report, self.disposal_config,
+                    shape,
+                    val_report,
+                    self.disposal_config,
                 )
                 result.repair_attempted = True
                 result.repair_succeeded = repair_result.succeeded
@@ -224,19 +223,17 @@ class DisposalEngine:
         # ----------------------------------------------------------
         if result.is_valid and export and shape is not None:
             try:
-                step_path = (
-                    self.output_dir / f"{proposal.proposal_id}.step"
-                )
+                step_path = self.output_dir / f"{proposal.proposal_id}.step"
                 result.step_path = export_step(
-                    shape, step_path, self.export_config.step_schema,
+                    shape,
+                    step_path,
+                    self.export_config.step_schema,
                 )
             except Exception as exc:
                 _log.warning("STEP export failed: %s", exc)
 
             try:
-                stl_path = (
-                    self.output_dir / f"{proposal.proposal_id}.stl"
-                )
+                stl_path = self.output_dir / f"{proposal.proposal_id}.stl"
                 result.stl_path = export_stl(
                     shape,
                     stl_path,
@@ -284,7 +281,7 @@ class DisposalEngine:
     # Deferred export
     # ------------------------------------------------------------------
 
-    def export_result(self, result: "DisposalResult") -> "DisposalResult":
+    def export_result(self, result: DisposalResult) -> DisposalResult:
         """Export a previously-disposed result to STEP and STL.
 
         Useful when disposal was run with ``export=False`` (e.g. during
@@ -308,7 +305,9 @@ class DisposalEngine:
         try:
             step_path = self.output_dir / f"{pid}.step"
             result.step_path = export_step(
-                shape, step_path, self.export_config.step_schema,
+                shape,
+                step_path,
+                self.export_config.step_schema,
             )
         except Exception as exc:
             _log.warning("STEP export failed: %s", exc)

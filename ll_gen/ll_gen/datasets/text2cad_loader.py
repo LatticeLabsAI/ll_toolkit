@@ -4,23 +4,34 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional
-
-__all__ = ["Text2CADDataset", "load_text2cad"]
-
-_log = logging.getLogger(__name__)
+from typing import Any
 
 from ll_gen.datasets._imports import _get_datasets, _get_geotoken, _get_torch
 from ll_gen.datasets._tokenization import (
-    PAD_TOKEN_ID,
     BOS_TOKEN_ID,
-    EOS_TOKEN_ID,
     COMMAND_TYPE_IDS,
+    EOS_TOKEN_ID,
+    PAD_TOKEN_ID,
     PARAM_OFFSET,
-    quantize_parameter,
     tokenize_command_sequence,
-    validate_token_space,
 )
+
+# Re-exported public API (token constants + lazy-import helpers).
+__all__ = [
+    "Text2CADDataset",
+    "load_text2cad",
+    "tokenize_command_sequence",
+    "COMMAND_TYPE_IDS",
+    "PAD_TOKEN_ID",
+    "BOS_TOKEN_ID",
+    "EOS_TOKEN_ID",
+    "PARAM_OFFSET",
+    "_get_datasets",
+    "_get_geotoken",
+    "_get_torch",
+]
+
+_log = logging.getLogger(__name__)
 
 # Annotation levels
 ANNOTATION_LEVELS = {
@@ -55,7 +66,7 @@ class Text2CADDataset:
         max_commands: int = 60,
         quantization_bits: int = 8,
         normalization_range: float = 2.0,
-        max_samples: Optional[int] = None,
+        max_samples: int | None = None,
     ):
         """Initialize the Text2CAD dataset.
 
@@ -110,7 +121,7 @@ class Text2CADDataset:
         """Return the number of samples in the dataset."""
         return len(self.json_files)
 
-    def __getitem__(self, idx: int) -> Dict[str, Any]:
+    def __getitem__(self, idx: int) -> dict[str, Any]:
         """Get a single sample from the dataset.
 
         Args:
@@ -127,7 +138,7 @@ class Text2CADDataset:
         """
         json_file = self.json_files[idx]
 
-        with open(json_file, "r") as f:
+        with open(json_file) as f:
             data = json.load(f)
 
         # Get text annotation
@@ -150,12 +161,12 @@ class Text2CADDataset:
 
 
 def _tokenize_text2cad_sample(
-    sample: Dict[str, Any],
+    sample: dict[str, Any],
     annotation_level: str = "detailed",
     max_commands: int = 60,
     quantization_bits: int = 8,
     normalization_range: float = 2.0,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Tokenize a single Text2CAD sample from HuggingFace.
 
     Args:
@@ -168,9 +179,7 @@ def _tokenize_text2cad_sample(
     Returns:
         Dictionary with tokenized output.
     """
-    text_key = ANNOTATION_LEVELS.get(
-        annotation_level, "text_detailed"
-    )
+    text_key = ANNOTATION_LEVELS.get(annotation_level, "text_detailed")
     text = sample.get(text_key, "")
 
     sequence = sample.get("sequence", [])
@@ -192,7 +201,7 @@ def load_text2cad(
     max_commands: int = 60,
     quantization_bits: int = 8,
     normalization_range: float = 2.0,
-    max_samples: Optional[int] = None,
+    max_samples: int | None = None,
 ) -> Any:
     """Load the Text2CAD dataset.
 
@@ -234,9 +243,7 @@ def load_text2cad(
         _log.info(f"Loading Text2CAD from HuggingFace Hub: {path}")
         datasets = _get_datasets()
 
-        hf_dataset = datasets.load_dataset(
-            path, split=split, streaming=streaming
-        )
+        hf_dataset = datasets.load_dataset(path, split=split, streaming=streaming)
 
         if max_samples is not None:
             hf_dataset = hf_dataset.take(max_samples)

@@ -1,4 +1,5 @@
 """Neural generator wrappers — bridge ll_stepnet models to the proposal protocol."""
+
 from __future__ import annotations
 
 from ll_gen.generators.base import BaseNeuralGenerator

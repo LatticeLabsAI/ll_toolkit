@@ -9,8 +9,9 @@ A monorepo of Python packages for CAD document processing, neural networks for 3
 | **cadling** | [`cadling/`](cadling/) | CAD document processing toolkit (docling-inspired). Multi-format parsing (STEP, STL, BRep, IGES), topology analysis, RAG-ready chunking, and synthetic data generation. |
 | **ll-stepnet** | [`ll_stepnet/`](ll_stepnet/) | Neural network package for STEP/B-Rep CAD files. Tokenization, feature extraction, topology encoding, and task-specific models. |
 | **geotoken** | [`geotoken/`](geotoken/) | Geometric tokenizer with adaptive quantization for CAD and mesh data. Mesh, parametric, and topology-level tokenization. |
-| **ll-ocadr** | [`ll_ocadr/`](ll_ocadr/) | Optical CAD Recognition system. DeepSeek-OCR-inspired 3D geometry processing for LLMs with tiled chunks and global context. |
-| **ll-gen** | [`ll_gen/`](ll_gen/) | Generation orchestration: neural propose, deterministic dispose. Coordinates neural proposal and deterministic disposal engines for CAD generation. |
+| **ll-ocadr** | [`ll_ocadr/`](ll_ocadr/) | Optical CAD Recognition. DeepSeek-OCR-inspired 3D geometry processing for LLMs (tiled chunks + global context). HF-native inference (`run_ll_ocadr_hf.py`); vLLM serving is experimental/future. |
+| **ll-gen** | [`ll_gen/`](ll_gen/) | Generation orchestration: neural propose, deterministic dispose. Neural generators (VAE/diffusion/VQ-VAE) + CadQuery sandbox + REINFORCE training loop (`python -m ll_gen.training.run`). Models ship untrained. |
+| **ll-clouds** | [`ll_clouds/`](ll_clouds/) | Point-cloud processing & analysis (NumPy/SciPy): PLY/PCD/XYZ I/O + mesh sampling, normalize/voxel/FPS/outlier preprocessing, normals & curvature, ICP registration, RANSAC/Euclidean segmentation, lazy cadling/ll_ocadr bridges. |
 
 ## Quick Start
 

@@ -4,6 +4,7 @@ Provides interpolation, neighborhood sampling, prior sampling, and
 GAN-based sampling methods for exploring the learned latent geometry
 and generating diverse shape variants.
 """
+
 from __future__ import annotations
 
 import logging
@@ -92,8 +93,7 @@ class LatentSampler:
             # Vectors are nearly parallel
             _log.debug("Latent vectors are nearly parallel; using linear interpolation")
             return [
-                latent1 + (latent2 - latent1) * (t / (steps - 1))
-                for t in range(steps)
+                latent1 + (latent2 - latent1) * (t / (steps - 1)) for t in range(steps)
             ]
 
         results: list[np.ndarray] = []
@@ -192,8 +192,7 @@ class LatentSampler:
             from stepnet.latent_gan import LatentGAN
         except ImportError:
             _log.warning(
-                "stepnet.latent_gan not available; "
-                "falling back to prior sampling"
+                "stepnet.latent_gan not available; " "falling back to prior sampling"
             )
             return self.sample_from_prior(num_samples, seed=seed)
 
@@ -253,8 +252,7 @@ class LatentSampler:
         """
         if self.vae_generator is None:
             raise RuntimeError(
-                "vae_generator is required for decoding; "
-                "provide one in __init__"
+                "vae_generator is required for decoding; " "provide one in __init__"
             )
 
         proposals: list[CommandSequenceProposal] = []
@@ -313,9 +311,7 @@ class LatentSampler:
                 _log.warning("torch not available; cannot decode latents")
                 break
 
-        _log.debug(
-            f"Decoded {len(proposals)} latent vectors into proposals"
-        )
+        _log.debug(f"Decoded {len(proposals)} latent vectors into proposals")
         return proposals
 
     @property

@@ -3,11 +3,11 @@
 This module wraps cadling's OpenSCADGenerator to produce typed CodeProposal
 objects that can be executed and validated by the ll_gen pipeline.
 """
+
 from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional
 
 from ll_gen.config import CodegenConfig, CodeLanguage
 from ll_gen.proposals.code_proposal import CodeProposal
@@ -39,7 +39,7 @@ class OpenSCADProposer:
         ImportError: If cadling is not installed when propose() is called.
     """
 
-    def __init__(self, config: Optional[CodegenConfig] = None) -> None:
+    def __init__(self, config: CodegenConfig | None = None) -> None:
         """Initialize the OpenSCADProposer.
 
         Args:
@@ -61,8 +61,8 @@ class OpenSCADProposer:
     def propose(
         self,
         prompt: str,
-        image_path: Optional[Path] = None,
-        error_context: Optional[Dict] = None,
+        image_path: Path | None = None,
+        error_context: dict | None = None,
         attempt: int = 1,
     ) -> CodeProposal:
         """Generate an OpenSCAD code proposal from a prompt.
@@ -140,8 +140,8 @@ class OpenSCADProposer:
         self,
         prompt: str,
         num_candidates: int = 3,
-        image_path: Optional[Path] = None,
-    ) -> List[CodeProposal]:
+        image_path: Path | None = None,
+    ) -> list[CodeProposal]:
         """Generate multiple candidate OpenSCAD code proposals.
 
         This method calls the generator multiple times to produce diverse

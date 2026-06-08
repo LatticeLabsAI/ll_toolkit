@@ -1,4 +1,5 @@
 """Shared utilities for conditioning encoders."""
+
 from __future__ import annotations
 
 import logging

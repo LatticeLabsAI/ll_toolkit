@@ -3,6 +3,7 @@
 Generates B-rep geometry (face grids + edge points) from a diffusion
 process that progressively denoises from random initialization.
 """
+
 from __future__ import annotations
 
 import logging
@@ -127,7 +128,9 @@ class NeuralDiffusionGenerator(BaseNeuralGenerator):
             # returns a {stage_name: latent [B, D]} dict.
             output = self._model.sample(batch_size=1, device=self.device)
 
-        face_grids, edge_points, stage_latents = self._extract_geometry_from_output(output)
+        face_grids, edge_points, stage_latents = self._extract_geometry_from_output(
+            output
+        )
         confidence = self._compute_confidence(face_grids, edge_points)
 
         return LatentProposal(
@@ -135,7 +138,9 @@ class NeuralDiffusionGenerator(BaseNeuralGenerator):
             edge_points=edge_points,
             stage_latents=stage_latents,
             source_prompt=prompt,
-            conditioning_source=conditioning.source_type if conditioning else "unconditional",
+            conditioning_source=(
+                conditioning.source_type if conditioning else "unconditional"
+            ),
             confidence=confidence,
             generation_metadata=self._build_metadata(
                 "StructuredDiffusion",
@@ -194,7 +199,8 @@ class NeuralDiffusionGenerator(BaseNeuralGenerator):
         # REINFORCE signal — see the method docstring. This is NOT threaded into
         # sample() below, which draws its own internal noise.
         noise = torch.randn(
-            batch_size, *noise_shape,
+            batch_size,
+            *noise_shape,
             device=self.device,
             dtype=torch.float32,
             requires_grad=True,
@@ -214,7 +220,9 @@ class NeuralDiffusionGenerator(BaseNeuralGenerator):
         with torch.no_grad():
             output = self._model.sample(batch_size=batch_size, device=self.device)
 
-        face_grids, edge_points, stage_latents = self._extract_geometry_from_output(output)
+        face_grids, edge_points, stage_latents = self._extract_geometry_from_output(
+            output
+        )
         confidence = self._compute_confidence(face_grids, edge_points)
 
         return LatentProposal(
@@ -222,7 +230,9 @@ class NeuralDiffusionGenerator(BaseNeuralGenerator):
             edge_points=edge_points,
             stage_latents=stage_latents,
             source_prompt=prompt,
-            conditioning_source=conditioning.source_type if conditioning else "unconditional",
+            conditioning_source=(
+                conditioning.source_type if conditioning else "unconditional"
+            ),
             confidence=confidence,
             generation_metadata=self._build_metadata(
                 "StructuredDiffusion",
@@ -274,7 +284,9 @@ class NeuralDiffusionGenerator(BaseNeuralGenerator):
                     edge_points=edge_points,
                     stage_latents=stage_latents,
                     source_prompt=prompt,
-                    conditioning_source=conditioning.source_type if conditioning else "unconditional",
+                    conditioning_source=(
+                        conditioning.source_type if conditioning else "unconditional"
+                    ),
                     confidence=confidence,
                     generation_metadata=self._build_metadata(
                         "StructuredDiffusion",
@@ -339,7 +351,9 @@ class NeuralDiffusionGenerator(BaseNeuralGenerator):
                     eta=self.eta,
                 )
             else:
-                _log.info("Model does not support stage-specific sampling; full regeneration")
+                _log.info(
+                    "Model does not support stage-specific sampling; full regeneration"
+                )
                 output = self.generate(
                     prompt=error_context.get("original_prompt", ""),
                     error_context=error_context,
@@ -517,18 +531,12 @@ class NeuralDiffusionGenerator(BaseNeuralGenerator):
 
         # Adjust based on grid quality (variance in point positions)
         if has_faces:
-            face_variance = np.mean([
-                np.var(grid)
-                for grid in face_grids
-            ])
+            face_variance = np.mean([np.var(grid) for grid in face_grids])
             if face_variance > 0.1:
                 confidence += 0.15
 
         if has_edges:
-            edge_variance = np.mean([
-                np.var(points)
-                for points in edge_points
-            ])
+            edge_variance = np.mean([np.var(points) for points in edge_points])
             if edge_variance > 0.1:
                 confidence += 0.15
 
