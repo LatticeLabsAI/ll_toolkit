@@ -1,10 +1,15 @@
 """
-Run LL-OCADR inference on CAD/Mesh files.
-Supports STEP, STL, OBJ, and PLY formats.
+Run LL-OCADR inference on CAD/Mesh files via vLLM.
 
-Example usage:
-    python run_ll_ocadr.py --mesh-file example.step \
-        --prompt "<mesh>\nDescribe this CAD model."
+EXPERIMENTAL / NOT FUNCTIONAL: this script targets the vLLM serving path, but
+``LatticelabsOCADRForCausalLM`` is not registered into vLLM's ``ModelRegistry``
+and does not implement ``SupportsMultiModal``, so vLLM cannot serve the model as
+written. For real, supported inference use the HF-native script instead:
+
+    python ll_ocadr/run_ll_ocadr_hf.py --model <hf-model> \
+        --mesh example.step --prompt "Describe this CAD model: <mesh>"
+
+Completing the vLLM runtime integration is planned future work.
 """
 
 from __future__ import annotations
