@@ -266,7 +266,7 @@ class CADDenoiser(nn.Module):
         latent_dim: int = 256,
         hidden_dim: int = 1024,
         num_layers: int = 12,
-        num_heads: int = 12,
+        num_heads: int = 16,
         dropout: float = 0.1,
     ) -> None:
         super().__init__()
@@ -379,7 +379,7 @@ class StructuredDiffusion(nn.Module):
         latent_dim = getattr(config, "latent_dim", 256)
         denoiser_hidden_dim = getattr(config, "denoiser_hidden_dim", 1024)
         denoiser_layers = getattr(config, "denoiser_layers", 12)
-        denoiser_heads = getattr(config, "denoiser_heads", 12)
+        denoiser_heads = getattr(config, "denoiser_heads", 16)
         num_timesteps = getattr(config, "num_timesteps", 1000)
         beta_start = getattr(config, "beta_start", 1e-4)
         beta_end = getattr(config, "beta_end", 0.02)

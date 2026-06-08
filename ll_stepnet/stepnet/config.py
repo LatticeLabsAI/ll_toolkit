@@ -182,7 +182,9 @@ class DiffusionConfig:
     beta_end: float = 0.02
     inference_steps: int = 200
     denoiser_layers: int = 12
-    denoiser_heads: int = 12
+    # denoiser_hidden_dim (1024) must be divisible by denoiser_heads.
+    # 1024 / 16 = 64 (head_dim); 12 does not divide 1024.
+    denoiser_heads: int = 16
     denoiser_hidden_dim: int = 1024
     latent_dim: int = 256
 

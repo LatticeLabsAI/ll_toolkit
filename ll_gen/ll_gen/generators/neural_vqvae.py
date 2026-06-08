@@ -219,7 +219,7 @@ class NeuralVQVAEGenerator(BaseNeuralGenerator):
             # Strip BOS, keep generated codes
             return generated[:, 1:]                       # (1, max_codes)
 
-        from ll_stepnet.stepnet.vqvae import DisentangledCodebooks
+        from stepnet.vqvae import DisentangledCodebooks
 
         topo_codes = _sample_ar_decoder(
             self._model.topology_ar_decoder,
@@ -421,16 +421,22 @@ class NeuralVQVAEGenerator(BaseNeuralGenerator):
     def _init_model(self) -> None:
         """Initialize the VQVAEModel lazily on first use."""
         try:
-            from ll_stepnet.stepnet.models import VQVAEModel
-            from ll_stepnet.stepnet.pipeline import CADGenerationPipeline
+            from stepnet.generation_pipeline import CADGenerationPipeline
+            from stepnet.vqvae import VQVAEModel
         except ImportError as e:
             raise ImportError(
-                f"ll_stepnet is required for NeuralVQVAEGenerator: {e}"
+                f"stepnet (ll-stepnet) is required for NeuralVQVAEGenerator: {e}"
             ) from e
 
         _log.info("Initializing VQVAEModel")
 
-        self._model = VQVAEModel()
+        # VQVAEModel encodes a flattened CAD feature vector. The command
+        # representation is FEATURES_PER_TOKEN (1 command type + 16 parameter
+        # slots) per token across max_seq_len tokens; code_dim is the
+        # generator's configured codebook dimension.
+        features_per_token = 1 + 16
+        input_dim = self.max_seq_len * features_per_token
+        self._model = VQVAEModel(input_dim=input_dim, code_dim=self.codebook_dim)
 
         if self.checkpoint_path:
             self.load_checkpoint(self.checkpoint_path)

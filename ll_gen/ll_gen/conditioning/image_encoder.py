@@ -20,7 +20,7 @@ _log = logging.getLogger(__name__)
 
 _STEPNET_AVAILABLE = False
 try:
-    from ll_stepnet.stepnet.conditioning import ImageConditioner
+    from stepnet.conditioning import ImageConditioner
 
     _STEPNET_AVAILABLE = True
 except ImportError:

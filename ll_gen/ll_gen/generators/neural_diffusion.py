@@ -123,24 +123,9 @@ class NeuralDiffusionGenerator(BaseNeuralGenerator):
             raise ImportError("torch is required for diffusion generation") from None
 
         with torch.no_grad():
-            # Initialize noise
-            batch_size = 1
-            noise_shape = self._get_noise_shape()
-            noise = torch.randn(
-                batch_size, *noise_shape,
-                device=self.device,
-                dtype=torch.float32,
-            )
-
-            # Run sampling
-            if hasattr(self._model, "sample"):
-                output = self._model.sample(
-                    noise=noise,
-                    num_steps=self.inference_steps,
-                    eta=self.eta,
-                )
-            else:
-                output = self._model(noise, steps=self.inference_steps)
+            # StructuredDiffusion.sample() draws its own noise internally and
+            # returns a {stage_name: latent [B, D]} dict.
+            output = self._model.sample(batch_size=1, device=self.device)
 
         face_grids, edge_points, stage_latents = self._extract_geometry_from_output(output)
         confidence = self._compute_confidence(face_grids, edge_points)
@@ -214,26 +199,12 @@ class NeuralDiffusionGenerator(BaseNeuralGenerator):
         # Entropy of N(0,I) = 0.5 * d * (1 + log(2*pi))
         entropy_value = float(0.5 * d * (1.0 + np.log(2.0 * np.pi)))
 
-        # Check if model provides DDPO-style API
-        if hasattr(self._model, "sample_with_log_prob"):
-            output, model_log_prob = self._model.sample_with_log_prob(
-                noise=noise,
-                num_steps=self.inference_steps,
-                eta=self.eta,
-            )
-            log_prob = model_log_prob
-        else:
-            # Standard denoising — no grad through the chain,
-            # but grad through the noise log-prob
-            with torch.no_grad():
-                if hasattr(self._model, "sample"):
-                    output = self._model.sample(
-                        noise=noise.detach(),
-                        num_steps=self.inference_steps,
-                        eta=self.eta,
-                    )
-                else:
-                    output = self._model(noise.detach(), steps=self.inference_steps)
+        # StructuredDiffusion draws its own noise internally, so the REINFORCE
+        # signal here is the log-prob of the prior sample ``noise`` (unbiased but
+        # high-variance). A DDPO-style log-prob through the denoising chain is a
+        # future enhancement tracked in the M2 training plan.
+        with torch.no_grad():
+            output = self._model.sample(batch_size=batch_size, device=self.device)
 
         face_grids, edge_points, stage_latents = self._extract_geometry_from_output(output)
         confidence = self._compute_confidence(face_grids, edge_points)
@@ -283,22 +254,7 @@ class NeuralDiffusionGenerator(BaseNeuralGenerator):
 
         with torch.no_grad():
             for _ in range(num_candidates):
-                batch_size = 1
-                noise_shape = self._get_noise_shape()
-                noise = torch.randn(
-                    batch_size, *noise_shape,
-                    device=self.device,
-                    dtype=torch.float32,
-                )
-
-                if hasattr(self._model, "sample"):
-                    output = self._model.sample(
-                        noise=noise,
-                        num_steps=self.inference_steps,
-                        eta=self.eta,
-                    )
-                else:
-                    output = self._model(noise, steps=self.inference_steps)
+                output = self._model.sample(batch_size=1, device=self.device)
 
                 face_grids, edge_points, stage_latents = (
                     self._extract_geometry_from_output(output)
@@ -415,19 +371,22 @@ class NeuralDiffusionGenerator(BaseNeuralGenerator):
     def _init_model(self) -> None:
         """Initialize the StructuredDiffusion model lazily on first use."""
         try:
-            from ll_stepnet.stepnet.models import StructuredDiffusion
+            from stepnet.diffusion import StructuredDiffusion
         except ImportError as e:
             raise ImportError(
-                f"ll_stepnet is required for NeuralDiffusionGenerator: {e}"
+                f"stepnet (ll-stepnet) is required for NeuralDiffusionGenerator: {e}"
             ) from e
 
         _log.info("Initializing StructuredDiffusion model")
 
+        # StructuredDiffusion.__init__(self, config) takes a single config
+        # object and reads its attributes via getattr — pass the object
+        # directly rather than splatting it into keyword arguments.
         if self.diffusion_config is None:
             _log.info("No diffusion config provided; using defaults")
             self._model = StructuredDiffusion()
         else:
-            self._model = StructuredDiffusion(**self.diffusion_config.__dict__)
+            self._model = StructuredDiffusion(config=self.diffusion_config)
 
         if self.checkpoint_path:
             self.load_checkpoint(self.checkpoint_path)

@@ -18,7 +18,7 @@ _log = logging.getLogger(__name__)
 
 _STEPNET_AVAILABLE = False
 try:
-    from ll_stepnet.stepnet.conditioning import TextConditioner
+    from stepnet.conditioning import TextConditioner
 
     _STEPNET_AVAILABLE = True
 except ImportError:
