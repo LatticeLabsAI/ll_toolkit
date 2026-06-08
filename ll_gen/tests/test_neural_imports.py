@@ -64,15 +64,17 @@ class TestNeuralGeneratorConfigWiring:
     def test_vae_non_default_config_wiring(self) -> None:
         """A non-default stepnet VAEConfig flows into STEPVAE + its encoder config.
 
-        STEPVAE keeps ``embed_dim`` (= STEPEncoderConfig.token_embed_dim, which
-        the generator maps from ``encoder_embed_dim``) plus the scalar VAE
-        hyper-params, so assert on those.
+        STEPVAE does not keep the ``encoder_config`` object — it extracts the
+        encoder settings into the built encoder. So validate the *effects* of
+        the STEPEncoderConfig the generator constructs: ``embed_dim`` (mapped
+        from ``encoder_embed_dim``) and the encoder's transformer-layer count
+        (mapped from ``encoder_layers``), plus the scalar VAE hyper-params.
         """
         from stepnet.config import VAEConfig
 
         vc = VAEConfig(
             encoder_embed_dim=128,  # -> STEPEncoderConfig.token_embed_dim -> embed_dim
-            encoder_layers=2,
+            encoder_layers=2,  # -> STEPEncoderConfig.num_transformer_layers
             latent_dim=64,
             kl_weight=0.5,
             max_seq_len=40,
@@ -80,7 +82,10 @@ class TestNeuralGeneratorConfigWiring:
         gen = NeuralVAEGenerator(vae_config=vc, device="cpu")
         gen._init_model()
 
+        # Encoder-config effects: embed dim + transformer depth propagated.
         assert gen._model.embed_dim == 128
+        assert len(gen._model.encoder.transformer.layers) == 2
+        # Scalar VAE hyper-params forwarded to STEPVAE.
         assert gen._model.latent_dim == 64
         assert gen._model.kl_weight == 0.5
         assert gen._model.max_seq_len == 40
