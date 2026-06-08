@@ -12,8 +12,11 @@ covering the core point-cloud workflow:
 - **Registration** — point-to-point ICP.
 - **Segmentation** — RANSAC plane fitting, Euclidean clustering.
 
-Optional bridges convert cadling documents / ll_ocadr inputs into a
-`PointCloud` (lazily imported, so the core library has no hard dependency on
-them).
+Optional bridges convert documents/inputs from the sibling packages
+[`cadling`](../cadling/) (CAD document processing) and
+[`ll_ocadr`](../ll_ocadr/) (optical CAD recognition) into a `PointCloud`.
+These package names are intentional — they are other members of the LatticeLabs
+monorepo — and are imported lazily, so the core library has no hard dependency
+on them.
 
 See the per-module API and usage examples (added as the library is built out).

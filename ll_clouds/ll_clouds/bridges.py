@@ -38,10 +38,12 @@ def from_cadling_document(doc: Any, include_normals: bool = True) -> PointCloud:
     def _walk(items: Any) -> None:
         for item in items or []:
             item_verts = getattr(item, "vertices", None)
-            if item_verts:
+            # Explicit None + length checks: a bare truthiness test raises on
+            # NumPy-array vertex data (ambiguous truth value).
+            if item_verts is not None and len(item_verts) > 0:
                 vertices.extend([list(v) for v in item_verts])
                 item_norms = getattr(item, "normals", None)
-                if item_norms and len(item_norms) == len(item_verts):
+                if item_norms is not None and len(item_norms) == len(item_verts):
                     normals.extend([list(nrm) for nrm in item_norms])
             _walk(getattr(item, "children", None))
 

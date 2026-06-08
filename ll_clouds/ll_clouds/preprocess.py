@@ -28,8 +28,11 @@ def normalize(pc: PointCloud) -> PointCloud:
     """Center on the centroid and scale to the unit sphere (max radius 1).
 
     Idempotent: re-normalizing an already-normalized cloud is a no-op. Normals
-    are directions, so they are passed through unchanged.
+    are directions, so they are passed through unchanged. An empty cloud is
+    returned unchanged (avoids NaNs from mean/max over zero points).
     """
+    if pc.num_points == 0:
+        return _subset(pc, np.arange(0))
     points = pc.points
     centroid = points.mean(axis=0)
     centered = points - centroid

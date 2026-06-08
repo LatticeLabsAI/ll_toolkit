@@ -77,3 +77,34 @@ class TestResultModels:
         res = SegmentationResult(labels=labels, num_segments=2)
         assert res.num_segments == 2
         assert res.labels.shape == (5,)
+
+
+class TestPointCloudMetadata:
+    def test_default_metadata_not_shared_between_instances(self) -> None:
+        pts = np.zeros((5, 3))
+        pc1 = PointCloud(points=pts)
+        pc2 = PointCloud(points=pts)
+        pc1.metadata["foo"] = "bar"
+        assert "foo" in pc1.metadata
+        assert "foo" not in pc2.metadata
+        assert pc1.metadata is not pc2.metadata
+
+    def test_metadata_copied_not_aliased_on_normalize(self) -> None:
+        from ll_clouds.preprocess import normalize
+
+        pc = PointCloud(
+            points=np.random.default_rng(1).normal(size=(16, 3)),
+            metadata={"source": "unit-test", "version": 1},
+        )
+        out = normalize(pc)
+        assert out.metadata == pc.metadata
+        assert out.metadata is not pc.metadata
+        out.metadata["new_key"] = "x"
+        assert "new_key" not in pc.metadata
+
+    def test_segmentation_result_default_metadata_not_shared(self) -> None:
+        r1 = SegmentationResult(labels=np.zeros(3), num_segments=0)
+        r2 = SegmentationResult(labels=np.zeros(3), num_segments=0)
+        r1.metadata["k"] = 1
+        assert "k" not in r2.metadata
+        assert r1.metadata is not r2.metadata

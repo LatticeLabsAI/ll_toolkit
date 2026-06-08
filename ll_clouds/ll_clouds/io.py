@@ -156,11 +156,17 @@ def _read_ply(path: str) -> PointCloud:
     props: list[str] = []
     n_vertices = 0
     header_end = None
+    in_vertex_element = False
     for i, line in enumerate(lines):
         s = line.strip()
         if s.startswith("element vertex"):
             n_vertices = int(s.split()[-1])
-        elif s.startswith("property"):
+            in_vertex_element = True
+        elif s.startswith("element"):
+            # A different element (e.g. "element face N") ends the vertex block;
+            # only vertex properties belong in `props`.
+            in_vertex_element = False
+        elif s.startswith("property") and in_vertex_element:
             props.append(s.split()[-1])
         elif s == "end_header":
             header_end = i + 1

@@ -57,3 +57,22 @@ class TestICP:
             max_iterations=25,
         )
         assert 1 <= result.iterations <= 25
+
+
+class TestICPFitness:
+    def test_max_correspondence_distance_controls_fitness(self, rng) -> None:
+        # 1000 inliers near the origin + 3 far outliers (same direction so the
+        # rigid fit barely shifts the inliers). Outliers sit ~100 away.
+        inliers = rng.normal(scale=0.1, size=(1000, 3))
+        outliers = np.array([[100.0, 0.0, 0.0]] * 3)
+        target = PointCloud(points=inliers)
+        source = PointCloud(points=np.concatenate([inliers, outliers], axis=0))
+
+        loose = icp(source, target, max_iterations=20, max_correspondence_distance=1e9)
+        tight = icp(source, target, max_iterations=20, max_correspondence_distance=2.0)
+
+        # With an unbounded gate every correspondence counts -> fitness 1.0.
+        assert loose.fitness == pytest.approx(1.0)
+        # A tight gate excludes the 3 far outliers -> fitness drops to ~1000/1003.
+        assert tight.fitness < loose.fitness
+        assert tight.fitness == pytest.approx(1000 / 1003, abs=0.02)

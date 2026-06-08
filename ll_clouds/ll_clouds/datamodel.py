@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Any
 
 import numpy as np
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class PointCloud(BaseModel):
@@ -31,7 +31,7 @@ class PointCloud(BaseModel):
     normals: np.ndarray | None = None
     colors: np.ndarray | None = None
     labels: np.ndarray | None = None
-    metadata: dict[str, Any] = {}
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("points", mode="before")
     @classmethod
@@ -123,7 +123,7 @@ class SegmentationResult(BaseModel):
 
     labels: np.ndarray
     num_segments: int
-    metadata: dict[str, Any] = {}
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("labels", mode="before")
     @classmethod

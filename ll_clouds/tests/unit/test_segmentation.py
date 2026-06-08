@@ -57,3 +57,27 @@ class TestEuclideanCluster:
         result = euclidean_cluster(PointCloud(points=pts), eps=0.3, min_points=5)
         assert result.labels[-1] == -1
         assert result.num_segments == 1
+
+
+class TestRansacPlaneEdgeCases:
+    def test_no_plane_reports_zero_segments_and_inliers(self, rng) -> None:
+        # Volumetric blob + an extremely tight threshold: only the 3 sampled
+        # points ever lie on a candidate plane, so there is never a consensus
+        # beyond the minimal sample -> no plane reported.
+        blob = rng.uniform(-1, 1, size=(256, 3))
+        result, plane = ransac_plane(
+            PointCloud(points=blob), distance_threshold=1e-9, num_iterations=20, seed=0
+        )
+        assert isinstance(result, SegmentationResult)
+        assert result.num_segments == 0
+        assert result.metadata["num_inliers"] == 0
+        assert (result.labels == 1).sum() == 0
+        assert len(plane) == 4
+
+    def test_small_cloud_under_three_points(self) -> None:
+        pts = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]])  # only 2 points
+        result, plane = ransac_plane(PointCloud(points=pts))
+        assert result.num_segments == 0
+        assert result.metadata["num_inliers"] == 0
+        assert result.labels.shape == (2,)
+        assert plane.shape == (4,)

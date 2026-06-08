@@ -42,19 +42,40 @@ def ransac_plane(
     distance_threshold: float = 0.05,
     num_iterations: int = 200,
     seed: int = 0,
+    min_inliers: int = 3,
 ) -> tuple[SegmentationResult, np.ndarray]:
     """RANSAC plane segmentation.
 
     Returns a SegmentationResult whose labels are ``1`` for plane inliers and
     ``0`` for the rest, plus the refined plane coefficients ``(a, b, c, d)``.
+
+    A plane is only reported when its inlier set is **larger than**
+    ``min_inliers`` — the 3 sampled points always lie on their own candidate
+    plane, so a genuine consensus must exceed that minimal sample. Clouds with
+    fewer than 3 points, or with no consensus beyond the sample, yield
+    ``num_segments == 0`` and ``num_inliers == 0`` (labels all 0, default plane).
     """
     points = pc.points
     n = points.shape[0]
-    rng = np.random.default_rng(seed)
+    default_plane = np.array([0.0, 0.0, 1.0, 0.0])
 
+    def _no_plane() -> tuple[SegmentationResult, np.ndarray]:
+        return (
+            SegmentationResult(
+                labels=np.zeros(n, dtype=np.int64),
+                num_segments=0,
+                metadata={"plane": default_plane.tolist(), "num_inliers": 0},
+            ),
+            default_plane,
+        )
+
+    if n < 3:
+        return _no_plane()
+
+    rng = np.random.default_rng(seed)
     best_inliers = np.zeros(n, dtype=bool)
     best_count = -1
-    best_plane = np.array([0.0, 0.0, 1.0, 0.0])
+    best_plane = default_plane
 
     for _ in range(num_iterations):
         i, j, k = rng.choice(n, size=3, replace=False)
@@ -68,7 +89,7 @@ def ransac_plane(
             best_inliers = inliers
             best_plane = plane
 
-    # Refine the plane on its inliers (if enough) and re-evaluate membership.
+    # Refine the plane on its inliers and re-evaluate membership.
     if best_inliers.sum() >= 3:
         refined = _best_fit_plane(points[best_inliers])
         refined_inliers = _point_plane_distance(points, refined) <= distance_threshold
@@ -76,10 +97,13 @@ def ransac_plane(
             best_plane = refined
             best_inliers = refined_inliers
 
+    if int(best_inliers.sum()) <= min_inliers:
+        return _no_plane()
+
     labels = best_inliers.astype(np.int64)  # 1 = inlier, 0 = outlier
     result = SegmentationResult(
         labels=labels,
-        num_segments=1 if best_inliers.any() else 0,
+        num_segments=1,
         metadata={"plane": best_plane.tolist(), "num_inliers": int(best_inliers.sum())},
     )
     return result, best_plane

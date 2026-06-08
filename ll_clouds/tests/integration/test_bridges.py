@@ -99,3 +99,35 @@ def test_to_ll_ocadr_arrays_unbatched_no_normals() -> None:
     coords, norms = bridges.to_ll_ocadr_arrays(pc, batched=False)
     assert coords.shape == (15, 3)
     assert norms is None
+
+
+def test_from_cadling_document_include_normals_false() -> None:
+    verts = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
+    norms = [[0.0, 0.0, 1.0]] * 3
+    doc = types.SimpleNamespace(
+        items=[types.SimpleNamespace(vertices=verts, normals=norms)]
+    )
+    pc = bridges.from_cadling_document(doc, include_normals=False)
+    assert pc.num_points == 3
+    assert pc.normals is None  # normals suppressed despite being present
+
+
+def test_from_cadling_document_mismatched_normals_dropped() -> None:
+    verts = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
+    norms = [[0.0, 0.0, 1.0]]  # length 1 != 3 vertices
+    doc = types.SimpleNamespace(
+        items=[types.SimpleNamespace(vertices=verts, normals=norms)]
+    )
+    pc = bridges.from_cadling_document(doc)
+    assert pc.num_points == 3
+    assert pc.normals is None  # mismatched length -> normals dropped
+
+
+def test_from_cadling_document_numpy_vertices_do_not_raise() -> None:
+    # NumPy-array vertices must not trip the truthiness check.
+    verts = np.zeros((4, 3))
+    doc = types.SimpleNamespace(
+        items=[types.SimpleNamespace(vertices=verts, normals=None)]
+    )
+    pc = bridges.from_cadling_document(doc)
+    assert pc.num_points == 4

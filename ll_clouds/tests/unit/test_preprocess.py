@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from ll_clouds.datamodel import PointCloud
 from ll_clouds.preprocess import (
@@ -91,3 +92,71 @@ class TestOutlierRemoval:
         assert out.labels is not None
         assert out.labels.shape[0] == out.num_points
         assert 100 not in out.labels  # the outlier (label 100) was dropped
+
+
+class TestVoxelDownsampleExtras:
+    def test_invalid_voxel_size_raises(self, rng) -> None:
+        pc = PointCloud(points=rng.uniform(0.0, 1.0, size=(10, 3)))
+        with pytest.raises(ValueError, match="voxel_size must be positive"):
+            voxel_downsample(pc, voxel_size=0.0)
+        with pytest.raises(ValueError, match="voxel_size must be positive"):
+            voxel_downsample(pc, voxel_size=-0.5)
+
+    def test_attributes_aggregated_and_labels_dropped(self) -> None:
+        # Two points in the same voxel: attributes averaged, labels dropped.
+        pts = np.array([[0.1, 0.1, 0.1], [0.4, 0.4, 0.4]], dtype=np.float64)
+        normals = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float64)
+        colors = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, 1.0]], dtype=np.float64)
+        labels = np.array([1, 2], dtype=np.int64)
+        out = voxel_downsample(
+            PointCloud(points=pts, normals=normals, colors=colors, labels=labels),
+            voxel_size=1.0,
+        )
+        assert out.num_points == 1
+        np.testing.assert_allclose(out.points[0], pts.mean(axis=0))
+        assert out.colors is not None
+        np.testing.assert_allclose(out.colors[0], colors.mean(axis=0))
+        # Normals averaged then re-normalized to unit length.
+        expected_normal = normals.mean(axis=0)
+        expected_normal /= np.linalg.norm(expected_normal)
+        assert out.normals is not None
+        np.testing.assert_allclose(out.normals[0], expected_normal)
+        assert np.isclose(np.linalg.norm(out.normals[0]), 1.0)
+        assert out.labels is None  # labels cannot be aggregated -> dropped
+
+
+class TestFarthestPointDownsampleExtras:
+    def test_invalid_k_raises(self, rng) -> None:
+        pc = PointCloud(points=rng.normal(size=(10, 3)))
+        with pytest.raises(ValueError, match="k must be positive"):
+            farthest_point_downsample(pc, k=0)
+        with pytest.raises(ValueError, match="k must be positive"):
+            farthest_point_downsample(pc, k=-1)
+
+    def test_attributes_stay_aligned(self) -> None:
+        pts = np.array(
+            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+        )
+        normals = np.array(
+            [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [-1.0, 0.0, 0.0]]
+        )
+        labels = np.array([10, 20, 30, 40], dtype=np.int64)
+        out = farthest_point_downsample(
+            PointCloud(points=pts, normals=normals, labels=labels), k=2
+        )
+        assert out.num_points == 2
+        assert out.normals.shape == (2, 3) and out.labels.shape == (2,)
+        # Each surviving point keeps its original normal + label.
+        for p, nrm, lab in zip(out.points, out.normals, out.labels):
+            idx = np.where(np.all(pts == p, axis=1))[0]
+            assert idx.size == 1
+            i = int(idx[0])
+            np.testing.assert_allclose(normals[i], nrm)
+            assert labels[i] == lab
+
+
+class TestNormalizeEmpty:
+    def test_empty_cloud_no_nan(self) -> None:
+        out = normalize(PointCloud(points=np.zeros((0, 3))))
+        assert out.num_points == 0
+        assert not np.isnan(out.points).any()
