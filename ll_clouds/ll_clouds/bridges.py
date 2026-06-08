@@ -5,9 +5,10 @@ Every heavy/optional dependency (trimesh, cadling, ll_ocadr, torch) is imported
 with only numpy + the core ll_clouds package installed. This keeps ll_clouds a
 standalone library while still offering first-class interop.
 """
+
 from __future__ import annotations
 
-from typing import Any, Optional, Tuple
+from typing import Any
 
 import numpy as np
 
@@ -74,7 +75,7 @@ def from_ll_ocadr_mesh(mesh_data: Any) -> PointCloud:
 
 def to_ll_ocadr_arrays(
     pc: PointCloud, batched: bool = True
-) -> Tuple[np.ndarray, Optional[np.ndarray]]:
+) -> tuple[np.ndarray, np.ndarray | None]:
     """Convert a PointCloud to ``(vertex_coords, vertex_normals)`` arrays shaped
     for the ll_ocadr model.
 

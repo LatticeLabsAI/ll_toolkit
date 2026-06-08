@@ -1,8 +1,8 @@
 """Tests for ll_clouds segmentation (SPEC-1 M5, T5.6)."""
+
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
 from ll_clouds.datamodel import PointCloud, SegmentationResult
 from ll_clouds.segmentation import euclidean_cluster, ransac_plane
@@ -40,13 +40,13 @@ class TestRansacPlane:
 
 class TestEuclideanCluster:
     def test_separates_two_blobs(self, two_blobs) -> None:
-        result = euclidean_cluster(
-            PointCloud(points=two_blobs), eps=0.5, min_points=10
-        )
+        result = euclidean_cluster(PointCloud(points=two_blobs), eps=0.5, min_points=10)
         assert isinstance(result, SegmentationResult)
         assert result.num_segments == 2
         # Each blob has 200 points; both clusters should be substantial.
-        unique, counts = np.unique(result.labels[result.labels >= 0], return_counts=True)
+        unique, counts = np.unique(
+            result.labels[result.labels >= 0], return_counts=True
+        )
         assert len(unique) == 2
         assert all(c >= 150 for c in counts)
 

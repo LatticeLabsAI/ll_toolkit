@@ -1,4 +1,5 @@
 """Tests for ll_clouds I/O (SPEC-1 M5, T5.2)."""
+
 from __future__ import annotations
 
 import numpy as np

@@ -5,6 +5,7 @@ nearest target point, solve the optimal rigid transform for those
 correspondences via SVD (Umeyama without scaling), apply it, and repeat until
 the alignment RMSE stops improving.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -13,7 +14,9 @@ from scipy.spatial import cKDTree
 from .datamodel import PointCloud, RegistrationResult
 
 
-def _best_rigid_transform(src: np.ndarray, dst: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def _best_rigid_transform(
+    src: np.ndarray, dst: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
     """Optimal rotation R and translation t minimizing ||R·src + t − dst||."""
     src_centroid = src.mean(axis=0)
     dst_centroid = dst.mean(axis=0)
@@ -71,14 +74,14 @@ def icp(
         step[:3, 3] = translation
         transform = step @ transform
 
-        rmse = float(np.sqrt(np.mean(distances ** 2)))
+        rmse = float(np.sqrt(np.mean(distances**2)))
         if abs(prev_rmse - rmse) < tolerance:
             converged = True
             break
         prev_rmse = rmse
 
     final_distances, _ = tree.query(current)
-    inlier_rmse = float(np.sqrt(np.mean(final_distances ** 2)))
+    inlier_rmse = float(np.sqrt(np.mean(final_distances**2)))
     fitness = float(np.mean(final_distances <= max_correspondence_distance))
 
     return RegistrationResult(

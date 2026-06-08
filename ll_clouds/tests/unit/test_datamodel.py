@@ -1,4 +1,5 @@
 """Tests for ll_clouds Pydantic data models (SPEC-1 M5, T5.1)."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -49,9 +50,13 @@ class TestPointCloud:
 
 class TestResultModels:
     def test_registration_result(self) -> None:
-        T = np.eye(4)
+        transform = np.eye(4)
         res = RegistrationResult(
-            transformation=T, fitness=0.9, inlier_rmse=0.01, iterations=12, converged=True
+            transformation=transform,
+            fitness=0.9,
+            inlier_rmse=0.01,
+            iterations=12,
+            converged=True,
         )
         assert res.transformation.shape == (4, 4)
         assert res.converged is True
@@ -60,8 +65,11 @@ class TestResultModels:
     def test_registration_transformation_must_be_4x4(self) -> None:
         with pytest.raises(ValueError):
             RegistrationResult(
-                transformation=np.eye(3), fitness=1.0, inlier_rmse=0.0,
-                iterations=1, converged=True,
+                transformation=np.eye(3),
+                fitness=1.0,
+                inlier_rmse=0.0,
+                iterations=1,
+                converged=True,
             )
 
     def test_segmentation_result(self) -> None:

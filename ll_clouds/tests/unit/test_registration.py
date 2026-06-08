@@ -1,4 +1,5 @@
 """Tests for ll_clouds ICP registration (SPEC-1 M5, T5.5)."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -13,17 +14,17 @@ def _rotation_z(theta: float) -> np.ndarray:
     return np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]])
 
 
-def _transform(points: np.ndarray, R: np.ndarray, t: np.ndarray) -> np.ndarray:
-    return points @ R.T + t
+def _transform(points: np.ndarray, rot: np.ndarray, t: np.ndarray) -> np.ndarray:
+    return points @ rot.T + t
 
 
 class TestICP:
     def test_recovers_known_transform(self, rng) -> None:
         target = rng.normal(size=(300, 3))
-        R = _rotation_z(0.2)
+        rot = _rotation_z(0.2)
         t = np.array([0.5, -0.3, 0.1])
-        # source maps to target via (R, t): target ~= source @ R.T + t
-        source = (target - t) @ R
+        # source maps to target via (rot, t): target ~= source @ rot.T + t
+        source = (target - t) @ rot
 
         result = icp(
             PointCloud(points=source),
@@ -35,9 +36,9 @@ class TestICP:
         assert result.converged is True
 
         # Applying the recovered transform to source should match target.
-        T = result.transformation
+        transform = result.transformation
         src_h = np.concatenate([source, np.ones((source.shape[0], 1))], axis=1)
-        aligned = (src_h @ T.T)[:, :3]
+        aligned = (src_h @ transform.T)[:, :3]
         assert np.mean(np.linalg.norm(aligned - target, axis=1)) < 1e-3
         assert result.inlier_rmse < 1e-3
 

@@ -4,6 +4,7 @@ Normalization, voxel-grid and farthest-point downsampling, and statistical
 outlier removal. All operations return a new :class:`PointCloud` and preserve
 per-point attributes where the operation makes that meaningful.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -73,8 +74,9 @@ def voxel_downsample(pc: PointCloud, voxel_size: float) -> PointCloud:
         normals = np.divide(normals, norms, out=np.zeros_like(normals), where=norms > 0)
     colors = _group_mean(pc.colors) if pc.colors is not None else None
 
-    return PointCloud(points=points, normals=normals, colors=colors,
-                      metadata=dict(pc.metadata))
+    return PointCloud(
+        points=points, normals=normals, colors=colors, metadata=dict(pc.metadata)
+    )
 
 
 def _farthest_point_indices(points: np.ndarray, k: int) -> np.ndarray:

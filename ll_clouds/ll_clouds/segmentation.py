@@ -3,9 +3,8 @@
 - ``ransac_plane``: robustly fit the dominant plane and label inliers.
 - ``euclidean_cluster``: density-based (DBSCAN-style) clustering with noise.
 """
-from __future__ import annotations
 
-from typing import Tuple
+from __future__ import annotations
 
 import numpy as np
 from scipy.spatial import cKDTree
@@ -35,7 +34,7 @@ def _best_fit_plane(points: np.ndarray) -> np.ndarray:
 
 
 def _point_plane_distance(points: np.ndarray, plane: np.ndarray) -> np.ndarray:
-    return np.abs(points @ plane[:3] + plane[3])
+    return np.asarray(np.abs(points @ plane[:3] + plane[3]))
 
 
 def ransac_plane(
@@ -43,7 +42,7 @@ def ransac_plane(
     distance_threshold: float = 0.05,
     num_iterations: int = 200,
     seed: int = 0,
-) -> Tuple[SegmentationResult, np.ndarray]:
+) -> tuple[SegmentationResult, np.ndarray]:
     """RANSAC plane segmentation.
 
     Returns a SegmentationResult whose labels are ``1`` for plane inliers and

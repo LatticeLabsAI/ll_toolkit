@@ -1,8 +1,8 @@
 """Tests for ll_clouds preprocessing (SPEC-1 M5, T5.3)."""
+
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
 from ll_clouds.datamodel import PointCloud
 from ll_clouds.preprocess import (

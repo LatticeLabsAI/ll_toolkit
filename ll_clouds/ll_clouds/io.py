@@ -4,10 +4,11 @@ Supports ASCII PLY, PCD, and XYZ read/write (points and, where the format
 allows, per-point normals). Mesh -> point-cloud sampling uses trimesh, imported
 lazily so the core I/O has no hard trimesh dependency.
 """
+
 from __future__ import annotations
 
 import os
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 
@@ -19,6 +20,7 @@ _FLOAT_FMT = "%.9g"
 # ---------------------------------------------------------------------------
 # Dispatch
 # ---------------------------------------------------------------------------
+
 
 def write_point_cloud(pc: PointCloud, path: str) -> None:
     """Write a PointCloud to ``path`` (format chosen by extension)."""
@@ -49,6 +51,7 @@ def read_point_cloud(path: str) -> PointCloud:
 # XYZ (plain text: x y z [nx ny nz])
 # ---------------------------------------------------------------------------
 
+
 def _stack(pc: PointCloud) -> np.ndarray:
     if pc.normals is not None:
         return np.concatenate([pc.points, pc.normals], axis=1)
@@ -72,9 +75,12 @@ def _read_xyz(path: str) -> PointCloud:
 # PCD (ASCII subset)
 # ---------------------------------------------------------------------------
 
+
 def _write_pcd(pc: PointCloud, path: str) -> None:
     has_normals = pc.normals is not None
-    fields = ["x", "y", "z"] + (["normal_x", "normal_y", "normal_z"] if has_normals else [])
+    fields = ["x", "y", "z"] + (
+        ["normal_x", "normal_y", "normal_z"] if has_normals else []
+    )
     n = pc.num_points
     arr = _stack(pc)
     header = (
@@ -113,11 +119,7 @@ def _read_pcd(path: str) -> PointCloud:
     if data_start is None or not fields:
         raise ValueError("Malformed PCD: missing FIELDS or DATA section")
 
-    rows = [
-        [float(x) for x in ln.split()]
-        for ln in lines[data_start:]
-        if ln.strip()
-    ]
+    rows = [[float(x) for x in ln.split()] for ln in lines[data_start:] if ln.strip()]
     data = np.asarray(rows, dtype=np.float64).reshape(-1, len(fields))
     idx = {name: k for k, name in enumerate(fields)}
     points = data[:, [idx["x"], idx["y"], idx["z"]]]
@@ -130,6 +132,7 @@ def _read_pcd(path: str) -> PointCloud:
 # ---------------------------------------------------------------------------
 # PLY (ASCII subset)
 # ---------------------------------------------------------------------------
+
 
 def _write_ply(pc: PointCloud, path: str) -> None:
     has_normals = pc.normals is not None
@@ -167,7 +170,7 @@ def _read_ply(path: str) -> PointCloud:
 
     rows = [
         [float(x) for x in ln.split()]
-        for ln in lines[header_end:header_end + n_vertices]
+        for ln in lines[header_end : header_end + n_vertices]
     ]
     data = np.asarray(rows, dtype=np.float64).reshape(n_vertices, len(props))
     idx = {name: k for k, name in enumerate(props)}
@@ -181,6 +184,7 @@ def _read_ply(path: str) -> PointCloud:
 # ---------------------------------------------------------------------------
 # Mesh sampling (trimesh, lazy)
 # ---------------------------------------------------------------------------
+
 
 def sample_from_mesh(
     mesh: Any,
@@ -211,7 +215,7 @@ def sample_from_mesh(
         raise ValueError(f"Unsupported sampling method: {method!r}")
 
     points, face_idx = trimesh.sample.sample_surface(mesh, n)
-    normals: Optional[np.ndarray] = None
+    normals: np.ndarray | None = None
     if with_normals:
         normals = np.asarray(mesh.face_normals[face_idx], dtype=np.float64)
     return PointCloud(points=np.asarray(points, dtype=np.float64), normals=normals)

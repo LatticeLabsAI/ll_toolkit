@@ -4,6 +4,7 @@ OpenMP safety: ``OMP_NUM_THREADS`` is pinned to 1. The core library is
 NumPy/SciPy only (no torch), so there is no libomp double-init risk here, but we
 keep the pin for consistency with the rest of the monorepo.
 """
+
 from __future__ import annotations
 
 import os

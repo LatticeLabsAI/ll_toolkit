@@ -5,9 +5,10 @@
 NumPy arrays are allowed via ``arbitrary_types_allowed`` and validated/coerced
 so callers can pass plain lists or arrays of any numeric dtype.
 """
+
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
@@ -27,9 +28,9 @@ class PointCloud(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     points: np.ndarray
-    normals: Optional[np.ndarray] = None
-    colors: Optional[np.ndarray] = None
-    labels: Optional[np.ndarray] = None
+    normals: np.ndarray | None = None
+    colors: np.ndarray | None = None
+    labels: np.ndarray | None = None
     metadata: dict[str, Any] = {}
 
     @field_validator("points", mode="before")
@@ -42,7 +43,7 @@ class PointCloud(BaseModel):
 
     @field_validator("normals", "colors", mode="before")
     @classmethod
-    def _coerce_n3(cls, value: Any) -> Optional[np.ndarray]:
+    def _coerce_n3(cls, value: Any) -> np.ndarray | None:
         if value is None:
             return None
         arr = np.asarray(value, dtype=np.float64)
@@ -52,7 +53,7 @@ class PointCloud(BaseModel):
 
     @field_validator("labels", mode="before")
     @classmethod
-    def _coerce_labels(cls, value: Any) -> Optional[np.ndarray]:
+    def _coerce_labels(cls, value: Any) -> np.ndarray | None:
         if value is None:
             return None
         arr = np.asarray(value)
@@ -61,7 +62,7 @@ class PointCloud(BaseModel):
         return arr
 
     @model_validator(mode="after")
-    def _check_lengths(self) -> "PointCloud":
+    def _check_lengths(self) -> PointCloud:
         n = self.points.shape[0]
         for name in ("normals", "colors", "labels"):
             attr = getattr(self, name)
