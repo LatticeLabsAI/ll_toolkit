@@ -56,6 +56,10 @@ packages = [
     "ll_ocadr.vllm.process",
     "ll_ocadr.vllm.lattice_encoder",
 ]
+# Flat layout: the project root IS the `ll_ocadr` package (it holds __init__.py
+# directly), so map the top-level package to "." — otherwise setuptools looks
+# for a non-existent ll_ocadr/ll_ocadr/ subdirectory and the install fails.
+package-dir = {"ll_ocadr" = "."}
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
