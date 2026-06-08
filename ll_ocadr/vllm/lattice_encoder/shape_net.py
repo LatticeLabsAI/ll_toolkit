@@ -85,14 +85,13 @@ class PointPatchEmbedding(nn.Module):
                 "(patch_size=%d, num_patches=%d)",
                 remainder, N, patch_size, num_patches,
             )
-            # Pad the leftover points to a full patch and append as extra patch
+            # Max-pool the leftover points directly into one extra patch token.
+            # (Zero-padding to `patch_size` is both unnecessary and wrong: with
+            # remainder > patch_size it produces a negative pad dimension, and
+            # padding with zeros would bias the max-pool toward 0 when features
+            # are negative.)
             tail = feature[:, :, num_patches * patch_size:]  # [B, embed_dim, remainder]
-            pad = torch.zeros(
-                B, self.embed_dim, patch_size - remainder,
-                device=feature.device, dtype=feature.dtype,
-            )
-            tail_padded = torch.cat([tail, pad], dim=2)  # [B, embed_dim, patch_size]
-            tail_token = torch.max(tail_padded, dim=-1)[0].unsqueeze(2)  # [B, embed_dim, 1]
+            tail_token = torch.max(tail, dim=-1)[0].unsqueeze(2)  # [B, embed_dim, 1]
             patch_tokens = torch.cat([patch_tokens, tail_token], dim=2)
 
         patch_tokens = patch_tokens.transpose(1, 2)  # [B, num_patches(+1), embed_dim]

@@ -107,3 +107,48 @@ def ocadr_model(ocadr_config):
     from ll_ocadr.vllm.latticelabs_ocadr import LatticelabsOCADRForCausalLM
 
     return LatticelabsOCADRForCausalLM(ocadr_config).eval()
+
+
+@pytest.fixture(scope="session")
+def tiny_lm_with_tokenizer_dir(tmp_path_factory) -> str:
+    """A tiny offline GPT-2 saved WITH a real tokenizer, for the CLI script test.
+
+    The script path (``run_ll_ocadr_hf.py``) loads the LM, tokenizer, and config
+    via ``from_pretrained`` on this dir, so both must be present — and fully
+    offline. n_positions is 512 so the ~385 global mesh tokens fit the context.
+    """
+    from tokenizers import Tokenizer, models, pre_tokenizers
+    from transformers import GPT2Config, GPT2LMHeadModel, PreTrainedTokenizerFast
+
+    d = tmp_path_factory.mktemp("tiny_lm_tok")
+
+    words = [
+        "[PAD]", "[UNK]", "[BOS]", "[EOS]", "<mesh>",
+        "describe", "this", "cad", "part", "a", "box", "sphere",
+    ]
+    vocab = {w: i for i, w in enumerate(words)}
+    tk = Tokenizer(models.WordLevel(vocab=vocab, unk_token="[UNK]"))
+    tk.pre_tokenizer = pre_tokenizers.Whitespace()
+    fast = PreTrainedTokenizerFast(
+        tokenizer_object=tk,
+        unk_token="[UNK]",
+        pad_token="[PAD]",
+        bos_token="[BOS]",
+        eos_token="[EOS]",
+    )
+
+    GPT2LMHeadModel(
+        GPT2Config(vocab_size=len(words), n_positions=512, n_embd=64, n_layer=2, n_head=2)
+    ).save_pretrained(str(d))
+    fast.save_pretrained(str(d))
+    return str(d)
+
+
+@pytest.fixture
+def sphere_stl_file(tmp_path) -> str:
+    """A denser STL (icosphere, 642 vertices) for non-degenerate encoder input."""
+    trimesh = pytest.importorskip("trimesh")
+    mesh = trimesh.creation.icosphere(subdivisions=3, radius=1.0)
+    path = tmp_path / "sphere.stl"
+    mesh.export(str(path))
+    return str(path)

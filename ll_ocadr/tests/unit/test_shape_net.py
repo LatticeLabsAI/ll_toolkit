@@ -56,7 +56,7 @@ class TestPointPatchEmbedding:
         assert ta.shape == tb.shape == (1, 256, 768)
 
     def test_partial_tail_patch_appended_when_not_divisible(self) -> None:
-        """N not divisible by 256 yields one extra (padded) tail patch -> 257."""
+        """N not divisible by 256 yields one extra tail patch -> 257."""
         gen = torch.Generator().manual_seed(3)
         n = 513  # 513 // 256 = 2, remainder 1 -> tail patch appended
         coords = torch.randn(1, n, 3, generator=gen)
@@ -65,3 +65,17 @@ class TestPointPatchEmbedding:
         with torch.no_grad():
             tokens = embed(coords, normals)
         assert tokens.shape == (1, 257, 768)
+
+    def test_remainder_larger_than_patch_size_does_not_crash(self) -> None:
+        """Regression: when remainder > patch_size (e.g. N=642 -> patch_size=2,
+        remainder=130) the old zero-pad path built a negative-sized tensor and
+        crashed. The tail must be max-pooled directly into one extra patch."""
+        gen = torch.Generator().manual_seed(4)
+        n = 642  # 642 // 256 = 2, remainder 130 > patch_size 2
+        coords = torch.randn(1, n, 3, generator=gen)
+        normals = torch.randn(1, n, 3, generator=gen)
+        embed = PointPatchEmbedding(embed_dim=768).eval()
+        with torch.no_grad():
+            tokens = embed(coords, normals)
+        assert tokens.shape == (1, 257, 768)
+        assert torch.isfinite(tokens).all()
