@@ -4,6 +4,7 @@ This module provides constraint detection from natural language text, as well as
 a learned predictor that can extract constraints from embeddings. Constraints
 guide the generation process and inform reward weighting in RL training.
 """
+
 from __future__ import annotations
 
 import logging
@@ -121,7 +122,9 @@ class ConstraintPredictor:
         keyword_count = 0
 
         # Dimensional constraints
-        dim_pattern = r"(\d+(?:\.\d+)?)\s*(?:mm|cm|m|in|inch|inches|wide|tall|thick|deep|long|x)"
+        dim_pattern = (
+            r"(\d+(?:\.\d+)?)\s*(?:mm|cm|m|in|inch|inches|wide|tall|thick|deep|long|x)"
+        )
         dim_matches = re.findall(dim_pattern, prompt_lower, re.IGNORECASE)
         if dim_matches:
             dimensions = [float(d) for d in dim_matches]
@@ -145,7 +148,11 @@ class ConstraintPredictor:
                 ConstraintPrediction(
                     constraint_type=ConstraintType.SYMMETRY,
                     confidence=0.85,
-                    parameters={"keywords": [kw for kw in symmetry_keywords if kw in prompt_lower]},
+                    parameters={
+                        "keywords": [
+                            kw for kw in symmetry_keywords if kw in prompt_lower
+                        ]
+                    },
                     source="keyword",
                 )
             )
@@ -158,7 +165,11 @@ class ConstraintPredictor:
                 ConstraintPrediction(
                     constraint_type=ConstraintType.SMOOTHNESS,
                     confidence=0.80,
-                    parameters={"keywords": [kw for kw in smoothness_keywords if kw in prompt_lower]},
+                    parameters={
+                        "keywords": [
+                            kw for kw in smoothness_keywords if kw in prompt_lower
+                        ]
+                    },
                     source="keyword",
                 )
             )
@@ -178,20 +189,34 @@ class ConstraintPredictor:
                 ConstraintPrediction(
                     constraint_type=ConstraintType.REGULARITY,
                     confidence=0.80,
-                    parameters={"keywords": [kw for kw in regularity_keywords if kw in prompt_lower]},
+                    parameters={
+                        "keywords": [
+                            kw for kw in regularity_keywords if kw in prompt_lower
+                        ]
+                    },
                     source="keyword",
                 )
             )
             keyword_count += 1
 
         # Connectivity constraints
-        connectivity_keywords = ["connected", "joined", "attached", "assembled", "union"]
+        connectivity_keywords = [
+            "connected",
+            "joined",
+            "attached",
+            "assembled",
+            "union",
+        ]
         if any(kw in prompt_lower for kw in connectivity_keywords):
             predictions.append(
                 ConstraintPrediction(
                     constraint_type=ConstraintType.CONNECTIVITY,
                     confidence=0.80,
-                    parameters={"keywords": [kw for kw in connectivity_keywords if kw in prompt_lower]},
+                    parameters={
+                        "keywords": [
+                            kw for kw in connectivity_keywords if kw in prompt_lower
+                        ]
+                    },
                     source="keyword",
                 )
             )
@@ -204,7 +229,11 @@ class ConstraintPredictor:
                 ConstraintPrediction(
                     constraint_type=ConstraintType.WATERTIGHT,
                     confidence=0.85,
-                    parameters={"keywords": [kw for kw in watertight_keywords if kw in prompt_lower]},
+                    parameters={
+                        "keywords": [
+                            kw for kw in watertight_keywords if kw in prompt_lower
+                        ]
+                    },
                     source="keyword",
                 )
             )
@@ -217,7 +246,11 @@ class ConstraintPredictor:
                 ConstraintPrediction(
                     constraint_type=ConstraintType.PLANARITY,
                     confidence=0.80,
-                    parameters={"keywords": [kw for kw in planarity_keywords if kw in prompt_lower]},
+                    parameters={
+                        "keywords": [
+                            kw for kw in planarity_keywords if kw in prompt_lower
+                        ]
+                    },
                     source="keyword",
                 )
             )
@@ -259,7 +292,9 @@ class ConstraintPredictor:
             return []
 
         if embeddings.pooled_embedding is None:
-            _log.warning("embeddings.pooled_embedding is None; cannot predict constraints")
+            _log.warning(
+                "embeddings.pooled_embedding is None; cannot predict constraints"
+            )
             return []
 
         try:
@@ -314,7 +349,9 @@ class ConstraintPredictor:
         for pred in predictions:
             constraint_name = pred.constraint_type.value
             if constraint_name in weights:
-                weights[constraint_name] = max(weights[constraint_name], pred.confidence)
+                weights[constraint_name] = max(
+                    weights[constraint_name], pred.confidence
+                )
             else:
                 weights[constraint_name] = pred.confidence
 

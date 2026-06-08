@@ -10,13 +10,10 @@ pattern:
     result = cq("XY").box(...).faces(...).hole(...)
     result.val()
 """
+
 from __future__ import annotations
 
-from enum import Enum
-from typing import Dict, Optional
-
 from ll_gen.config import ErrorCategory
-
 
 # ---------------------------------------------------------------------------
 # API References
@@ -30,7 +27,7 @@ INITIALIZATION:
   cq().box(length, width, height)  # Create rectangular solid
   cq().sphere(radius)  # Create sphere
   cq().cylinder(height, radius)  # Create cylinder
-  
+
 SKETCHING (on current workplane):
   .circle(radius)  # 2D circle
   .rect(width, height)  # 2D rectangle
@@ -38,7 +35,7 @@ SKETCHING (on current workplane):
   .line(x, y)  # Line segment
   .arc_to(x, y)  # Arc to point
   .close()  # Close sketch into wire
-  
+
 SELECTION & FILTERING:
   .faces()  # All faces
   .faces(">Z")  # Faces in +Z direction
@@ -49,7 +46,7 @@ SELECTION & FILTERING:
   .vertices()  # All vertices
   .last()  # Last created feature
   .first()  # First object
-  
+
 FEATURE OPERATIONS:
   .hole(diameter)  # Drill cylindrical hole
   .cboreHole(diameter, cbore_diameter, cbore_depth)  # Counterbore
@@ -57,24 +54,24 @@ FEATURE OPERATIONS:
   .fillet(radius)  # Round edges
   .chamfer(length)  # Bevel edges
   .shell(thickness)  # Hollow out
-  
+
 3D OPERATIONS:
   .extrude(distance)  # Extrude sketch
   .cut(solid)  # Boolean subtract
   .union(solid)  # Boolean add
   .intersect(solid)  # Boolean intersection
-  
+
 POSITIONING:
   .translate(x, y, z)  # Shift in space
   .rotate(axis, point, angle)  # Rotate around axis
   .mirror(plane)  # Mirror across plane
-  
+
 EXPORT:
   .val()  # Get TopoDS_Shape result
   .exportStep(filepath)  # Export to STEP file
 """
 
-CADQUERY_EXAMPLES: Dict[str, str] = {
+CADQUERY_EXAMPLES: dict[str, str] = {
     "bracket": """
 from cadquery import Workplane as cq
 
@@ -253,7 +250,7 @@ result.val()
 """,
 }
 
-ERROR_RECOVERY_TEMPLATES: Dict[str, str] = {
+ERROR_RECOVERY_TEMPLATES: dict[str, str] = {
     ErrorCategory.INVALID_PARAMS: """
 The code failed with invalid parameters. Review the error message and adjust:
 - Numeric values (dimensions, angles, radii) may be out of valid ranges
@@ -318,9 +315,10 @@ avoid extreme geometric ratios. Consider breaking the part into sub-assemblies.
 # System Prompt Assembly
 # ---------------------------------------------------------------------------
 
+
 def get_system_prompt(
     backend: str = "cadquery",
-    error_context: Optional[Dict] = None,
+    error_context: dict | None = None,
     include_examples: bool = True,
 ) -> str:
     """Assemble a complete system prompt for code generation.
@@ -358,7 +356,7 @@ def get_system_prompt(
 
 
 def _assemble_cadquery_system_prompt(
-    error_context: Optional[Dict] = None,
+    error_context: dict | None = None,
     include_examples: bool = True,
 ) -> str:
     """Assemble CadQuery-specific system prompt."""
@@ -402,7 +400,7 @@ def _assemble_cadquery_system_prompt(
 
 
 def _assemble_openscad_system_prompt(
-    error_context: Optional[Dict] = None,
+    error_context: dict | None = None,
     include_examples: bool = True,
 ) -> str:
     """Assemble OpenSCAD-specific system prompt."""
@@ -520,9 +518,11 @@ def get_repair_prompt(
         parts.append(suggestion)
         parts.append("")
 
-    parts.extend([
-        "Please regenerate the code to fix the error. Ensure the output is",
-        "syntactically valid and addresses the root cause of the failure.",
-    ])
+    parts.extend(
+        [
+            "Please regenerate the code to fix the error. Ensure the output is",
+            "syntactically valid and addresses the root cause of the failure.",
+        ]
+    )
 
     return "\n".join(parts)

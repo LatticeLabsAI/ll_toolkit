@@ -1,4 +1,5 @@
 """Conditioning layer — text, image, and multimodal input encoding."""
+
 from __future__ import annotations
 
 from ll_gen.conditioning.constraint_predictor import (

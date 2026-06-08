@@ -3,6 +3,7 @@
 Provides common helpers used by both ``validator`` and ``introspector``
 to avoid code duplication.
 """
+
 from __future__ import annotations
 
 import logging

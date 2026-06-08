@@ -21,11 +21,12 @@ Category                        Neural action
 Each mapping also carries a severity level and an LLM-readable
 suggestion string.
 """
+
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from ll_gen.config import ErrorCategory, ErrorSeverity
 
@@ -35,42 +36,42 @@ _log = logging.getLogger(__name__)
 _OCC_AVAILABLE = False
 try:
     from OCC.Core.BRepCheck import (
-        BRepCheck_Analyzer,
-        BRepCheck_BadOrientation,
-        BRepCheck_CheckFail,
-        BRepCheck_EmptyShell,
-        BRepCheck_EmptyWire,
-        BRepCheck_EnclosedRegion,
-        BRepCheck_FreeEdge,
-        BRepCheck_IntersectingWires,
-        BRepCheck_InvalidDegeneratedFlag,
-        BRepCheck_InvalidImbricationOfShells,
-        BRepCheck_InvalidImbricationOfWires,
-        BRepCheck_InvalidMultiConnexity,
-        BRepCheck_InvalidPointOnCurve,
-        BRepCheck_InvalidPointOnCurveOnSurface,
-        BRepCheck_InvalidPointOnSurface,
-        BRepCheck_InvalidPolygonOnTriangulation,
-        BRepCheck_InvalidRange,
-        BRepCheck_InvalidSameParameterFlag,
-        BRepCheck_InvalidSameRangeFlag,
-        BRepCheck_InvalidToleranceValue,
-        BRepCheck_InvalidWire,
-        BRepCheck_NoError,
-        BRepCheck_NoSurface,
-        BRepCheck_NotClosed,
-        BRepCheck_NotConnected,
-        BRepCheck_OrientationOfExternalWire,
-        BRepCheck_RedundantEdge,
-        BRepCheck_RedundantFace,
-        BRepCheck_RedundantWire,
-        BRepCheck_SelfIntersectingWire,
-        BRepCheck_SubshapeNotInShape,
-        BRepCheck_UnorientableShape,
+        BRepCheck_Analyzer,  # noqa: F401
+        BRepCheck_BadOrientation,  # noqa: F401
+        BRepCheck_CheckFail,  # noqa: F401
+        BRepCheck_EmptyShell,  # noqa: F401
+        BRepCheck_EmptyWire,  # noqa: F401
+        BRepCheck_EnclosedRegion,  # noqa: F401
+        BRepCheck_FreeEdge,  # noqa: F401
+        BRepCheck_IntersectingWires,  # noqa: F401
+        BRepCheck_InvalidDegeneratedFlag,  # noqa: F401
+        BRepCheck_InvalidImbricationOfShells,  # noqa: F401
+        BRepCheck_InvalidImbricationOfWires,  # noqa: F401
+        BRepCheck_InvalidMultiConnexity,  # noqa: F401
+        BRepCheck_InvalidPointOnCurve,  # noqa: F401
+        BRepCheck_InvalidPointOnCurveOnSurface,  # noqa: F401
+        BRepCheck_InvalidPointOnSurface,  # noqa: F401
+        BRepCheck_InvalidPolygonOnTriangulation,  # noqa: F401
+        BRepCheck_InvalidRange,  # noqa: F401
+        BRepCheck_InvalidSameParameterFlag,  # noqa: F401
+        BRepCheck_InvalidSameRangeFlag,  # noqa: F401
+        BRepCheck_InvalidToleranceValue,  # noqa: F401
+        BRepCheck_InvalidWire,  # noqa: F401
+        BRepCheck_NoError,  # noqa: F401
+        BRepCheck_NoSurface,  # noqa: F401
+        BRepCheck_NotClosed,  # noqa: F401
+        BRepCheck_NotConnected,  # noqa: F401
+        BRepCheck_OrientationOfExternalWire,  # noqa: F401
+        BRepCheck_RedundantEdge,  # noqa: F401
+        BRepCheck_RedundantFace,  # noqa: F401
+        BRepCheck_RedundantWire,  # noqa: F401
+        BRepCheck_SelfIntersectingWire,  # noqa: F401
+        BRepCheck_SubshapeNotInShape,  # noqa: F401
+        BRepCheck_UnorientableShape,  # noqa: F401
     )
     from OCC.Core.TopAbs import (
-        TopAbs_COMPOUND,
-        TopAbs_COMPSOLID,
+        TopAbs_COMPOUND,  # noqa: F401
+        TopAbs_COMPSOLID,  # noqa: F401
         TopAbs_EDGE,
         TopAbs_FACE,
         TopAbs_SHELL,
@@ -79,7 +80,7 @@ try:
         TopAbs_WIRE,
     )
     from OCC.Core.TopExp import TopExp_Explorer
-    from OCC.Core.TopoDS import TopoDS_Shape
+    from OCC.Core.TopoDS import TopoDS_Shape  # noqa: F401
 
     _OCC_AVAILABLE = True
 except ImportError:
@@ -89,6 +90,7 @@ except ImportError:
 # ---------------------------------------------------------------------------
 # Mapped error record
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class MappedError:
@@ -120,7 +122,7 @@ class MappedError:
 # ---------------------------------------------------------------------------
 
 # Format:  OCC_CODE_NAME -> (ErrorCategory, ErrorSeverity, description, suggestion)
-OCC_ERROR_MAP: Dict[str, Tuple[ErrorCategory, ErrorSeverity, str, str]] = {
+OCC_ERROR_MAP: dict[str, tuple[ErrorCategory, ErrorSeverity, str, str]] = {
     # --- INVALID_PARAMS: parameter/coordinate errors ---
     "BRepCheck_InvalidPointOnCurve": (
         ErrorCategory.INVALID_PARAMS,
@@ -164,7 +166,6 @@ OCC_ERROR_MAP: Dict[str, Tuple[ErrorCategory, ErrorSeverity, str, str]] = {
         "Edge is marked degenerate but has non-zero geometric length, or vice versa.",
         "Correct the degenerated flag or increase minimum feature size.",
     ),
-
     # --- TOPOLOGY_ERROR: structural/connectivity errors ---
     "BRepCheck_NotClosed": (
         ErrorCategory.TOPOLOGY_ERROR,
@@ -214,7 +215,6 @@ OCC_ERROR_MAP: Dict[str, Tuple[ErrorCategory, ErrorSeverity, str, str]] = {
         "Wires within a face are improperly nested.",
         "Reorder inner/outer wires or check hole placement.",
     ),
-
     # --- BOOLEAN_FAILURE: BOPAlgo and boolean operation errors ---
     "BRepCheck_CheckFail": (
         ErrorCategory.BOOLEAN_FAILURE,
@@ -222,7 +222,6 @@ OCC_ERROR_MAP: Dict[str, Tuple[ErrorCategory, ErrorSeverity, str, str]] = {
         "Generic BRepCheck failure — often caused by failed boolean operation.",
         "Simplify boolean operations, split into smaller steps, or increase fuzzy tolerance.",
     ),
-
     # --- SELF_INTERSECTION: geometric overlap errors ---
     "BRepCheck_SelfIntersectingWire": (
         ErrorCategory.SELF_INTERSECTION,
@@ -242,7 +241,6 @@ OCC_ERROR_MAP: Dict[str, Tuple[ErrorCategory, ErrorSeverity, str, str]] = {
         "A wire encloses a region that overlaps with another wire's region.",
         "Adjust wire positions to eliminate overlapping enclosed regions.",
     ),
-
     # --- DEGENERATE_SHAPE: zero-measure or empty entities ---
     "BRepCheck_EmptyWire": (
         ErrorCategory.DEGENERATE_SHAPE,
@@ -298,7 +296,6 @@ OCC_ERROR_MAP: Dict[str, Tuple[ErrorCategory, ErrorSeverity, str, str]] = {
         "Edge belongs to only one face (free edge on shell boundary).",
         "Close the shell by adding missing faces, or remove the free edge.",
     ),
-
     # --- TOLERANCE_VIOLATION: precision and consistency errors ---
     "BRepCheck_InvalidToleranceValue": (
         ErrorCategory.TOLERANCE_VIOLATION,
@@ -312,7 +309,6 @@ OCC_ERROR_MAP: Dict[str, Tuple[ErrorCategory, ErrorSeverity, str, str]] = {
         "Polygon on triangulation is inconsistent with the edge curve.",
         "Recompute the mesh triangulation for the affected edge.",
     ),
-
     # --- BOPAlgo (boolean) specific status codes ---
     "BOPAlgo_AlertTooFewArguments": (
         ErrorCategory.BOOLEAN_FAILURE,
@@ -351,6 +347,7 @@ OCC_ERROR_MAP: Dict[str, Tuple[ErrorCategory, ErrorSeverity, str, str]] = {
 # Mapping functions
 # ---------------------------------------------------------------------------
 
+
 def map_single_error(
     occ_code_name: str,
     entity_type: str = "",
@@ -371,7 +368,9 @@ def map_single_error(
     if occ_code_name in OCC_ERROR_MAP:
         category, severity, description, suggestion = OCC_ERROR_MAP[occ_code_name]
     else:
-        _log.warning("Unknown OCC error code: %s — defaulting to TOPOLOGY_ERROR", occ_code_name)
+        _log.warning(
+            "Unknown OCC error code: %s — defaulting to TOPOLOGY_ERROR", occ_code_name
+        )
         category = ErrorCategory.TOPOLOGY_ERROR
         severity = ErrorSeverity.CRITICAL
         description = f"Unknown BRepCheck error: {occ_code_name}"
@@ -392,7 +391,7 @@ def map_single_error(
 def map_brep_errors(
     analyzer: Any,
     shape: Any,
-) -> List[MappedError]:
+) -> list[MappedError]:
     """Walk a BRepCheck_Analyzer result and map all errors.
 
     Iterates over every sub-shape in the input shape using
@@ -427,7 +426,7 @@ def map_brep_errors(
     ]
 
     # Reverse lookup from OCC enum object to string name
-    _status_name_cache: Dict[int, str] = {}
+    _status_name_cache: dict[int, str] = {}
 
     def _get_status_name(status_obj: Any) -> str:
         """Convert an OCC BRepCheck_Status enum to its string name."""
@@ -436,7 +435,8 @@ def map_brep_errors(
             return _status_name_cache[val]
 
         # Try to get name from the module's attributes
-        import OCC.Core.BRepCheck as brep_mod
+        import OCC.Core.BRepCheck as brep_mod  # noqa: N813
+
         for attr_name in dir(brep_mod):
             if attr_name.startswith("BRepCheck_"):
                 try:
@@ -451,17 +451,17 @@ def map_brep_errors(
         _status_name_cache[val] = name
         return name
 
-    errors: List[MappedError] = []
+    errors: list[MappedError] = []
 
     # Build a lookup of known BRepCheck/BOPAlgo status enums once
-    import OCC.Core.BRepCheck as brep_mod
+    import OCC.Core.BRepCheck as brep_mod  # noqa: N813
 
     try:
-        import OCC.Core.BOPAlgo as bopalgo_mod
+        import OCC.Core.BOPAlgo as bopalgo_mod  # noqa: N813
     except ImportError:
         bopalgo_mod = None
 
-    known_statuses: List[Tuple[str, Any]] = []
+    known_statuses: list[tuple[str, Any]] = []
     for code_name in OCC_ERROR_MAP:
         # BOPAlgo-prefixed codes live in OCC.Core.BOPAlgo, not BRepCheck
         if code_name.startswith("BOPAlgo_"):
@@ -488,15 +488,15 @@ def map_brep_errors(
                     try:
                         is_present = result.IsStatusOnShape(status_enum)
                         if is_present:
-                            mapped = map_single_error(
-                                code_name, type_name, entity_idx
-                            )
+                            mapped = map_single_error(code_name, type_name, entity_idx)
                             mapped.occ_code_value = int(status_enum)
                             errors.append(mapped)
                     except Exception:
                         _log.debug(
                             "Could not check status %s on %s #%d",
-                            code_name, type_name, entity_idx,
+                            code_name,
+                            type_name,
+                            entity_idx,
                             exc_info=True,
                         )
                         continue
@@ -508,8 +508,8 @@ def map_brep_errors(
 
 
 def categorize_errors(
-    mapped_errors: List[MappedError],
-) -> Dict[ErrorCategory, List[MappedError]]:
+    mapped_errors: list[MappedError],
+) -> dict[ErrorCategory, list[MappedError]]:
     """Group mapped errors by their neural-interpretable category.
 
     Args:
@@ -519,7 +519,7 @@ def categorize_errors(
         Dict from ErrorCategory to list of errors in that category,
         sorted by severity (CRITICAL first).
     """
-    grouped: Dict[ErrorCategory, List[MappedError]] = {}
+    grouped: dict[ErrorCategory, list[MappedError]] = {}
     for err in mapped_errors:
         grouped.setdefault(err.category, []).append(err)
 

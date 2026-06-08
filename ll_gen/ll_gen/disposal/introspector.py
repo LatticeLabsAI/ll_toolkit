@@ -4,10 +4,11 @@ Computes volume, surface area, bounding box, center of mass, inertia
 tensor, face/edge/vertex counts, surface and curve type classification,
 Euler characteristic, and solid status from a ``TopoDS_Shape``.
 """
+
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 from ll_gen.disposal._occ_utils import count_entities as _count_entities
 from ll_gen.proposals.disposal_result import GeometryReport
@@ -17,8 +18,8 @@ _log = logging.getLogger(__name__)
 _OCC_AVAILABLE = False
 try:
     from OCC.Core.Bnd import Bnd_Box
-    from OCC.Core.BRep import BRep_Tool
-    from OCC.Core.BRepAdaptor import BRepAdaptor_Surface
+    from OCC.Core.BRep import BRep_Tool  # noqa: F401
+    from OCC.Core.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Surface
     from OCC.Core.BRepBndLib import brepbndlib
     from OCC.Core.BRepGProp import brepgprop
     from OCC.Core.GeomAbs import (
@@ -50,7 +51,6 @@ try:
         TopAbs_VERTEX,
     )
     from OCC.Core.TopExp import TopExp_Explorer
-    from OCC.Core.BRepAdaptor import BRepAdaptor_Curve
     from OCC.Core.TopoDS import topods
 
     _OCC_AVAILABLE = True
@@ -130,9 +130,15 @@ def introspect(shape: Any) -> GeometryReport:
         # Inertia matrix (3x3, stored as flat 9-tuple)
         mat = vol_props.MatrixOfInertia()
         report.inertia_tensor = (
-            mat.Value(1, 1), mat.Value(1, 2), mat.Value(1, 3),
-            mat.Value(2, 1), mat.Value(2, 2), mat.Value(2, 3),
-            mat.Value(3, 1), mat.Value(3, 2), mat.Value(3, 3),
+            mat.Value(1, 1),
+            mat.Value(1, 2),
+            mat.Value(1, 3),
+            mat.Value(2, 1),
+            mat.Value(2, 2),
+            mat.Value(2, 3),
+            mat.Value(3, 1),
+            mat.Value(3, 2),
+            mat.Value(3, 3),
         )
     except Exception as exc:
         _log.debug("Volume properties failed: %s", exc)
@@ -179,13 +185,13 @@ def introspect(shape: Any) -> GeometryReport:
     return report
 
 
-def _classify_surfaces(shape: Any) -> Dict[str, int]:
+def _classify_surfaces(shape: Any) -> dict[str, int]:
     """Classify all faces by their underlying surface type.
 
     Returns:
         Dict mapping surface type name to count.
     """
-    type_counts: Dict[str, int] = {}
+    type_counts: dict[str, int] = {}
     explorer = TopExp_Explorer(shape, TopAbs_FACE)
 
     while explorer.More():
@@ -202,13 +208,13 @@ def _classify_surfaces(shape: Any) -> Dict[str, int]:
     return type_counts
 
 
-def _classify_curves(shape: Any) -> Dict[str, int]:
+def _classify_curves(shape: Any) -> dict[str, int]:
     """Classify all edges by their underlying curve type.
 
     Returns:
         Dict mapping curve type name to count.
     """
-    type_counts: Dict[str, int] = {}
+    type_counts: dict[str, int] = {}
     explorer = TopExp_Explorer(shape, TopAbs_EDGE)
 
     while explorer.More():
@@ -228,7 +234,7 @@ def _classify_curves(shape: Any) -> Dict[str, int]:
 def introspect_with_distance(
     shape: Any,
     reference_shape: Any,
-) -> Tuple[GeometryReport, float]:
+) -> tuple[GeometryReport, float]:
     """Introspect a shape and compute minimum distance to a reference.
 
     Uses ``BRepExtrema_DistShapeShape`` to find the closest point

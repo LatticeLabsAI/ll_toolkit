@@ -3,6 +3,7 @@
 Implements policy gradient training with REINFORCE + baseline subtraction,
 using disposal engine feedback and reward signals for RL optimization.
 """
+
 from __future__ import annotations
 
 import json
@@ -162,9 +163,13 @@ class RLAlignmentTrainer:
 
         self._init_training()
         if self._optimizer is None:
-            raise RuntimeError("Optimizer not initialized — call _init_training() first")
+            raise RuntimeError(
+                "Optimizer not initialized — call _init_training() first"
+            )
         if self._disposal_engine is None:
-            raise RuntimeError("Disposal engine not initialized — call _init_training() first")
+            raise RuntimeError(
+                "Disposal engine not initialized — call _init_training() first"
+            )
 
         # 1. Generate proposal WITH gradients (log-probs on the sampled trajectory)
         proposal = self.generator.generate_for_training(prompt)
@@ -187,8 +192,8 @@ class RLAlignmentTrainer:
             self._baseline = reward
         else:
             self._baseline = (
-                self.baseline_decay * self._baseline +
-                (1.0 - self.baseline_decay) * reward
+                self.baseline_decay * self._baseline
+                + (1.0 - self.baseline_decay) * reward
             )
 
         # 6. Policy gradient loss using log-probs from the SAME trajectory
@@ -232,20 +237,23 @@ class RLAlignmentTrainer:
             if "out of memory" in err_msg or "cuda" in err_msg:
                 _log.critical(
                     "Fatal GPU/memory error during backward pass — "
-                    "re-raising to prevent corrupt training state: %s", e
+                    "re-raising to prevent corrupt training state: %s",
+                    e,
                 )
                 raise
             _log.error(
-                "RuntimeError during policy gradient computation "
-                "(step %d): %s", self._step_count, e,
+                "RuntimeError during policy gradient computation " "(step %d): %s",
+                self._step_count,
+                e,
                 exc_info=True,
             )
             loss_value = 0.0
             step_failed = True
         except (ValueError, TypeError) as e:
             _log.error(
-                "Recoverable error during policy gradient computation "
-                "(step %d): %s", self._step_count, e,
+                "Recoverable error during policy gradient computation " "(step %d): %s",
+                self._step_count,
+                e,
                 exc_info=True,
             )
             loss_value = 0.0
@@ -289,7 +297,7 @@ class RLAlignmentTrainer:
             Array of token IDs, or None if extraction fails.
         """
         # DeepCAD vocabulary mapping
-        COMMAND_TYPE_MAP = {
+        COMMAND_TYPE_MAP = {  # noqa: N806
             "SOL": 0,
             "LINE": 1,
             "ARC": 2,
@@ -297,7 +305,7 @@ class RLAlignmentTrainer:
             "EXTRUDE": 4,
             "EOS": 5,
         }
-        PARAM_OFFSET = 12
+        PARAM_OFFSET = 12  # noqa: N806
 
         try:
             if hasattr(proposal, "token_ids"):
@@ -320,15 +328,17 @@ class RLAlignmentTrainer:
                         params = cmd.get("parameters", [])
                         param_mask = cmd.get("parameter_mask", None)
                         for j, p in enumerate(params):
-                            if param_mask is not None and j < len(param_mask) and not param_mask[j]:
+                            if (
+                                param_mask is not None
+                                and j < len(param_mask)
+                                and not param_mask[j]
+                            ):
                                 continue
                             token_ids.append(int(p) + PARAM_OFFSET)
                     else:
                         # Object with command_type attribute
                         cmd_type = getattr(cmd, "command_type", "")
-                        cmd_token = COMMAND_TYPE_MAP.get(
-                            str(cmd_type).upper(), 0
-                        )
+                        cmd_token = COMMAND_TYPE_MAP.get(str(cmd_type).upper(), 0)
                         token_ids.append(cmd_token)
                 return np.array(token_ids, dtype=np.int64)
             else:
@@ -462,7 +472,9 @@ class RLAlignmentTrainer:
 
         self._init_training()
         if self._disposal_engine is None:
-            raise RuntimeError("Disposal engine not initialized — call _init_training() first")
+            raise RuntimeError(
+                "Disposal engine not initialized — call _init_training() first"
+            )
 
         # Set model to eval mode for correct dropout/batchnorm behavior
         if self.generator._model is not None:
@@ -510,7 +522,9 @@ class RLAlignmentTrainer:
 
         self._init_training()
         if self._optimizer is None:
-            raise RuntimeError("Optimizer not initialized — call _init_training() first")
+            raise RuntimeError(
+                "Optimizer not initialized — call _init_training() first"
+            )
 
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -522,12 +536,8 @@ class RLAlignmentTrainer:
 
         # Save model and optimizer state
         if self.generator._model is not None:
-            checkpoint["model_state_dict"] = (
-                self.generator._model.state_dict()
-            )
-            checkpoint["optimizer_state_dict"] = (
-                self._optimizer.state_dict()
-            )
+            checkpoint["model_state_dict"] = self.generator._model.state_dict()
+            checkpoint["optimizer_state_dict"] = self._optimizer.state_dict()
 
         torch.save(checkpoint, path)
 
@@ -548,12 +558,16 @@ class RLAlignmentTrainer:
 
         self._init_training()
         if self._optimizer is None:
-            raise RuntimeError("Optimizer not initialized — call _init_training() first")
+            raise RuntimeError(
+                "Optimizer not initialized — call _init_training() first"
+            )
 
         path = Path(path)
         try:
             checkpoint = torch.load(
-                path, map_location=self.device, weights_only=True,
+                path,
+                map_location=self.device,
+                weights_only=True,
             )
         except TypeError:
             # PyTorch < 2.0 does not support weights_only
@@ -565,7 +579,7 @@ class RLAlignmentTrainer:
         # Load train_history from separate JSON file
         history_path = path.with_name(path.stem + "_history.json")
         try:
-            with open(history_path, "r") as f:
+            with open(history_path) as f:
                 self._train_history = json.load(f)
         except FileNotFoundError:
             _log.warning("No history file found at %s; starting fresh", history_path)
@@ -573,13 +587,9 @@ class RLAlignmentTrainer:
 
         # Load model and optimizer state
         if "model_state_dict" in checkpoint and self.generator._model is not None:
-            self.generator._model.load_state_dict(
-                checkpoint["model_state_dict"]
-            )
+            self.generator._model.load_state_dict(checkpoint["model_state_dict"])
         if "optimizer_state_dict" in checkpoint:
-            self._optimizer.load_state_dict(
-                checkpoint["optimizer_state_dict"]
-            )
+            self._optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
 
         _log.info("Checkpoint loaded from %s (step %d)", path, self._step_count)
 

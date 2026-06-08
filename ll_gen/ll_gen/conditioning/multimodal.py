@@ -3,6 +3,7 @@
 Combines text and image embeddings using configurable fusion strategies
 (concatenation, averaging, text-only, image-only).
 """
+
 from __future__ import annotations
 
 import logging
@@ -169,7 +170,9 @@ class MultiModalConditioner:
 
         # Compute final embedding dimension
         final_embed_dim = (
-            result_pooled.shape[0] if result_pooled is not None else self.conditioning_dim
+            result_pooled.shape[0]
+            if result_pooled is not None
+            else self.conditioning_dim
         )
 
         return ConditioningEmbeddings(
@@ -216,7 +219,9 @@ class MultiModalConditioner:
                 result = self.encode(prompt, image_path)
                 results.append(result)
             except Exception as e:
-                _log.error(f"Error encoding pair (prompt={prompt[:50]}, image={image_path}): {e}")
+                _log.error(
+                    f"Error encoding pair (prompt={prompt[:50]}, image={image_path}): {e}"
+                )
                 raise
 
         return results

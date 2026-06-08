@@ -15,12 +15,12 @@ The router returns a ``RoutingDecision`` containing the selected
 route, confidence score, and an explanation of why that route was
 chosen.
 """
+
 from __future__ import annotations
 
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
 
 from ll_gen.config import GenerationRoute, RoutingConfig
 
@@ -41,8 +41,8 @@ class RoutingDecision:
 
     route: GenerationRoute = GenerationRoute.CODE_CADQUERY
     confidence: float = 0.5
-    scores: Dict[str, float] = field(default_factory=dict)
-    reasons: List[str] = field(default_factory=list)
+    scores: dict[str, float] = field(default_factory=dict)
+    reasons: list[str] = field(default_factory=list)
     forced: bool = False
 
 
@@ -63,25 +63,15 @@ class GenerationRouter:
         print(decision.confidence)  # 0.85
     """
 
-    def __init__(self, config: Optional[RoutingConfig] = None) -> None:
+    def __init__(self, config: RoutingConfig | None = None) -> None:
         self.config = config or RoutingConfig()
 
         # Precompile keyword sets (lowercased) for fast lookup
-        self._mechanical = set(
-            kw.lower() for kw in self.config.mechanical_keywords
-        )
-        self._openscad = set(
-            kw.lower() for kw in self.config.openscad_keywords
-        )
-        self._freeform = set(
-            kw.lower() for kw in self.config.freeform_keywords
-        )
-        self._exploration = set(
-            kw.lower() for kw in self.config.exploration_keywords
-        )
-        self._codebook = set(
-            kw.lower() for kw in self.config.codebook_keywords
-        )
+        self._mechanical = set(kw.lower() for kw in self.config.mechanical_keywords)
+        self._openscad = set(kw.lower() for kw in self.config.openscad_keywords)
+        self._freeform = set(kw.lower() for kw in self.config.freeform_keywords)
+        self._exploration = set(kw.lower() for kw in self.config.exploration_keywords)
+        self._codebook = set(kw.lower() for kw in self.config.codebook_keywords)
 
         # Regex for dimensional cues (e.g. "80mm", "3.5 inches", "100x200")
         self._dim_pattern = re.compile(
@@ -95,7 +85,7 @@ class GenerationRouter:
         prompt: str,
         has_image: bool = False,
         has_reference_geometry: bool = False,
-        force_route: Optional[GenerationRoute] = None,
+        force_route: GenerationRoute | None = None,
     ) -> RoutingDecision:
         """Analyze a prompt and decide the generation route.
 
@@ -124,14 +114,14 @@ class GenerationRouter:
         words = set(re.findall(r"\b\w+\b", prompt_lower))
 
         # Initialize score accumulators
-        scores: Dict[GenerationRoute, float] = {
+        scores: dict[GenerationRoute, float] = {
             GenerationRoute.CODE_CADQUERY: 0.0,
             GenerationRoute.CODE_OPENSCAD: 0.0,
             GenerationRoute.NEURAL_VAE: 0.0,
             GenerationRoute.NEURAL_DIFFUSION: 0.0,
             GenerationRoute.NEURAL_VQVAE: 0.0,
         }
-        reasons: List[str] = []
+        reasons: list[str] = []
 
         # --- Signal 1: Keyword matching ---
         mechanical_hits = words.intersection(self._mechanical)
@@ -200,8 +190,7 @@ class GenerationRouter:
             scores[GenerationRoute.NEURAL_DIFFUSION] += 0.15
             scores[GenerationRoute.NEURAL_VAE] += 0.15
             reasons.append(
-                "Reference geometry provided: enables latent-space "
-                "conditioning."
+                "Reference geometry provided: enables latent-space " "conditioning."
             )
 
         # --- Signal 5: Prompt length heuristic ---
@@ -212,8 +201,7 @@ class GenerationRouter:
         elif word_count >= 50:
             scores[GenerationRoute.NEURAL_DIFFUSION] += 0.1
             reasons.append(
-                "Long/detailed prompt: may benefit from neural "
-                "interpolation."
+                "Long/detailed prompt: may benefit from neural " "interpolation."
             )
 
         # --- Default bias ---
@@ -272,9 +260,7 @@ class GenerationRouter:
             "",
             "Score breakdown:",
         ]
-        for route, score in sorted(
-            decision.scores.items(), key=lambda x: -x[1]
-        ):
+        for route, score in sorted(decision.scores.items(), key=lambda x: -x[1]):
             bar = "█" * int(score * 20)
             lines.append(f"  {route:25s} {score:.3f} {bar}")
 

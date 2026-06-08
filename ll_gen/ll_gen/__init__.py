@@ -34,6 +34,7 @@ Dataset loaders::
 
     from ll_gen.datasets import load_deepcad, load_text2cad
 """
+
 from __future__ import annotations
 
 __version__ = "0.1.0"
@@ -41,6 +42,23 @@ __version__ = "0.1.0"
 # ---------------------------------------------------------------------------
 # Core configuration
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Code generation proposers
+# ---------------------------------------------------------------------------
+from ll_gen.codegen import CadQueryProposer, OpenSCADProposer
+
+# ---------------------------------------------------------------------------
+# Conditioning
+# ---------------------------------------------------------------------------
+from ll_gen.conditioning import (
+    ConditioningEmbeddings,
+    ConstraintPrediction,
+    ConstraintPredictor,
+    ConstraintType,
+    ImageConditioningEncoder,
+    MultiModalConditioner,
+    TextConditioningEncoder,
+)
 from ll_gen.config import (
     CodegenConfig,
     CodeLanguage,
@@ -51,14 +69,50 @@ from ll_gen.config import (
     ErrorSeverity,
     ExportConfig,
     FeedbackConfig,
-    GeneratorConfig,
     GenerationRoute,
+    GeneratorConfig,
     LLGenConfig,
     RoutingConfig,
     StepSchema,
     TrainingConfig,
     get_ll_gen_config,
 )
+
+# ---------------------------------------------------------------------------
+# Disposal engine
+# ---------------------------------------------------------------------------
+from ll_gen.disposal import DisposalEngine
+
+# ---------------------------------------------------------------------------
+# Embeddings
+# ---------------------------------------------------------------------------
+from ll_gen.embeddings import HybridShapeEncoder
+
+# ---------------------------------------------------------------------------
+# Feedback
+# ---------------------------------------------------------------------------
+from ll_gen.feedback import (
+    build_code_feedback,
+    build_neural_feedback,
+    build_training_feedback,
+    compute_reward,
+)
+
+# ---------------------------------------------------------------------------
+# Neural generators
+# ---------------------------------------------------------------------------
+from ll_gen.generators import (
+    BaseNeuralGenerator,
+    LatentSampler,
+    NeuralDiffusionGenerator,
+    NeuralVAEGenerator,
+    NeuralVQVAEGenerator,
+)
+
+# ---------------------------------------------------------------------------
+# Pipeline orchestration
+# ---------------------------------------------------------------------------
+from ll_gen.pipeline import GenerationOrchestrator, VisualVerifier
 
 # ---------------------------------------------------------------------------
 # Proposal protocol
@@ -80,55 +134,6 @@ from ll_gen.proposals import (
 from ll_gen.routing import GenerationRouter, RoutingDecision
 
 # ---------------------------------------------------------------------------
-# Disposal engine
-# ---------------------------------------------------------------------------
-from ll_gen.disposal import DisposalEngine
-
-# ---------------------------------------------------------------------------
-# Code generation proposers
-# ---------------------------------------------------------------------------
-from ll_gen.codegen import CadQueryProposer, OpenSCADProposer
-
-# ---------------------------------------------------------------------------
-# Pipeline orchestration
-# ---------------------------------------------------------------------------
-from ll_gen.pipeline import GenerationOrchestrator, VisualVerifier
-
-# ---------------------------------------------------------------------------
-# Feedback
-# ---------------------------------------------------------------------------
-from ll_gen.feedback import (
-    build_code_feedback,
-    build_neural_feedback,
-    build_training_feedback,
-    compute_reward,
-)
-
-# ---------------------------------------------------------------------------
-# Conditioning
-# ---------------------------------------------------------------------------
-from ll_gen.conditioning import (
-    ConditioningEmbeddings,
-    ConstraintPrediction,
-    ConstraintPredictor,
-    ConstraintType,
-    ImageConditioningEncoder,
-    MultiModalConditioner,
-    TextConditioningEncoder,
-)
-
-# ---------------------------------------------------------------------------
-# Neural generators
-# ---------------------------------------------------------------------------
-from ll_gen.generators import (
-    BaseNeuralGenerator,
-    LatentSampler,
-    NeuralDiffusionGenerator,
-    NeuralVAEGenerator,
-    NeuralVQVAEGenerator,
-)
-
-# ---------------------------------------------------------------------------
 # Training
 # ---------------------------------------------------------------------------
 from ll_gen.training import (
@@ -136,11 +141,6 @@ from ll_gen.training import (
     MetricsComputer,
     RLAlignmentTrainer,
 )
-
-# ---------------------------------------------------------------------------
-# Embeddings
-# ---------------------------------------------------------------------------
-from ll_gen.embeddings import HybridShapeEncoder
 
 __all__ = [
     # Config

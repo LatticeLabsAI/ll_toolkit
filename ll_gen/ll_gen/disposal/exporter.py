@@ -4,14 +4,15 @@ Wraps OpenCASCADE's ``STEPControl_Writer`` and ``StlAPI_Writer``
 with schema selection (AP203/AP214/AP242), tessellation control
 for STL, and multi-view rendering for visual verification.
 """
+
 from __future__ import annotations
 
 import logging
 import math
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any
 
-from ll_gen.config import ExportConfig, StepSchema
+from ll_gen.config import StepSchema
 
 _log = logging.getLogger(__name__)
 
@@ -25,7 +26,7 @@ try:
         STEPControl_Writer,
     )
     from OCC.Core.StlAPI import StlAPI_Writer
-    from OCC.Core.TopoDS import TopoDS_Shape
+    from OCC.Core.TopoDS import TopoDS_Shape  # noqa: F401
 
     _OCC_AVAILABLE = True
 except ImportError:
@@ -87,8 +88,7 @@ def export_step(
     write_status = writer.Write(str(path))
     if write_status != IFSelect_RetDone:
         raise RuntimeError(
-            f"STEP write failed with status {write_status} "
-            f"for path: {path}"
+            f"STEP write failed with status {write_status} " f"for path: {path}"
         )
 
     _log.info("Exported STEP to %s (schema=%s)", path, schema.value)
@@ -137,9 +137,7 @@ def export_stl(
     mesh.Perform()
 
     if not mesh.IsDone():
-        raise RuntimeError(
-            "Tessellation failed. The shape may have degenerate faces."
-        )
+        raise RuntimeError("Tessellation failed. The shape may have degenerate faces.")
 
     # Write
     writer = StlAPI_Writer()
@@ -151,7 +149,9 @@ def export_stl(
 
     _log.info(
         "Exported STL to %s (linear_deflection=%.3f, ascii=%s)",
-        path, linear_deflection, ascii_mode,
+        path,
+        linear_deflection,
+        ascii_mode,
     )
     return path
 
@@ -159,10 +159,10 @@ def export_stl(
 def render_views(
     shape: Any,
     output_dir: Path,
-    views: Optional[List[str]] = None,
+    views: list[str] | None = None,
     resolution: int = 512,
     prefix: str = "view",
-) -> List[Path]:
+) -> list[Path]:
     """Render multi-view images of a shape for visual verification.
 
     Renders the shape from multiple camera angles using pythonocc's
@@ -210,12 +210,12 @@ def render_views(
         ),
     }
 
-    render_paths: List[Path] = []
+    render_paths: list[Path] = []
 
     # Try pythonocc offscreen rendering
     try:
-        from OCC.Display import SimpleGui
-        from OCC.Core.Graphic3d import Graphic3d_BufferType
+        from OCC.Core.Graphic3d import Graphic3d_BufferType  # noqa: F401
+        from OCC.Display import SimpleGui  # noqa: F401
 
         _log.info("Using pythonocc offscreen rendering")
 
@@ -236,16 +236,16 @@ def render_views(
 
     # Fallback: export to STL and render with trimesh
     try:
-        import tempfile
+        import tempfile  # noqa: F401
 
         import numpy as np
 
-        stl_path = output_dir / f"_temp_render.stl"
+        stl_path = output_dir / "_temp_render.stl"
         export_stl(shape, stl_path, linear_deflection=0.05)
 
         try:
             import trimesh
-            from PIL import Image
+            from PIL import Image  # noqa: F401
 
             mesh = trimesh.load(str(stl_path))
 
@@ -296,7 +296,8 @@ def render_views(
                 except Exception as exc:
                     _log.debug(
                         "Trimesh rendering failed for %s: %s",
-                        view_name, exc,
+                        view_name,
+                        exc,
                     )
 
         finally:
@@ -306,8 +307,8 @@ def render_views(
 
     except ImportError as exc:
         _log.warning(
-            "Neither pythonocc offscreen nor trimesh available "
-            "for rendering: %s", exc,
+            "Neither pythonocc offscreen nor trimesh available " "for rendering: %s",
+            exc,
         )
 
     return render_paths

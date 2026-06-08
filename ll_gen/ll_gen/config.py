@@ -4,14 +4,12 @@ Follows the same @dataclass pattern used in ll_stepnet.config and
 geotoken.config — plain dataclasses with sensible defaults, no
 runtime imports from heavy libraries.
 """
+
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from enum import Enum
-from pathlib import Path
-from typing import Dict, List, Optional
-
-import logging
 
 _log = logging.getLogger(__name__)
 
@@ -19,6 +17,7 @@ _log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Enums
 # ---------------------------------------------------------------------------
+
 
 class GenerationRoute(str, Enum):
     """Which generation path to use."""
@@ -75,44 +74,119 @@ class ErrorSeverity(str, Enum):
 # Configuration dataclasses
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class RoutingConfig:
     """Configuration for the generation router."""
 
     # Keywords that trigger code generation (Path A)
-    mechanical_keywords: List[str] = field(default_factory=lambda: [
-        "extrude", "cut", "hole", "fillet", "chamfer", "thread", "bore",
-        "counterbore", "countersink", "slot", "pocket", "boss", "rib",
-        "shell", "loft", "sweep", "revolve", "mirror", "pattern",
-        "mounting", "bracket", "plate", "bolt", "nut", "washer",
-        "flange", "housing", "enclosure", "gear", "shaft", "bearing",
-        "hinge", "clamp", "spacer", "standoff", "bushing", "collar",
-        "pin", "key", "keyway", "groove", "channel", "rail", "guide",
-    ])
+    mechanical_keywords: list[str] = field(
+        default_factory=lambda: [
+            "extrude",
+            "cut",
+            "hole",
+            "fillet",
+            "chamfer",
+            "thread",
+            "bore",
+            "counterbore",
+            "countersink",
+            "slot",
+            "pocket",
+            "boss",
+            "rib",
+            "shell",
+            "loft",
+            "sweep",
+            "revolve",
+            "mirror",
+            "pattern",
+            "mounting",
+            "bracket",
+            "plate",
+            "bolt",
+            "nut",
+            "washer",
+            "flange",
+            "housing",
+            "enclosure",
+            "gear",
+            "shaft",
+            "bearing",
+            "hinge",
+            "clamp",
+            "spacer",
+            "standoff",
+            "bushing",
+            "collar",
+            "pin",
+            "key",
+            "keyway",
+            "groove",
+            "channel",
+            "rail",
+            "guide",
+        ]
+    )
 
     # Keywords that trigger OpenSCAD specifically
-    openscad_keywords: List[str] = field(default_factory=lambda: [
-        "union", "difference", "intersection", "hull", "minkowski",
-        "openscad", "scad",
-    ])
+    openscad_keywords: list[str] = field(
+        default_factory=lambda: [
+            "union",
+            "difference",
+            "intersection",
+            "hull",
+            "minkowski",
+            "openscad",
+            "scad",
+        ]
+    )
 
     # Keywords that trigger neural generation (Path B)
-    freeform_keywords: List[str] = field(default_factory=lambda: [
-        "smooth", "flowing", "sculpted", "organic", "aerodynamic",
-        "freeform", "curved", "biomorphic", "blob", "amorphous",
-        "ergonomic", "contoured", "streamlined", "natural",
-    ])
+    freeform_keywords: list[str] = field(
+        default_factory=lambda: [
+            "smooth",
+            "flowing",
+            "sculpted",
+            "organic",
+            "aerodynamic",
+            "freeform",
+            "curved",
+            "biomorphic",
+            "blob",
+            "amorphous",
+            "ergonomic",
+            "contoured",
+            "streamlined",
+            "natural",
+        ]
+    )
 
     # Keywords for latent space exploration
-    exploration_keywords: List[str] = field(default_factory=lambda: [
-        "interpolate", "morph", "vary", "explore", "blend",
-        "transition", "mix", "combine", "latent", "sample",
-    ])
+    exploration_keywords: list[str] = field(
+        default_factory=lambda: [
+            "interpolate",
+            "morph",
+            "vary",
+            "explore",
+            "blend",
+            "transition",
+            "mix",
+            "combine",
+            "latent",
+            "sample",
+        ]
+    )
 
     # Keywords for VQ-VAE codebook generation
-    codebook_keywords: List[str] = field(default_factory=lambda: [
-        "quantize", "discrete", "codebook", "disentangle",
-    ])
+    codebook_keywords: list[str] = field(
+        default_factory=lambda: [
+            "quantize",
+            "discrete",
+            "codebook",
+            "disentangle",
+        ]
+    )
 
     # Confidence threshold below which we fall back to CODE_CADQUERY
     confidence_threshold: float = 0.3
@@ -139,9 +213,13 @@ class CodegenConfig:
     default_backend: CodeLanguage = CodeLanguage.CADQUERY
 
     # Sandbox restrictions
-    allowed_modules: List[str] = field(default_factory=lambda: [
-        "cadquery", "math", "numpy",
-    ])
+    allowed_modules: list[str] = field(
+        default_factory=lambda: [
+            "cadquery",
+            "math",
+            "numpy",
+        ]
+    )
 
     # Whether to include few-shot examples in the system prompt
     include_examples: bool = True
@@ -166,9 +244,15 @@ class DisposalConfig:
     shapefix_min_tolerance: float = 1e-7
 
     # Fuzzy boolean tolerance escalation for BOPAlgo failures
-    fuzzy_tolerance_steps: List[float] = field(default_factory=lambda: [
-        1e-7, 1e-6, 1e-5, 1e-4, 1e-3,
-    ])
+    fuzzy_tolerance_steps: list[float] = field(
+        default_factory=lambda: [
+            1e-7,
+            1e-6,
+            1e-5,
+            1e-4,
+            1e-3,
+        ]
+    )
 
     # Manifold checking
     check_manifoldness: bool = True
@@ -190,9 +274,14 @@ class ExportConfig:
     stl_ascii: bool = False
 
     # Multi-view rendering for visual verification
-    render_views: List[str] = field(default_factory=lambda: [
-        "front", "top", "right", "isometric",
-    ])
+    render_views: list[str] = field(
+        default_factory=lambda: [
+            "front",
+            "top",
+            "right",
+            "isometric",
+        ]
+    )
     render_resolution: int = 512
 
 
@@ -229,7 +318,7 @@ class DatasetConfig:
     streaming: bool = True
     shuffle: bool = True
     shuffle_buffer_size: int = 10000
-    max_samples: Optional[int] = None
+    max_samples: int | None = None
 
     # Tokenization
     max_commands: int = 60
@@ -258,9 +347,9 @@ class ConditioningConfig:
 class GeneratorConfig:
     """Configuration for neural generators."""
 
-    vae_checkpoint: Optional[str] = None
-    diffusion_checkpoint: Optional[str] = None
-    vqvae_checkpoint: Optional[str] = None
+    vae_checkpoint: str | None = None
+    diffusion_checkpoint: str | None = None
+    vqvae_checkpoint: str | None = None
     default_temperature: float = 0.8
     diffusion_inference_steps: int = 50
     diffusion_eta: float = 0.0
@@ -320,8 +409,8 @@ def get_ll_gen_config(**overrides) -> LLGenConfig:
         Configured LLGenConfig instance.
     """
     config = LLGenConfig()
-    nested: Dict[str, Dict[str, object]] = {}
-    unknown_keys: List[str] = []
+    nested: dict[str, dict[str, object]] = {}
+    unknown_keys: list[str] = []
 
     for key, value in overrides.items():
         if "." in key:

@@ -3,6 +3,7 @@
 Centralises the lazy-import pattern so that each loader does not need
 to duplicate the same global + accessor boilerplate.
 """
+
 from __future__ import annotations
 
 import logging
@@ -21,6 +22,7 @@ def _get_torch():
     global _torch
     if _torch is None:
         import torch
+
         _torch = torch
     return _torch
 
@@ -30,6 +32,7 @@ def _get_datasets():
     global _datasets
     if _datasets is None:
         import datasets
+
         _datasets = datasets
     return _datasets
 
@@ -39,6 +42,7 @@ def _get_numpy():
     global _numpy
     if _numpy is None:
         import numpy as np
+
         _numpy = np
     return _numpy
 
@@ -48,5 +52,6 @@ def _get_geotoken():
     global _geotoken
     if _geotoken is None:
         import geotoken
+
         _geotoken = geotoken
     return _geotoken

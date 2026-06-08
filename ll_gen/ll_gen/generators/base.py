@@ -4,6 +4,7 @@ Defines the interface that all neural generators (VAE, diffusion, VQ-VAE)
 must implement. Provides common utilities for device management, metadata
 building, and temperature adjustment based on error context.
 """
+
 from __future__ import annotations
 
 import logging
@@ -33,11 +34,96 @@ PARAM_OFFSET = 12
 
 # Parameter masks: for each command type, which of the 16 parameter slots are active
 PARAMETER_MASKS = {
-    0: [True, True, False, False, False, False, False, False, False, False, False, False, False, False, False, False],  # SOL: 2 params (x, y)
-    1: [True, True, True, True, False, False, False, False, False, False, False, False, False, False, False, False],  # LINE: 4 params (x1, y1, x2, y2)
-    2: [True, True, True, True, True, True, False, False, False, False, False, False, False, False, False, False],  # ARC: 6 params (x1, y1, x2, y2, cx, cy)
-    3: [True, True, True, False, False, False, False, False, False, False, False, False, False, False, False, False],  # CIRCLE: 3 params (cx, cy, r)
-    4: [True, True, True, True, True, True, True, True, False, False, False, False, False, False, False, False],  # EXTRUDE: 8 params (depth, operation_type, etc.)
+    0: [
+        True,
+        True,
+        False,
+        False,
+        False,
+        False,
+        False,
+        False,
+        False,
+        False,
+        False,
+        False,
+        False,
+        False,
+        False,
+        False,
+    ],  # SOL: 2 params (x, y)
+    1: [
+        True,
+        True,
+        True,
+        True,
+        False,
+        False,
+        False,
+        False,
+        False,
+        False,
+        False,
+        False,
+        False,
+        False,
+        False,
+        False,
+    ],  # LINE: 4 params (x1, y1, x2, y2)
+    2: [
+        True,
+        True,
+        True,
+        True,
+        True,
+        True,
+        False,
+        False,
+        False,
+        False,
+        False,
+        False,
+        False,
+        False,
+        False,
+        False,
+    ],  # ARC: 6 params (x1, y1, x2, y2, cx, cy)
+    3: [
+        True,
+        True,
+        True,
+        False,
+        False,
+        False,
+        False,
+        False,
+        False,
+        False,
+        False,
+        False,
+        False,
+        False,
+        False,
+        False,
+    ],  # CIRCLE: 3 params (cx, cy, r)
+    4: [
+        True,
+        True,
+        True,
+        True,
+        True,
+        True,
+        True,
+        True,
+        False,
+        False,
+        False,
+        False,
+        False,
+        False,
+        False,
+        False,
+    ],  # EXTRUDE: 8 params (depth, operation_type, etc.)
     5: [False] * 16,  # EOS: no parameters
 }
 
@@ -236,9 +322,7 @@ class BaseNeuralGenerator(ABC):
 
         _log.info(f"Loading checkpoint from {path}")
         try:
-            state_dict = torch.load(
-                path, map_location=self.device, weights_only=True
-            )
+            state_dict = torch.load(path, map_location=self.device, weights_only=True)
         except TypeError:
             # PyTorch < 2.0 does not support weights_only
             state_dict = torch.load(path, map_location=self.device)

@@ -8,15 +8,13 @@ The disposal engine's ``code_executor`` receives this proposal,
 executes it in a sandboxed environment, and captures the resulting
 ``TopoDS_Shape``.
 """
+
 from __future__ import annotations
 
 import ast
-import copy
 import re
-import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from ll_gen.config import CodeLanguage
 from ll_gen.proposals.base import BaseProposal
@@ -39,9 +37,9 @@ class CodeProposal(BaseProposal):
 
     code: str = ""
     language: CodeLanguage = CodeLanguage.CADQUERY
-    syntax_valid: Optional[bool] = None
-    imports_required: List[str] = field(default_factory=list)
-    code_hash: Optional[str] = None
+    syntax_valid: bool | None = None
+    imports_required: list[str] = field(default_factory=list)
+    code_hash: str | None = None
 
     def __post_init__(self) -> None:
         if self.code and self.code_hash is None:
@@ -111,18 +109,33 @@ class CodeProposal(BaseProposal):
 
         # Must contain at least one OpenSCAD call
         primitives = [
-            "cube", "sphere", "cylinder", "polyhedron", "circle",
-            "square", "polygon", "text", "import", "surface",
-            "linear_extrude", "rotate_extrude",
-            "union", "difference", "intersection",
-            "translate", "rotate", "scale", "mirror",
-            "hull", "minkowski", "offset", "projection",
-            "module", "function",
+            "cube",
+            "sphere",
+            "cylinder",
+            "polyhedron",
+            "circle",
+            "square",
+            "polygon",
+            "text",
+            "import",
+            "surface",
+            "linear_extrude",
+            "rotate_extrude",
+            "union",
+            "difference",
+            "intersection",
+            "translate",
+            "rotate",
+            "scale",
+            "mirror",
+            "hull",
+            "minkowski",
+            "offset",
+            "projection",
+            "module",
+            "function",
         ]
-        has_primitive = any(
-            re.search(rf"\b{p}\s*\(", stripped)
-            for p in primitives
-        )
+        has_primitive = any(re.search(rf"\b{p}\s*\(", stripped) for p in primitives)
         if not has_primitive:
             return False
 
@@ -132,7 +145,7 @@ class CodeProposal(BaseProposal):
     # Import extraction
     # ------------------------------------------------------------------
 
-    def _extract_imports(self) -> List[str]:
+    def _extract_imports(self) -> list[str]:
         """Extract top-level module names from import statements.
 
         Handles both ``import foo`` and ``from foo.bar import baz``.
@@ -142,10 +155,8 @@ class CodeProposal(BaseProposal):
         """
         if self.language == CodeLanguage.OPENSCAD:
             # OpenSCAD uses include/use, not Python imports
-            modules: List[str] = []
-            for match in re.finditer(
-                r"(?:include|use)\s*<([^>]+)>", self.code
-            ):
+            modules: list[str] = []
+            for match in re.finditer(r"(?:include|use)\s*<([^>]+)>", self.code):
                 modules.append(match.group(1))
             return sorted(set(modules))
 
@@ -175,7 +186,7 @@ class CodeProposal(BaseProposal):
     # Retry support
     # ------------------------------------------------------------------
 
-    def with_error_context(self, error: Dict[str, Any]) -> "CodeProposal":
+    def with_error_context(self, error: dict[str, Any]) -> CodeProposal:
         """Create a retry proposal with error context attached.
 
         The new proposal keeps the same language and source prompt but
@@ -216,14 +227,16 @@ class CodeProposal(BaseProposal):
         """
         return len(self.code) // 4
 
-    def summary(self) -> Dict[str, Any]:
+    def summary(self) -> dict[str, Any]:
         """Extended summary including code-specific fields."""
         base = super().summary()
-        base.update({
-            "language": self.language.value,
-            "syntax_valid": self.syntax_valid,
-            "line_count": self.line_count,
-            "token_estimate": self.token_estimate,
-            "imports": self.imports_required,
-        })
+        base.update(
+            {
+                "language": self.language.value,
+                "syntax_valid": self.syntax_valid,
+                "line_count": self.line_count,
+                "token_estimate": self.token_estimate,
+                "imports": self.imports_required,
+            }
+        )
         return base

@@ -4,6 +4,7 @@ This module provides the ``ConditioningEmbeddings`` dataclass, which
 encapsulates embeddings from various sources and provides methods for
 conversion, validation, and metadata management.
 """
+
 from __future__ import annotations
 
 import logging
@@ -129,8 +130,10 @@ class ConditioningEmbeddings:
                 else:
                     token_emb = np.array(token_tensor)
 
-            embed_dim = pooled.shape[0] if pooled is not None else (
-                token_emb.shape[1] if token_emb is not None else 768
+            embed_dim = (
+                pooled.shape[0]
+                if pooled is not None
+                else (token_emb.shape[1] if token_emb is not None else 768)
             )
 
             return cls(

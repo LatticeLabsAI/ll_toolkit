@@ -15,28 +15,28 @@ from ll_gen.proposals.latent_proposal import LatentProposal
 
 # Lazy import pythonocc
 try:
-    from OCC.Core.gp import gp_Pnt
-    from OCC.Core.TColgp import TColgp_Array1OfPnt, TColgp_Array2OfPnt
-    from OCC.Core.GeomAPI import (
-        GeomAPI_PointsToBSplineSurface,
-        GeomAPI_PointsToBSpline,
-    )
-    from OCC.Core.GeomAbs import GeomAbs_C2
+    from OCC.Core.Bnd import Bnd_Box
+    from OCC.Core.BRep import BRep_Tool
+    from OCC.Core.BRepBndLib import brepbndlib
     from OCC.Core.BRepBuilderAPI import (
-        BRepBuilderAPI_MakeFace,
         BRepBuilderAPI_MakeEdge,
+        BRepBuilderAPI_MakeFace,
+        BRepBuilderAPI_MakeWire,
         BRepBuilderAPI_Sewing,
     )
-    from OCC.Core.BRepBndLib import brepbndlib
-    from OCC.Core.Bnd import Bnd_Box
-    from OCC.Core.BRepLProp import BRepLProp_CLProps
-    from OCC.Core.TopExp import topexp, TopExp_Explorer
-    from OCC.Core.TopTools import TopTools_IndexedMapOfShape
-    from OCC.Core.TopAbs import TopAbs_EDGE, TopAbs_VERTEX
-    from OCC.Core.BRepBuilderAPI import BRepBuilderAPI_MakeWire
-    from OCC.Core.BRep import BRep_Tool
     from OCC.Core.BRepExtrema import BRepExtrema_DistShapeShape
+    from OCC.Core.BRepLProp import BRepLProp_CLProps  # noqa: F401
+    from OCC.Core.GeomAbs import GeomAbs_C2
+    from OCC.Core.GeomAPI import (
+        GeomAPI_PointsToBSpline,
+        GeomAPI_PointsToBSplineSurface,
+    )
+    from OCC.Core.gp import gp_Pnt
     from OCC.Core.ShapeAnalysis import ShapeAnalysis_FreeBounds
+    from OCC.Core.TColgp import TColgp_Array1OfPnt, TColgp_Array2OfPnt
+    from OCC.Core.TopAbs import TopAbs_EDGE, TopAbs_VERTEX  # noqa: F401
+    from OCC.Core.TopExp import TopExp_Explorer, topexp
+    from OCC.Core.TopTools import TopTools_IndexedMapOfShape
 
     _OCC_AVAILABLE = True
 except ImportError:
@@ -45,12 +45,14 @@ except ImportError:
 # Lazy import cadling modules
 try:
     from cadling.generation.reconstruction.surface_fitter import BSplineSurfaceFitter
+
     _CADLING_SURFACE_FITTER_AVAILABLE = True
 except ImportError:
     _CADLING_SURFACE_FITTER_AVAILABLE = False
 
 try:
     from cadling.generation.reconstruction.topology_merger import TopologyMerger
+
     _CADLING_TOPOLOGY_MERGER_AVAILABLE = True
 except ImportError:
     _CADLING_TOPOLOGY_MERGER_AVAILABLE = False
@@ -84,7 +86,9 @@ def execute_latent_proposal(proposal: LatentProposal) -> Any:
     _log.info("Starting execution of LatentProposal")
 
     # Step 1: Fit B-spline surfaces for each face
-    _log.info("Step 1: Fitting B-spline surfaces for %d faces", len(proposal.face_grids))
+    _log.info(
+        "Step 1: Fitting B-spline surfaces for %d faces", len(proposal.face_grids)
+    )
     faces = []
     for i, face_grid in enumerate(proposal.face_grids):
         try:
@@ -156,7 +160,9 @@ def _fit_bspline_surface(grid: np.ndarray, tolerance: float = 1e-3) -> Any:
 
     for i in range(u_count):
         for j in range(v_count):
-            pt = gp_Pnt(float(grid[i, j, 0]), float(grid[i, j, 1]), float(grid[i, j, 2]))
+            pt = gp_Pnt(
+                float(grid[i, j, 0]), float(grid[i, j, 1]), float(grid[i, j, 2])
+            )
             points.SetValue(i + 1, j + 1, pt)
 
     # Fit B-spline surface
@@ -248,28 +254,32 @@ def _deduplicate_edges(edges: list[Any]) -> list[Any]:
         try:
             bbox_center = _compute_edge_bbox_center(edge)
             sampled_pts = _sample_edge_points(edge, n_samples=20)
-            edge_data.append({
-                'edge': edge,
-                'bbox_center': bbox_center,
-                'sampled_points': sampled_pts,
-                'original_index': i,
-                'merged': False,
-            })
+            edge_data.append(
+                {
+                    "edge": edge,
+                    "bbox_center": bbox_center,
+                    "sampled_points": sampled_pts,
+                    "original_index": i,
+                    "merged": False,
+                }
+            )
         except Exception as e:
             _log.warning(f"Failed to extract data from edge {i}: {e}")
-            edge_data.append({
-                'edge': edge,
-                'bbox_center': np.array([0.0, 0.0, 0.0]),
-                'sampled_points': np.array([]),
-                'original_index': i,
-                'merged': False,
-            })
+            edge_data.append(
+                {
+                    "edge": edge,
+                    "bbox_center": np.array([0.0, 0.0, 0.0]),
+                    "sampled_points": np.array([]),
+                    "original_index": i,
+                    "merged": False,
+                }
+            )
 
     # Spatial binning: bin edges by midpoint into grid cells to avoid O(n^2)
     cell_size = 0.08  # Same as bbox_dist threshold
     bins: dict[tuple[int, int, int], list[int]] = {}
     for idx, data in enumerate(edge_data):
-        center = data['bbox_center']
+        center = data["bbox_center"]
         cell = (
             int(np.floor(center[0] / cell_size)),
             int(np.floor(center[1] / cell_size)),
@@ -292,10 +302,10 @@ def _deduplicate_edges(edges: list[Any]) -> list[Any]:
 
         sorted_candidates = sorted(candidates)
         for ci, i in enumerate(sorted_candidates):
-            if edge_data[i]['merged']:
+            if edge_data[i]["merged"]:
                 continue
-            for j in sorted_candidates[ci + 1:]:
-                if edge_data[j]['merged']:
+            for j in sorted_candidates[ci + 1 :]:
+                if edge_data[j]["merged"]:
                     continue
                 pair_key = (i, j)
                 if pair_key in visited_pairs:
@@ -304,17 +314,20 @@ def _deduplicate_edges(edges: list[Any]) -> list[Any]:
 
                 # Compute bounding box distance
                 bbox_dist = np.linalg.norm(
-                    edge_data[i]['bbox_center'] - edge_data[j]['bbox_center']
+                    edge_data[i]["bbox_center"] - edge_data[j]["bbox_center"]
                 )
 
                 # Compute shape similarity (Chamfer distance)
-                if edge_data[i]['sampled_points'].size > 0 and edge_data[j]['sampled_points'].size > 0:
+                if (
+                    edge_data[i]["sampled_points"].size > 0
+                    and edge_data[j]["sampled_points"].size > 0
+                ):
                     shape_sim = _chamfer_distance(
-                        edge_data[i]['sampled_points'],
-                        edge_data[j]['sampled_points'],
+                        edge_data[i]["sampled_points"],
+                        edge_data[j]["sampled_points"],
                     )
                 else:
-                    shape_sim = float('inf')
+                    shape_sim = float("inf")
 
                 # Check if edges should be merged
                 if bbox_dist < 0.08 and shape_sim < 0.2:
@@ -323,28 +336,28 @@ def _deduplicate_edges(edges: list[Any]) -> list[Any]:
                         f"(bbox_dist={bbox_dist:.6f}, shape_sim={shape_sim:.6f})"
                     )
                     merged_pairs.append((i, j))
-                    edge_data[j]['merged'] = True
+                    edge_data[j]["merged"] = True
 
     # Create merged edges by averaging vertex positions
     deduplicated_edges = []
     for i, data in enumerate(edge_data):
-        if data['merged']:
+        if data["merged"]:
             continue
 
         # Find all edges that should be merged with this one
-        edges_to_merge = [data['edge']]
+        edges_to_merge = [data["edge"]]
         for pair_i, pair_j in merged_pairs:
             if pair_i == i:
-                edges_to_merge.append(edge_data[pair_j]['edge'])
+                edges_to_merge.append(edge_data[pair_j]["edge"])
             elif pair_j == i:
-                edges_to_merge.append(edge_data[pair_i]['edge'])
+                edges_to_merge.append(edge_data[pair_i]["edge"])
 
         if len(edges_to_merge) > 1:
             # Average the edges
             merged_edge = _average_edges(edges_to_merge)
             deduplicated_edges.append(merged_edge)
         else:
-            deduplicated_edges.append(data['edge'])
+            deduplicated_edges.append(data["edge"])
 
     _log.debug(f"Deduplication reduced {len(edges)} edges to {len(deduplicated_edges)}")
     return deduplicated_edges
@@ -366,11 +379,13 @@ def _compute_edge_bbox_center(edge: Any) -> np.ndarray:
     brepbndlib.Add(edge, bbox)
 
     xmin, ymin, zmin, xmax, ymax, zmax = bbox.Get()
-    center = np.array([
-        (xmin + xmax) / 2.0,
-        (ymin + ymax) / 2.0,
-        (zmin + zmax) / 2.0,
-    ])
+    center = np.array(
+        [
+            (xmin + xmax) / 2.0,
+            (ymin + ymax) / 2.0,
+            (zmin + zmax) / 2.0,
+        ]
+    )
 
     return center
 
@@ -422,7 +437,7 @@ def _chamfer_distance(pts_a: np.ndarray, pts_b: np.ndarray) -> float:
         The Chamfer distance (float).
     """
     if pts_a.shape[0] == 0 or pts_b.shape[0] == 0:
-        return float('inf')
+        return float("inf")
 
     # Distance from pts_a to pts_b
     dist_a_to_b = np.min(
@@ -522,7 +537,9 @@ def _trim_surfaces_with_edges(faces: list[Any], edges: list[Any]) -> list[Any]:
 
             if face_builder.IsDone():
                 trimmed_faces.append(face_builder.Face())
-                _log.debug(f"Face {i}: successfully trimmed with {len(face_edges)} edges")
+                _log.debug(
+                    f"Face {i}: successfully trimmed with {len(face_edges)} edges"
+                )
             else:
                 _log.warning(f"Face {i}: face construction failed, keeping original")
                 trimmed_faces.append(face)
@@ -623,9 +640,7 @@ def _check_sewed_shape_quality(shape: Any) -> None:
         if free_edges:
             _log.warning(f"Sewed shape has {len(free_edges)} free edges")
         if degenerated_edges:
-            _log.warning(
-                f"Sewed shape has {len(degenerated_edges)} degenerated edges"
-            )
+            _log.warning(f"Sewed shape has {len(degenerated_edges)} degenerated edges")
 
     except Exception as e:
         _log.debug(f"Could not check sewed shape quality: {e}")

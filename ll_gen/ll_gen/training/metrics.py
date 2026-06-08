@@ -3,6 +3,7 @@
 Provides metrics for validity, compilability, coverage, and statistical
 distance measures (MMD, JSD) between generated and reference point clouds.
 """
+
 from __future__ import annotations
 
 import logging
@@ -151,30 +152,48 @@ class MetricsComputer:
 
         # Randomly sample pairs if needed
         if len(centroids1) * len(centroids2) > sample_size:
-            indices1 = np.random.choice(
-                len(centroids1), size=sample_size, replace=True
-            )
-            indices2 = np.random.choice(
-                len(centroids2), size=sample_size, replace=True
-            )
+            indices1 = np.random.choice(len(centroids1), size=sample_size, replace=True)
+            indices2 = np.random.choice(len(centroids2), size=sample_size, replace=True)
             pair1 = centroids1[indices1]
             pair2 = centroids2[indices2]
         else:
-            pair1 = np.repeat(
-                centroids1, len(centroids2), axis=0
-            )
+            pair1 = np.repeat(centroids1, len(centroids2), axis=0)
             pair2 = np.tile(centroids2, (len(centroids1), 1))
 
         if kernel == "rbf":
             if len(centroids1) * len(centroids2) > sample_size:
                 # Sampled estimation — use sampled pairs for ALL three kernels
                 k_11 = self._rbf_kernel(
-                    centroids1[np.random.choice(len(centroids1), size=min(sample_size, len(centroids1)), replace=True)],
-                    centroids1[np.random.choice(len(centroids1), size=min(sample_size, len(centroids1)), replace=True)]
+                    centroids1[
+                        np.random.choice(
+                            len(centroids1),
+                            size=min(sample_size, len(centroids1)),
+                            replace=True,
+                        )
+                    ],
+                    centroids1[
+                        np.random.choice(
+                            len(centroids1),
+                            size=min(sample_size, len(centroids1)),
+                            replace=True,
+                        )
+                    ],
                 )
                 k_22 = self._rbf_kernel(
-                    centroids2[np.random.choice(len(centroids2), size=min(sample_size, len(centroids2)), replace=True)],
-                    centroids2[np.random.choice(len(centroids2), size=min(sample_size, len(centroids2)), replace=True)]
+                    centroids2[
+                        np.random.choice(
+                            len(centroids2),
+                            size=min(sample_size, len(centroids2)),
+                            replace=True,
+                        )
+                    ],
+                    centroids2[
+                        np.random.choice(
+                            len(centroids2),
+                            size=min(sample_size, len(centroids2)),
+                            replace=True,
+                        )
+                    ],
                 )
                 k_12 = self._rbf_kernel(pair1, pair2)
             else:
@@ -209,12 +228,12 @@ class MetricsComputer:
         """
         # Pairwise squared distances
         sq_dists = (
-            np.sum(x_data ** 2, axis=1, keepdims=True)
+            np.sum(x_data**2, axis=1, keepdims=True)
             - 2.0 * np.dot(x_data, y_data.T)
-            + np.sum(y_data ** 2, axis=1, keepdims=True).T
+            + np.sum(y_data**2, axis=1, keepdims=True).T
         )
         sq_dists = np.maximum(sq_dists, 0.0)
-        sigma_sq = 2.0 * (self.kernel_bandwidth ** 2)
+        sigma_sq = 2.0 * (self.kernel_bandwidth**2)
         return np.exp(-sq_dists / sigma_sq)
 
     def compute_jsd(
@@ -353,19 +372,25 @@ class MetricsComputer:
                 if len(bbox) >= 6:
                     # Create 8 corners of the bounding box
                     x_min, y_min, z_min, x_max, y_max, z_max = (
-                        bbox[0], bbox[1], bbox[2],
-                        bbox[3], bbox[4], bbox[5]
+                        bbox[0],
+                        bbox[1],
+                        bbox[2],
+                        bbox[3],
+                        bbox[4],
+                        bbox[5],
                     )
-                    corners = np.array([
-                        [x_min, y_min, z_min],
-                        [x_min, y_min, z_max],
-                        [x_min, y_max, z_min],
-                        [x_min, y_max, z_max],
-                        [x_max, y_min, z_min],
-                        [x_max, y_min, z_max],
-                        [x_max, y_max, z_min],
-                        [x_max, y_max, z_max],
-                    ])
+                    corners = np.array(
+                        [
+                            [x_min, y_min, z_min],
+                            [x_min, y_min, z_max],
+                            [x_min, y_max, z_min],
+                            [x_min, y_max, z_max],
+                            [x_max, y_min, z_min],
+                            [x_max, y_min, z_max],
+                            [x_max, y_max, z_min],
+                            [x_max, y_max, z_max],
+                        ]
+                    )
                     generated_points.append(corners)
 
         # Compute scalar metrics

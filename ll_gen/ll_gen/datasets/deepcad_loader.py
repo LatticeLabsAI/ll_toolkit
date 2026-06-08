@@ -4,23 +4,35 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional
-
-__all__ = ["DeepCADDataset", "load_deepcad"]
-
-_log = logging.getLogger(__name__)
+from typing import Any
 
 from ll_gen.datasets._imports import _get_datasets, _get_geotoken, _get_torch
 from ll_gen.datasets._tokenization import (
-    PAD_TOKEN_ID,
     BOS_TOKEN_ID,
-    EOS_TOKEN_ID,
     COMMAND_TYPE_IDS,
+    EOS_TOKEN_ID,
+    PAD_TOKEN_ID,
     PARAM_OFFSET,
-    quantize_parameter,
     tokenize_command_sequence,
-    validate_token_space,
 )
+
+# Re-exported public API (token constants + lazy-import helpers consumed by
+# callers/tests); listed here so they are recognized as intentional exports.
+__all__ = [
+    "DeepCADDataset",
+    "load_deepcad",
+    "tokenize_command_sequence",
+    "COMMAND_TYPE_IDS",
+    "PAD_TOKEN_ID",
+    "BOS_TOKEN_ID",
+    "EOS_TOKEN_ID",
+    "PARAM_OFFSET",
+    "_get_datasets",
+    "_get_geotoken",
+    "_get_torch",
+]
+
+_log = logging.getLogger(__name__)
 
 
 class DeepCADDataset:
@@ -46,7 +58,7 @@ class DeepCADDataset:
         max_commands: int = 60,
         quantization_bits: int = 8,
         normalization_range: float = 2.0,
-        max_samples: Optional[int] = None,
+        max_samples: int | None = None,
     ):
         """Initialize the DeepCAD dataset.
 
@@ -81,15 +93,13 @@ class DeepCADDataset:
         if max_samples is not None:
             self.json_files = self.json_files[:max_samples]
 
-        _log.info(
-            f"Loaded {len(self.json_files)} DeepCAD samples from {split}"
-        )
+        _log.info(f"Loaded {len(self.json_files)} DeepCAD samples from {split}")
 
     def __len__(self) -> int:
         """Return the number of samples in the dataset."""
         return len(self.json_files)
 
-    def __getitem__(self, idx: int) -> Dict[str, Any]:
+    def __getitem__(self, idx: int) -> dict[str, Any]:
         """Get a single sample from the dataset.
 
         Args:
@@ -105,7 +115,7 @@ class DeepCADDataset:
         """
         json_file = self.json_files[idx]
 
-        with open(json_file, "r") as f:
+        with open(json_file) as f:
             data = json.load(f)
 
         sequence = data.get("sequence", [])
@@ -123,11 +133,11 @@ class DeepCADDataset:
 
 
 def _tokenize_deepcad_sample(
-    sample: Dict[str, Any],
+    sample: dict[str, Any],
     max_commands: int = 60,
     quantization_bits: int = 8,
     normalization_range: float = 2.0,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Tokenize a single DeepCAD sample from HuggingFace.
 
     Args:
@@ -152,7 +162,7 @@ def load_deepcad(
     path: str = "latticelabs/deepcad",
     split: str = "train",
     streaming: bool = True,
-    max_samples: Optional[int] = None,
+    max_samples: int | None = None,
     max_commands: int = 60,
     quantization_bits: int = 8,
     normalization_range: float = 2.0,
@@ -195,9 +205,7 @@ def load_deepcad(
         _log.info(f"Loading DeepCAD from HuggingFace Hub: {path}")
         datasets = _get_datasets()
 
-        hf_dataset = datasets.load_dataset(
-            path, split=split, streaming=streaming
-        )
+        hf_dataset = datasets.load_dataset(path, split=split, streaming=streaming)
 
         if max_samples is not None:
             hf_dataset = hf_dataset.take(max_samples)

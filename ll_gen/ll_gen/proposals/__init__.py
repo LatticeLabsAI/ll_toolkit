@@ -26,6 +26,7 @@ ValidationFinding
 RepairAction
     Record of a single deterministic repair step.
 """
+
 from ll_gen.proposals.base import BaseProposal
 from ll_gen.proposals.code_proposal import CodeProposal
 from ll_gen.proposals.command_proposal import CommandSequenceProposal

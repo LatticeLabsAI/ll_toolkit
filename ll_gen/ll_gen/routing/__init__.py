@@ -8,6 +8,7 @@ decide which generation path to use:
 - **Neural generation** (Path B): VAE, diffusion, or VQ-VAE, best
   for freeform/organic shapes or latent space exploration.
 """
+
 from ll_gen.routing.router import GenerationRouter, RoutingDecision
 
 __all__ = ["GenerationRouter", "RoutingDecision"]

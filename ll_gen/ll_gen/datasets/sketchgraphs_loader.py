@@ -4,14 +4,20 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional
-
-__all__ = ["SketchGraphsDataset", "load_sketchgraphs"]
-
-_log = logging.getLogger(__name__)
+from typing import Any
 
 from ll_gen.datasets._imports import _get_datasets, _get_numpy, _get_torch
 
+# Re-exported lazy-import helpers (part of the loader's public surface).
+__all__ = [
+    "SketchGraphsDataset",
+    "load_sketchgraphs",
+    "_get_datasets",
+    "_get_numpy",
+    "_get_torch",
+]
+
+_log = logging.getLogger(__name__)
 
 # Entity type encodings
 ENTITY_TYPES = {
@@ -54,7 +60,7 @@ class SketchGraphsDataset:
         split: str = "train",
         max_entities: int = 50,
         max_constraints: int = 100,
-        max_samples: Optional[int] = None,
+        max_samples: int | None = None,
     ):
         """Initialize the SketchGraphs dataset.
 
@@ -87,15 +93,13 @@ class SketchGraphsDataset:
         if max_samples is not None:
             self.json_files = self.json_files[:max_samples]
 
-        _log.info(
-            f"Loaded {len(self.json_files)} SketchGraphs samples from {split}"
-        )
+        _log.info(f"Loaded {len(self.json_files)} SketchGraphs samples from {split}")
 
     def __len__(self) -> int:
         """Return the number of samples in the dataset."""
         return len(self.json_files)
 
-    def __getitem__(self, idx: int) -> Dict[str, Any]:
+    def __getitem__(self, idx: int) -> dict[str, Any]:
         """Get a single sample from the dataset.
 
         Args:
@@ -115,7 +119,7 @@ class SketchGraphsDataset:
         np = _get_numpy()
         json_file = self.json_files[idx]
 
-        with open(json_file, "r") as f:
+        with open(json_file) as f:
             data = json.load(f)
 
         entities = data.get("entities", [])
@@ -153,10 +157,7 @@ class SketchGraphsDataset:
                 radius = params.get("radius", 0.0)
                 start_angle = params.get("start_angle", 0.0)
                 end_angle = params.get("end_angle", 0.0)
-                param_list = (
-                    list(center)
-                    + [radius, start_angle, end_angle]
-                )
+                param_list = list(center) + [radius, start_angle, end_angle]
             elif entity_type == "Point":
                 point = params.get("point", [0.0, 0.0])
                 param_list = list(point)
@@ -195,9 +196,7 @@ class SketchGraphsDataset:
             # Get entity references
             references = constraint.get("references", [0, 0])
             if len(references) >= 2:
-                constraint_refs.append(
-                    [int(references[0]), int(references[1])]
-                )
+                constraint_refs.append([int(references[0]), int(references[1])])
             else:
                 constraint_refs.append([0, 0])
 
@@ -242,10 +241,10 @@ class SketchGraphsDataset:
 
 
 def _tokenize_sketchgraphs_sample(
-    sample: Dict[str, Any],
+    sample: dict[str, Any],
     max_entities: int = 50,
     max_constraints: int = 100,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Tokenize a single SketchGraphs sample from HuggingFace.
 
     Args:
@@ -292,10 +291,7 @@ def _tokenize_sketchgraphs_sample(
             radius = params.get("radius", 0.0)
             start_angle = params.get("start_angle", 0.0)
             end_angle = params.get("end_angle", 0.0)
-            param_list = (
-                list(center)
-                + [radius, start_angle, end_angle]
-            )
+            param_list = list(center) + [radius, start_angle, end_angle]
         elif entity_type == "Point":
             point = params.get("point", [0.0, 0.0])
             param_list = list(point)
@@ -331,9 +327,7 @@ def _tokenize_sketchgraphs_sample(
 
         references = constraint.get("references", [0, 0])
         if len(references) >= 2:
-            constraint_refs.append(
-                [int(references[0]), int(references[1])]
-            )
+            constraint_refs.append([int(references[0]), int(references[1])])
         else:
             constraint_refs.append([0, 0])
 
@@ -376,7 +370,7 @@ def load_sketchgraphs(
     streaming: bool = True,
     max_entities: int = 50,
     max_constraints: int = 100,
-    max_samples: Optional[int] = None,
+    max_samples: int | None = None,
 ) -> Any:
     """Load the SketchGraphs dataset.
 
@@ -414,9 +408,7 @@ def load_sketchgraphs(
         _log.info(f"Loading SketchGraphs from HuggingFace Hub: {path}")
         datasets = _get_datasets()
 
-        hf_dataset = datasets.load_dataset(
-            path, split=split, streaming=streaming
-        )
+        hf_dataset = datasets.load_dataset(path, split=split, streaming=streaming)
 
         if max_samples is not None:
             hf_dataset = hf_dataset.take(max_samples)

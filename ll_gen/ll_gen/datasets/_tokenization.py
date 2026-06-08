@@ -4,10 +4,11 @@ This module centralizes the token ID definitions and quantization logic
 used by both DeepCAD and Text2CAD dataset loaders, ensuring consistency
 across all command-sequence-based datasets.
 """
+
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List
+from typing import Any
 
 _log = logging.getLogger(__name__)
 
@@ -21,7 +22,7 @@ EOS_TOKEN_ID = 2
 # ---------------------------------------------------------------------------
 # Command type IDs
 # ---------------------------------------------------------------------------
-COMMAND_TYPE_IDS: Dict[str, int] = {
+COMMAND_TYPE_IDS: dict[str, int] = {
     "SOL": 6,
     "LINE": 7,
     "ARC": 8,
@@ -93,11 +94,11 @@ def quantize_parameter(
 
 
 def tokenize_command_sequence(
-    commands: List[Dict[str, Any]],
+    commands: list[dict[str, Any]],
     quantization_bits: int = 8,
     normalization_range: float = 2.0,
     max_commands: int = 60,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Tokenize a list of CAD commands into token IDs.
 
     Produces BOS, per-command type + parameter tokens, and EOS,
@@ -118,9 +119,9 @@ def tokenize_command_sequence(
     """
     validate_token_space(quantization_bits)
 
-    token_ids: List[int] = [BOS_TOKEN_ID]
-    command_tokens: List[Dict[str, Any]] = []
-    attention_mask: List[int] = [1]
+    token_ids: list[int] = [BOS_TOKEN_ID]
+    command_tokens: list[dict[str, Any]] = []
+    attention_mask: list[int] = [1]
 
     for i, cmd in enumerate(commands):
         if i >= max_commands:
@@ -134,8 +135,8 @@ def tokenize_command_sequence(
             token_ids.append(cmd_type_id)
             attention_mask.append(1)
 
-            quantized_params: List[int] = []
-            param_mask: List[int] = []
+            quantized_params: list[int] = []
+            param_mask: list[int] = []
 
             for param in params:
                 quantized = quantize_parameter(
@@ -148,11 +149,13 @@ def tokenize_command_sequence(
                 token_ids.append(param_token_id)
                 attention_mask.append(1)
 
-            command_tokens.append({
-                "command_type": cmd_type_id,
-                "parameters": quantized_params,
-                "parameter_mask": param_mask,
-            })
+            command_tokens.append(
+                {
+                    "command_type": cmd_type_id,
+                    "parameters": quantized_params,
+                    "parameter_mask": param_mask,
+                }
+            )
 
     # Add EOS token
     token_ids.append(EOS_TOKEN_ID)

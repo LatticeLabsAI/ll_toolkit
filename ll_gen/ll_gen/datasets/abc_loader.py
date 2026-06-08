@@ -3,13 +3,20 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional
-
-__all__ = ["ABCDataset", "load_abc"]
-
-_log = logging.getLogger(__name__)
+from typing import Any
 
 from ll_gen.datasets._imports import _get_datasets, _get_numpy, _get_torch
+
+# Re-exported lazy-import helpers (part of the loader's public surface).
+__all__ = [
+    "ABCDataset",
+    "load_abc",
+    "_get_datasets",
+    "_get_numpy",
+    "_get_torch",
+]
+
+_log = logging.getLogger(__name__)
 
 _pythonocc_available = None
 
@@ -19,9 +26,10 @@ def _check_pythonocc():
     global _pythonocc_available
     if _pythonocc_available is None:
         try:
-            from OCC.Core.TopoDS import TopoDS_Shape
-            from OCC.Core.TopExp import TopExp_Explorer
-            from OCC.Core.TopAbs import TopAbs_FACE
+            from OCC.Core.TopAbs import TopAbs_FACE  # noqa: F401
+            from OCC.Core.TopExp import TopExp_Explorer  # noqa: F401
+            from OCC.Core.TopoDS import TopoDS_Shape  # noqa: F401
+
             _pythonocc_available = True
         except ImportError:
             _pythonocc_available = False
@@ -31,7 +39,7 @@ def _check_pythonocc():
     return _pythonocc_available
 
 
-def _extract_face_features(step_file: str) -> Dict[str, Any]:
+def _extract_face_features(step_file: str) -> dict[str, Any]:
     """Extract face features from a STEP file using pythonocc.
 
     Args:
@@ -41,14 +49,14 @@ def _extract_face_features(step_file: str) -> Dict[str, Any]:
         Dictionary with node_features and edge_index arrays.
     """
     try:
-        from OCC.Core.STEPControl import STEPControl_Reader
-        from OCC.Core.IFSelect import IFSelect_RetDone
-        from OCC.Core.TopExp import TopExp_Explorer, TopExp
-        from OCC.Core.TopAbs import TopAbs_FACE, TopAbs_EDGE
-        from OCC.Core.BRepGProp import brepgprop
-        from OCC.Core.GProp import GProp_GProps
         from OCC.Core.Bnd import Bnd_Box
         from OCC.Core.BRepBndLib import brepbndlib
+        from OCC.Core.BRepGProp import brepgprop
+        from OCC.Core.GProp import GProp_GProps
+        from OCC.Core.IFSelect import IFSelect_RetDone
+        from OCC.Core.STEPControl import STEPControl_Reader
+        from OCC.Core.TopAbs import TopAbs_EDGE, TopAbs_FACE
+        from OCC.Core.TopExp import TopExp, TopExp_Explorer
         from OCC.Core.TopTools import TopTools_IndexedDataMapOfShapeListOfShape
 
         np = _get_numpy()
@@ -111,12 +119,14 @@ def _extract_face_features(step_file: str) -> Dict[str, Any]:
             # Surface type (simplified: plane=0, cylinder=1, sphere=2, other=3)
             surface_type = np.array([3], dtype=np.float32)
 
-            feature_vector = np.concatenate([
-                surface_type,
-                np.array([area], dtype=np.float32),
-                centroid_array,
-                bbox_array,
-            ])
+            feature_vector = np.concatenate(
+                [
+                    surface_type,
+                    np.array([area], dtype=np.float32),
+                    centroid_array,
+                    bbox_array,
+                ]
+            )
 
             features.append(feature_vector)
 
@@ -190,7 +200,7 @@ class ABCDataset:
         self,
         data_dir: str,
         split: str = "train",
-        max_samples: Optional[int] = None,
+        max_samples: int | None = None,
     ):
         """Initialize the ABC dataset.
 
@@ -224,15 +234,13 @@ class ABCDataset:
         if max_samples is not None:
             self.step_files = self.step_files[:max_samples]
 
-        _log.info(
-            f"Loaded {len(self.step_files)} ABC samples from {split}"
-        )
+        _log.info(f"Loaded {len(self.step_files)} ABC samples from {split}")
 
     def __len__(self) -> int:
         """Return the number of samples in the dataset."""
         return len(self.step_files)
 
-    def __getitem__(self, idx: int) -> Dict[str, Any]:
+    def __getitem__(self, idx: int) -> dict[str, Any]:
         """Get a single sample from the dataset.
 
         Args:
@@ -277,8 +285,8 @@ class ABCDataset:
 
 
 def _tokenize_abc_sample(
-    sample: Dict[str, Any],
-) -> Dict[str, Any]:
+    sample: dict[str, Any],
+) -> dict[str, Any]:
     """Tokenize a single ABC sample from HuggingFace.
 
     Args:
@@ -315,7 +323,7 @@ def load_abc(
     path: str = "latticelabs/abc",
     split: str = "train",
     streaming: bool = True,
-    max_samples: Optional[int] = None,
+    max_samples: int | None = None,
 ) -> Any:
     """Load the ABC (Another B-rep Corpus) dataset.
 
@@ -349,18 +357,16 @@ def load_abc(
         _log.info(f"Loading ABC from HuggingFace Hub: {path}")
         datasets = _get_datasets()
 
-        hf_dataset = datasets.load_dataset(
-            path, split=split, streaming=streaming
-        )
+        hf_dataset = datasets.load_dataset(path, split=split, streaming=streaming)
 
         if max_samples is not None:
             hf_dataset = hf_dataset.take(max_samples)
 
         tokenized_dataset = hf_dataset.map(
             lambda sample: _tokenize_abc_sample(sample),
-            remove_columns=hf_dataset.column_names
-            if hasattr(hf_dataset, "column_names")
-            else [],
+            remove_columns=(
+                hf_dataset.column_names if hasattr(hf_dataset, "column_names") else []
+            ),
         )
 
         return tokenized_dataset

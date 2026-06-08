@@ -14,11 +14,12 @@ feedback_builder
 reward_signal
     Converts disposal outcomes to scalar rewards for RL training.
 """
+
 from ll_gen.feedback.error_mapper import (
+    OCC_ERROR_MAP,
     categorize_errors,
     map_brep_errors,
     map_single_error,
-    OCC_ERROR_MAP,
 )
 from ll_gen.feedback.feedback_builder import (
     build_code_feedback,

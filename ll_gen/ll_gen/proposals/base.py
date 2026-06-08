@@ -7,12 +7,13 @@ Every proposal carries:
 - Source prompt and conditioning metadata.
 - An optional list of alternative proposals generated in the same batch.
 """
+
 from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 
 @dataclass
@@ -47,18 +48,18 @@ class BaseProposal:
     attempt: int = 1
     max_attempts: int = 3
     source_prompt: str = ""
-    conditioning_source: Optional[str] = None
-    generation_metadata: Dict[str, Any] = field(default_factory=dict)
-    alternatives: List[Any] = field(default_factory=list)
+    conditioning_source: str | None = None
+    generation_metadata: dict[str, Any] = field(default_factory=dict)
+    alternatives: list[Any] = field(default_factory=list)
     timestamp: str = field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )
-    error_context: Optional[Dict[str, Any]] = None
+    error_context: dict[str, Any] | None = None
 
     # ------------------------------------------------------------------
     # RL training signals (populated by generate_for_training)
     # ------------------------------------------------------------------
-    log_probs: Optional[Any] = None
+    log_probs: Any | None = None
     """Sum of log-probabilities for the sampled trajectory.
 
     This is a scalar torch.Tensor with grad attached, computed during
@@ -66,7 +67,7 @@ class BaseProposal:
     REINFORCE / policy-gradient trainers.  ``None`` when the proposal
     was produced by a regular ``generate()`` call (no grad).
     """
-    entropy: Optional[float] = None
+    entropy: float | None = None
     """Policy entropy (scalar) over the generation distribution.
 
     Used as an exploration bonus in the RL loss.  ``None`` when no
@@ -93,7 +94,7 @@ class BaseProposal:
         """
         return min(self.attempt + 1, self.max_attempts)
 
-    def with_error_context(self, error: Dict[str, Any]) -> BaseProposal:
+    def with_error_context(self, error: dict[str, Any]) -> BaseProposal:
         """Create a shallow copy with updated error context and incremented attempt.
 
         This is used by the orchestrator when building a retry proposal:
@@ -135,7 +136,7 @@ class BaseProposal:
         """Whether this proposal is a retry (attempt > 1)."""
         return self.attempt > 1
 
-    def summary(self) -> Dict[str, Any]:
+    def summary(self) -> dict[str, Any]:
         """Return a compact summary dict for logging / serialization.
 
         Returns:
