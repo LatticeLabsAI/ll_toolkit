@@ -52,6 +52,10 @@ def test_cli_generates_text_from_stl(tiny_lm_with_tokenizer_dir, sphere_stl_file
     # The script prints the decoded generation. Even with the tiny untrained
     # model the pipeline must produce some actual (non-whitespace) text.
     assert isinstance(result.stdout, str)
+    # Ensure the CLI produced some actual text (not just empty or whitespace).
+    assert result.stdout is not None and result.stdout.strip(), (
+        "Expected CLI to produce non-empty stdout, but it was empty or whitespace."
+    )
     assert result.stdout.strip(), (
         "expected the CLI to print non-empty generated text, got "
         f"{result.stdout!r}"
