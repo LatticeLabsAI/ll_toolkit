@@ -459,11 +459,18 @@ class TestNeuralVAEGenerator:
 
     @pytest.mark.unit
     def test_init_model_missing_ll_stepnet(self):
-        """_init_model() raises ImportError when ll_stepnet unavailable."""
+        """_init_model() raises ImportError when stepnet is unavailable."""
         gen = NeuralVAEGenerator()
 
-        with patch.dict("sys.modules", {"ll_stepnet.stepnet.models": None}):
-            with pytest.raises(ImportError, match="ll_stepnet is required"):
+        with patch.dict(
+            "sys.modules",
+            {
+                "stepnet.config": None,
+                "stepnet.generation_pipeline": None,
+                "stepnet.vae": None,
+            },
+        ):
+            with pytest.raises(ImportError, match="stepnet.*is required"):
                 gen._init_model()
 
 
@@ -763,11 +770,17 @@ class TestNeuralVQVAEGenerator:
 
     @pytest.mark.unit
     def test_init_model_missing_ll_stepnet(self):
-        """_init_model() raises ImportError when ll_stepnet unavailable."""
+        """_init_model() raises ImportError when stepnet is unavailable."""
         gen = NeuralVQVAEGenerator()
 
-        with patch.dict("sys.modules", {"ll_stepnet.stepnet.models": None}):
-            with pytest.raises(ImportError, match="ll_stepnet is required"):
+        with patch.dict(
+            "sys.modules",
+            {
+                "stepnet.generation_pipeline": None,
+                "stepnet.vqvae": None,
+            },
+        ):
+            with pytest.raises(ImportError, match="stepnet.*is required"):
                 gen._init_model()
 
 
@@ -902,7 +915,7 @@ class TestLatentSampler:
         """sample_from_gan() falls back to prior when LatentGAN unavailable."""
         sampler = LatentSampler(latent_dim=256)
 
-        with patch.dict("sys.modules", {"ll_stepnet.stepnet.latent_gan": None}):
+        with patch.dict("sys.modules", {"stepnet.latent_gan": None}):
             samples = sampler.sample_from_gan(num_samples=5)
 
             assert len(samples) == 5

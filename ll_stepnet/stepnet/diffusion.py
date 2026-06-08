@@ -22,6 +22,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from .config import DEFAULT_DENOISER_HEADS, DEFAULT_DENOISER_HIDDEN_DIM
+
 _log = logging.getLogger(__name__)
 
 
@@ -264,9 +266,9 @@ class CADDenoiser(nn.Module):
     def __init__(
         self,
         latent_dim: int = 256,
-        hidden_dim: int = 1024,
+        hidden_dim: int = DEFAULT_DENOISER_HIDDEN_DIM,
         num_layers: int = 12,
-        num_heads: int = 12,
+        num_heads: int = DEFAULT_DENOISER_HEADS,
         dropout: float = 0.1,
     ) -> None:
         super().__init__()
@@ -377,9 +379,11 @@ class StructuredDiffusion(nn.Module):
         self.config = config
 
         latent_dim = getattr(config, "latent_dim", 256)
-        denoiser_hidden_dim = getattr(config, "denoiser_hidden_dim", 1024)
+        denoiser_hidden_dim = getattr(
+            config, "denoiser_hidden_dim", DEFAULT_DENOISER_HIDDEN_DIM
+        )
         denoiser_layers = getattr(config, "denoiser_layers", 12)
-        denoiser_heads = getattr(config, "denoiser_heads", 12)
+        denoiser_heads = getattr(config, "denoiser_heads", DEFAULT_DENOISER_HEADS)
         num_timesteps = getattr(config, "num_timesteps", 1000)
         beta_start = getattr(config, "beta_start", 1e-4)
         beta_end = getattr(config, "beta_end", 0.02)

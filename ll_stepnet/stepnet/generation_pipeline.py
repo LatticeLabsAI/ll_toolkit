@@ -442,10 +442,11 @@ class CADGenerationPipeline(nn.Module):
         if not hasattr(self.model, 'generate'):
             raise RuntimeError("VQ-VAE model does not have a 'generate' method")
 
-        # VQ-VAE generate returns codes, not logits
-        gen_output = self.model.generate(
-            num_samples=num_samples, seq_len=seq_len, **kwargs,
-        )
+        # VQ-VAE generate returns codes, not logits. VQVAEModel.generate()
+        # produces a fixed number of codes per model (topology/geometry/
+        # extrusion codebooks), so it takes no seq_len; the downstream
+        # reshaping below uses the requested seq_len instead.
+        gen_output = self.model.generate(num_samples=num_samples, **kwargs)
 
         # Handle dict output (some models return dict with 'codes' key)
         if isinstance(gen_output, dict):
@@ -455,12 +456,42 @@ class CADGenerationPipeline(nn.Module):
                     'command_logits': gen_output['command_logits'],
                     'param_logits': gen_output['param_logits'],
                 }
+            # VQVAEModel.generate() returns the decoded feature vector under
+            # 'reconstructed' (via decode_from_codes) alongside the per-stream
+            # discrete 'codes'. Project the decoded features straight to logits.
+            reconstructed = gen_output.get('reconstructed')
+            if isinstance(reconstructed, torch.Tensor):
+                command_logits = self._project_to_command_logits(reconstructed)
+                param_logits = self._project_to_param_logits(reconstructed)
+                _log.info(
+                    "VQ-VAE: Decoded via generate()['reconstructed'] -> cmd %s",
+                    command_logits.shape,
+                )
+                return {
+                    'command_logits': command_logits,
+                    'param_logits': param_logits,
+                }
             codes = gen_output.get('codes', gen_output.get('token_ids'))
             if codes is None:
                 raise RuntimeError(
                     f"VQ-VAE dict output missing 'codes'/'token_ids' key. "
                     f"Available keys: {list(gen_output.keys())}"
                 )
+            # DisentangledCodebooks return per-stream code tensors
+            # (topology/geometry/extrusion); concatenate into one [B, total]
+            # sequence so the downstream decode strategies see a flat tensor.
+            if isinstance(codes, dict):
+                stream_codes = [
+                    c if c.dim() > 1 else c.unsqueeze(1)
+                    for c in codes.values()
+                    if isinstance(c, torch.Tensor)
+                ]
+                if not stream_codes:
+                    raise RuntimeError(
+                        f"VQ-VAE 'codes' dict has no tensor streams: "
+                        f"{list(codes.keys())}"
+                    )
+                codes = torch.cat(stream_codes, dim=1)
         elif isinstance(gen_output, torch.Tensor):
             codes = gen_output
         else:

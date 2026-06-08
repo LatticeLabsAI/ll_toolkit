@@ -23,6 +23,14 @@ DEFAULT_QUANTIZATION_LEVELS: int = 256
 #: Default maximum sequence length (DeepCAD uses 60-command sequences)
 DEFAULT_MAX_SEQ_LEN: int = 60
 
+#: Default diffusion-denoiser attention-head count. Single source of truth for
+#: DiffusionConfig, the StructuredDiffusion getattr fallback, and CADDenoiser.
+#: Must divide DEFAULT_DENOISER_HIDDEN_DIM (1024 / 16 = 64 head_dim).
+DEFAULT_DENOISER_HEADS: int = 16
+
+#: Default diffusion-denoiser transformer hidden dimension.
+DEFAULT_DENOISER_HIDDEN_DIM: int = 1024
+
 
 @dataclass
 class STEPTokenizerConfig:
@@ -182,8 +190,10 @@ class DiffusionConfig:
     beta_end: float = 0.02
     inference_steps: int = 200
     denoiser_layers: int = 12
-    denoiser_heads: int = 12
-    denoiser_hidden_dim: int = 1024
+    # denoiser_hidden_dim must be divisible by denoiser_heads; both come from
+    # the shared module constants so the default stays consistent everywhere.
+    denoiser_heads: int = DEFAULT_DENOISER_HEADS
+    denoiser_hidden_dim: int = DEFAULT_DENOISER_HIDDEN_DIM
     latent_dim: int = 256
 
 

@@ -123,24 +123,9 @@ class NeuralDiffusionGenerator(BaseNeuralGenerator):
             raise ImportError("torch is required for diffusion generation") from None
 
         with torch.no_grad():
-            # Initialize noise
-            batch_size = 1
-            noise_shape = self._get_noise_shape()
-            noise = torch.randn(
-                batch_size, *noise_shape,
-                device=self.device,
-                dtype=torch.float32,
-            )
-
-            # Run sampling
-            if hasattr(self._model, "sample"):
-                output = self._model.sample(
-                    noise=noise,
-                    num_steps=self.inference_steps,
-                    eta=self.eta,
-                )
-            else:
-                output = self._model(noise, steps=self.inference_steps)
+            # StructuredDiffusion.sample() draws its own noise internally and
+            # returns a {stage_name: latent [B, D]} dict.
+            output = self._model.sample(batch_size=1, device=self.device)
 
         face_grids, edge_points, stage_latents = self._extract_geometry_from_output(output)
         confidence = self._compute_confidence(face_grids, edge_points)
@@ -166,20 +151,27 @@ class NeuralDiffusionGenerator(BaseNeuralGenerator):
         conditioning: ConditioningEmbeddings | None = None,
         error_context: dict[str, Any] | None = None,
     ) -> LatentProposal:
-        """Generate with gradients for RL training (DDPO-style).
+        """Generate with a (decoupled) policy gradient signal for RL training.
 
-        For diffusion models, standard REINFORCE on the full denoising
-        chain is intractable.  Instead we use a single-step denoising
-        approach: the model predicts the clean sample from the initial
-        noise in one differentiable step, and the log-probability of the
-        initial noise under the standard normal prior serves as the
-        policy log-prob.
+        IMPORTANT — the REINFORCE signal returned here is currently DECOUPLED
+        from the geometry that is actually produced. ``StructuredDiffusion``
+        does not expose a noise-conditioned / log-prob sampling API: its
+        ``sample()`` draws its own noise internally and runs the full
+        (non-differentiable) denoising chain. The ``noise`` tensor whose
+        Gaussian-prior log-prob we compute below is therefore an *independent*
+        sample, not the latent that generated ``output``.
 
-        When the model supports ``sample_with_log_prob`` (DDPO-compatible),
-        that is used directly.  Otherwise we fall back to computing the
-        log-prob of the initial noise ``z ~ N(0, I)`` as
-        ``-0.5 * ||z||^2 + const``, which gives an unbiased but
-        high-variance REINFORCE signal.
+        Consequence: ``log_probs`` is an unbiased-but-high-variance stand-in
+        policy gradient (the score of an N(0, I) draw), **not** a true DDPO
+        gradient flowing through the denoising trajectory. It lets the RL loop
+        run end-to-end, but the reward is not attached to the actual sampling
+        path.
+
+        Properly wiring the sampled noise through ``sample()`` — or adding a
+        ``sample_with_log_prob`` DDPO path to ``StructuredDiffusion`` so the
+        reward attaches to the real trajectory — is tracked as future work in
+        the M2 training plan. Until then, treat the diffusion RL signal as
+        approximate.
 
         Args:
             prompt: User prompt.
@@ -187,7 +179,8 @@ class NeuralDiffusionGenerator(BaseNeuralGenerator):
             error_context: Optional error context.
 
         Returns:
-            LatentProposal with ``log_probs`` and ``entropy`` set.
+            LatentProposal with ``log_probs`` (prior log-prob of an independent
+            noise sample) and ``entropy`` set.
         """
         import torch
 
@@ -197,7 +190,9 @@ class NeuralDiffusionGenerator(BaseNeuralGenerator):
         batch_size = 1
         noise_shape = self._get_noise_shape()
 
-        # Sample noise WITH grad — this IS the policy action for diffusion
+        # Independent N(0, I) sample whose prior log-prob is the (decoupled)
+        # REINFORCE signal — see the method docstring. This is NOT threaded into
+        # sample() below, which draws its own internal noise.
         noise = torch.randn(
             batch_size, *noise_shape,
             device=self.device,
@@ -214,26 +209,10 @@ class NeuralDiffusionGenerator(BaseNeuralGenerator):
         # Entropy of N(0,I) = 0.5 * d * (1 + log(2*pi))
         entropy_value = float(0.5 * d * (1.0 + np.log(2.0 * np.pi)))
 
-        # Check if model provides DDPO-style API
-        if hasattr(self._model, "sample_with_log_prob"):
-            output, model_log_prob = self._model.sample_with_log_prob(
-                noise=noise,
-                num_steps=self.inference_steps,
-                eta=self.eta,
-            )
-            log_prob = model_log_prob
-        else:
-            # Standard denoising — no grad through the chain,
-            # but grad through the noise log-prob
-            with torch.no_grad():
-                if hasattr(self._model, "sample"):
-                    output = self._model.sample(
-                        noise=noise.detach(),
-                        num_steps=self.inference_steps,
-                        eta=self.eta,
-                    )
-                else:
-                    output = self._model(noise.detach(), steps=self.inference_steps)
+        # sample() runs the full denoising chain with its OWN internal noise; the
+        # geometry it returns is independent of `noise` above (see docstring).
+        with torch.no_grad():
+            output = self._model.sample(batch_size=batch_size, device=self.device)
 
         face_grids, edge_points, stage_latents = self._extract_geometry_from_output(output)
         confidence = self._compute_confidence(face_grids, edge_points)
@@ -283,22 +262,7 @@ class NeuralDiffusionGenerator(BaseNeuralGenerator):
 
         with torch.no_grad():
             for _ in range(num_candidates):
-                batch_size = 1
-                noise_shape = self._get_noise_shape()
-                noise = torch.randn(
-                    batch_size, *noise_shape,
-                    device=self.device,
-                    dtype=torch.float32,
-                )
-
-                if hasattr(self._model, "sample"):
-                    output = self._model.sample(
-                        noise=noise,
-                        num_steps=self.inference_steps,
-                        eta=self.eta,
-                    )
-                else:
-                    output = self._model(noise, steps=self.inference_steps)
+                output = self._model.sample(batch_size=1, device=self.device)
 
                 face_grids, edge_points, stage_latents = (
                     self._extract_geometry_from_output(output)
@@ -415,19 +379,22 @@ class NeuralDiffusionGenerator(BaseNeuralGenerator):
     def _init_model(self) -> None:
         """Initialize the StructuredDiffusion model lazily on first use."""
         try:
-            from ll_stepnet.stepnet.models import StructuredDiffusion
+            from stepnet.diffusion import StructuredDiffusion
         except ImportError as e:
             raise ImportError(
-                f"ll_stepnet is required for NeuralDiffusionGenerator: {e}"
+                f"stepnet (ll-stepnet) is required for NeuralDiffusionGenerator: {e}"
             ) from e
 
         _log.info("Initializing StructuredDiffusion model")
 
+        # StructuredDiffusion.__init__(self, config) takes a single config
+        # object and reads its attributes via getattr — pass the object
+        # directly rather than splatting it into keyword arguments.
         if self.diffusion_config is None:
             _log.info("No diffusion config provided; using defaults")
             self._model = StructuredDiffusion()
         else:
-            self._model = StructuredDiffusion(**self.diffusion_config.__dict__)
+            self._model = StructuredDiffusion(config=self.diffusion_config)
 
         if self.checkpoint_path:
             self.load_checkpoint(self.checkpoint_path)

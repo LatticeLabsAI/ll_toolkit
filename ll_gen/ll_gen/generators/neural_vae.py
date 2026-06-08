@@ -40,7 +40,7 @@ class NeuralVAEGenerator(BaseNeuralGenerator):
         """Initialize the VAE generator.
 
         Args:
-            vae_config: Optional VAEConfig object from ll_stepnet.
+            vae_config: Optional VAEConfig object from stepnet.
             checkpoint_path: Path to model checkpoint.
             device: Target device ("cpu" or "cuda").
             temperature: Sampling temperature.
@@ -427,23 +427,45 @@ class NeuralVAEGenerator(BaseNeuralGenerator):
     def _init_model(self) -> None:
         """Initialize the STEPVAE model lazily on first use."""
         try:
-            from ll_stepnet.stepnet.models import STEPVAE
-            from ll_stepnet.stepnet.pipeline import CADGenerationPipeline
+            from stepnet.config import STEPEncoderConfig
+            from stepnet.generation_pipeline import CADGenerationPipeline
+            from stepnet.vae import STEPVAE
         except ImportError as e:
             raise ImportError(
-                f"ll_stepnet is required for NeuralVAEGenerator: {e}"
+                f"stepnet (ll-stepnet) is required for NeuralVAEGenerator: {e}"
             ) from e
 
         _log.info("Initializing STEPVAE model")
 
-        # Create VAE model
-        if self.vae_config is None:
+        # STEPVAE requires a STEPEncoderConfig object plus scalar hyper-params.
+        # ll_gen's optional vae_config (a stepnet VAEConfig or any object with
+        # the matching attributes) carries encoder + VAE settings under
+        # different field names, so map them explicitly rather than splatting.
+        vc = self.vae_config
+        if vc is None:
             _log.info("No VAE config provided; using defaults")
-            self._model = STEPVAE()
+            encoder_config = STEPEncoderConfig()
         else:
-            from dataclasses import asdict
+            encoder_config = STEPEncoderConfig(
+                vocab_size=getattr(vc, "encoder_vocab_size", 50000),
+                token_embed_dim=getattr(vc, "encoder_embed_dim", 256),
+                num_transformer_layers=getattr(vc, "encoder_layers", 6),
+                dropout=getattr(vc, "dropout", 0.1),
+            )
 
-            self._model = STEPVAE(**asdict(self.vae_config))
+        vae_kwargs: dict[str, Any] = {"max_seq_len": self.max_seq_len}
+        if vc is not None:
+            for attr in (
+                "latent_dim",
+                "kl_weight",
+                "num_command_types",
+                "num_param_levels",
+                "max_seq_len",
+            ):
+                if hasattr(vc, attr):
+                    vae_kwargs[attr] = getattr(vc, attr)
+
+        self._model = STEPVAE(encoder_config=encoder_config, **vae_kwargs)
 
         # Load checkpoint if provided
         if self.checkpoint_path:

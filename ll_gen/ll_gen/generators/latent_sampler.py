@@ -189,10 +189,10 @@ class LatentSampler:
             List of latent vectors from GAN or prior.
         """
         try:
-            from ll_stepnet.stepnet.latent_gan import LatentGAN
+            from stepnet.latent_gan import LatentGAN
         except ImportError:
             _log.warning(
-                "ll_stepnet.stepnet.latent_gan not available; "
+                "stepnet.latent_gan not available; "
                 "falling back to prior sampling"
             )
             return self.sample_from_prior(num_samples, seed=seed)
