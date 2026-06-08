@@ -151,20 +151,27 @@ class NeuralDiffusionGenerator(BaseNeuralGenerator):
         conditioning: ConditioningEmbeddings | None = None,
         error_context: dict[str, Any] | None = None,
     ) -> LatentProposal:
-        """Generate with gradients for RL training (DDPO-style).
+        """Generate with a (decoupled) policy gradient signal for RL training.
 
-        For diffusion models, standard REINFORCE on the full denoising
-        chain is intractable.  Instead we use a single-step denoising
-        approach: the model predicts the clean sample from the initial
-        noise in one differentiable step, and the log-probability of the
-        initial noise under the standard normal prior serves as the
-        policy log-prob.
+        IMPORTANT — the REINFORCE signal returned here is currently DECOUPLED
+        from the geometry that is actually produced. ``StructuredDiffusion``
+        does not expose a noise-conditioned / log-prob sampling API: its
+        ``sample()`` draws its own noise internally and runs the full
+        (non-differentiable) denoising chain. The ``noise`` tensor whose
+        Gaussian-prior log-prob we compute below is therefore an *independent*
+        sample, not the latent that generated ``output``.
 
-        When the model supports ``sample_with_log_prob`` (DDPO-compatible),
-        that is used directly.  Otherwise we fall back to computing the
-        log-prob of the initial noise ``z ~ N(0, I)`` as
-        ``-0.5 * ||z||^2 + const``, which gives an unbiased but
-        high-variance REINFORCE signal.
+        Consequence: ``log_probs`` is an unbiased-but-high-variance stand-in
+        policy gradient (the score of an N(0, I) draw), **not** a true DDPO
+        gradient flowing through the denoising trajectory. It lets the RL loop
+        run end-to-end, but the reward is not attached to the actual sampling
+        path.
+
+        Properly wiring the sampled noise through ``sample()`` — or adding a
+        ``sample_with_log_prob`` DDPO path to ``StructuredDiffusion`` so the
+        reward attaches to the real trajectory — is tracked as future work in
+        the M2 training plan. Until then, treat the diffusion RL signal as
+        approximate.
 
         Args:
             prompt: User prompt.
@@ -172,7 +179,8 @@ class NeuralDiffusionGenerator(BaseNeuralGenerator):
             error_context: Optional error context.
 
         Returns:
-            LatentProposal with ``log_probs`` and ``entropy`` set.
+            LatentProposal with ``log_probs`` (prior log-prob of an independent
+            noise sample) and ``entropy`` set.
         """
         import torch
 
@@ -182,7 +190,9 @@ class NeuralDiffusionGenerator(BaseNeuralGenerator):
         batch_size = 1
         noise_shape = self._get_noise_shape()
 
-        # Sample noise WITH grad — this IS the policy action for diffusion
+        # Independent N(0, I) sample whose prior log-prob is the (decoupled)
+        # REINFORCE signal — see the method docstring. This is NOT threaded into
+        # sample() below, which draws its own internal noise.
         noise = torch.randn(
             batch_size, *noise_shape,
             device=self.device,
@@ -199,10 +209,8 @@ class NeuralDiffusionGenerator(BaseNeuralGenerator):
         # Entropy of N(0,I) = 0.5 * d * (1 + log(2*pi))
         entropy_value = float(0.5 * d * (1.0 + np.log(2.0 * np.pi)))
 
-        # StructuredDiffusion draws its own noise internally, so the REINFORCE
-        # signal here is the log-prob of the prior sample ``noise`` (unbiased but
-        # high-variance). A DDPO-style log-prob through the denoising chain is a
-        # future enhancement tracked in the M2 training plan.
+        # sample() runs the full denoising chain with its OWN internal noise; the
+        # geometry it returns is independent of `noise` above (see docstring).
         with torch.no_grad():
             output = self._model.sample(batch_size=batch_size, device=self.device)
 

@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Spec** | SPEC-1 §5 M6, §3.1 FR-G5(G5), §9.7/9.8 |
+| **Spec** | SPEC-1 §5 M6, §3.1 FR-G5, §9.7/9.8 |
 | **Goal** | All three packages pass lint/type/test gates with zero stubs; status docs reflect the achieved state with no over-claiming. |
 | **Depends on** | M1–M5 (this is the closing gate) |
 | **Owner** | Maintainer · **Mode** Inline/sequential · **Tests** run all suites · **Commits** per task |
