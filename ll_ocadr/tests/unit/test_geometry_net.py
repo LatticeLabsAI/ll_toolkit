@@ -33,6 +33,22 @@ class TestGeometryNetForward:
         assert grads, "no parameter received a gradient"
         assert any(g.abs().sum().item() > 0 for g in grads), "all gradients are zero"
 
+    def test_small_point_cloud_below_nsample(self) -> None:
+        """Regression: a cloud with fewer points than the ball-query nsample must
+        not crash query_ball_point.
+
+        A simple STEP part's B-rep vertices give very few points (part.step ->
+        ~8); the live run on it hit an IndexError in query_ball_point because
+        group_first was repeated to nsample while group_idx held only N columns.
+        """
+        net = build_geometry_net().eval()
+        coords = torch.randn(1, 8, 3)
+        normals = torch.randn(1, 8, 3)
+        with torch.no_grad():
+            out = net(coords, normals)
+        assert out.shape == (1, 128, 256)
+        assert torch.isfinite(out).all()
+
 
 @pytest.mark.requires_torch
 @pytest.mark.unit
