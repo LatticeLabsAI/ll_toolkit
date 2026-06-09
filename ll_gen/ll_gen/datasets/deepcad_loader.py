@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from ll_gen.datasets._deepcad_dsl import parse_deepcad_dsl
 from ll_gen.datasets._imports import _get_datasets, _get_geotoken, _get_torch
 from ll_gen.datasets._tokenization import (
     BOS_TOKEN_ID,
@@ -22,6 +23,7 @@ __all__ = [
     "DeepCADDataset",
     "load_deepcad",
     "tokenize_command_sequence",
+    "parse_deepcad_dsl",
     "COMMAND_TYPE_IDS",
     "PAD_TOKEN_ID",
     "BOS_TOKEN_ID",
@@ -149,7 +151,13 @@ def _tokenize_deepcad_sample(
     Returns:
         Dictionary with tokenized output.
     """
-    sequence = sample.get("sequence", [])
+    sequence = sample.get("sequence")
+    if not sequence:
+        # DeepCAD-DSL datasets (e.g. ``palapav/DeepCAD-DSL``) carry the
+        # construction sequence as a DSL string under ``target`` (or
+        # ``output``); flatten it into the command schema before tokenizing.
+        dsl = sample.get("target") or sample.get("output") or ""
+        sequence = parse_deepcad_dsl(dsl) if dsl else []
     return tokenize_command_sequence(
         sequence,
         quantization_bits=quantization_bits,
@@ -159,7 +167,7 @@ def _tokenize_deepcad_sample(
 
 
 def load_deepcad(
-    path: str = "latticelabs/deepcad",
+    path: str = "palapav/DeepCAD-DSL",
     split: str = "train",
     streaming: bool = True,
     max_samples: int | None = None,

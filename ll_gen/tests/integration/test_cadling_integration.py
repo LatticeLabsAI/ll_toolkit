@@ -9,6 +9,7 @@ Tests integration between ll_gen and cadling:
 All tests are marked with @pytest.mark.requires_cadling and skip if cadling
 is not installed.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -20,13 +21,13 @@ import pytest
 # Check if cadling is available
 try:
     import cadling
+
     _CADLING_AVAILABLE = True
 except ImportError:
     _CADLING_AVAILABLE = False
 
 requires_cadling = pytest.mark.skipif(
-    not _CADLING_AVAILABLE,
-    reason="cadling package not installed"
+    not _CADLING_AVAILABLE, reason="cadling package not installed"
 )
 
 
@@ -42,6 +43,7 @@ class TestCadQueryProposerIntegration:
     def test_proposer_imports_cadling_generator(self) -> None:
         """Test that CadQueryProposer can import cadling generator."""
         from ll_gen.codegen.cadquery_proposer import CadQueryProposer
+
         proposer = CadQueryProposer()
         assert proposer is not None
 
@@ -76,6 +78,7 @@ class TestOpenSCADProposerIntegration:
     def test_proposer_imports_cadling_generator(self) -> None:
         """Test that OpenSCADProposer can import cadling generator."""
         from ll_gen.codegen.openscad_proposer import OpenSCADProposer
+
         proposer = OpenSCADProposer()
         assert proposer is not None
 
@@ -108,6 +111,7 @@ class TestCommandExecutorIntegration:
     def test_cadling_executor_available(self) -> None:
         """Test that cadling CommandExecutor is available."""
         from ll_gen.disposal.command_executor import _CADLING_EXECUTOR_AVAILABLE
+
         # This should be True if cadling is installed correctly
         assert _CADLING_EXECUTOR_AVAILABLE is True
 
@@ -117,30 +121,33 @@ class TestCommandExecutorIntegration:
         from ll_gen.proposals.command_proposal import CommandSequenceProposal
         import numpy as np
 
+        token_ids = [1, 6, 7, 12, 12, 140, 12, 10, 76, 2]
         proposal = CommandSequenceProposal(
             proposal_id="test",
             confidence=0.8,
             source_prompt="Test",
-            command_dicts=[
-                {"command_type": "SOL", "parameters": [0] * 16, "parameter_mask": [False] * 16},
-            ],
+            token_ids=token_ids,
             quantization_bits=8,
         )
 
-        # Mock the cadling executor
-        with patch(
-            "ll_gen.disposal.command_executor.CadlingCommandExecutor"
-        ) as MockExecutor:
+        # The fast-path consumes proposal.token_ids and returns the shape from
+        # the executor's result dict.
+        sentinel_shape = object()
+        with (
+            patch("ll_gen.disposal.command_executor._CADLING_EXECUTOR_AVAILABLE", True),
+            patch(
+                "ll_gen.disposal.command_executor.CadlingCommandExecutor"
+            ) as MockExecutor,
+        ):
             mock_instance = MagicMock()
-            mock_instance.execute.return_value = MagicMock()
+            mock_instance.execute.return_value = {"shape": sentinel_shape}
             MockExecutor.return_value = mock_instance
 
-            with patch.object(proposal, "to_token_sequence") as mock_to_token:
-                mock_to_token.return_value = MagicMock(token_ids=[1, 2, 3])
-                result = execute_command_proposal(proposal)
+            result = execute_command_proposal(proposal)
 
-            # Cadling executor should have been called
             MockExecutor.assert_called_once()
+            mock_instance.execute.assert_called_once_with(token_ids)
+            assert result is sentinel_shape
 
 
 # ============================================================================
@@ -155,12 +162,14 @@ class TestSurfaceExecutorIntegration:
     def test_cadling_surface_fitter_available(self) -> None:
         """Test that cadling BSplineSurfaceFitter is available."""
         from ll_gen.disposal.surface_executor import _CADLING_SURFACE_FITTER_AVAILABLE
+
         # This may or may not be True depending on cadling version
         assert isinstance(_CADLING_SURFACE_FITTER_AVAILABLE, bool)
 
     def test_cadling_topology_merger_available(self) -> None:
         """Test that cadling TopologyMerger is available."""
         from ll_gen.disposal.surface_executor import _CADLING_TOPOLOGY_MERGER_AVAILABLE
+
         # This may or may not be True depending on cadling version
         assert isinstance(_CADLING_TOPOLOGY_MERGER_AVAILABLE, bool)
 
@@ -198,10 +207,12 @@ class TestModuleAvailability:
         """Test all proposer classes are importable."""
         from ll_gen.codegen.cadquery_proposer import CadQueryProposer
         from ll_gen.codegen.openscad_proposer import OpenSCADProposer
+
         assert CadQueryProposer is not None
         assert OpenSCADProposer is not None
 
     def test_orchestrator_importable(self) -> None:
         """Test GenerationOrchestrator is importable."""
         from ll_gen.pipeline.orchestrator import GenerationOrchestrator
+
         assert GenerationOrchestrator is not None

@@ -32,6 +32,9 @@ class GenerationMetrics:
         num_samples: Total number of samples evaluated.
         num_valid: Count of valid samples.
         num_compiled: Count of successfully compiled samples.
+        num_distinct_valid: Number of distinct valid shapes (by rounded bounding-
+            box dimensions). Guards against mode collapse inflating the validity
+            rate with the same shape repeated.
     """
 
     validity_rate: float = 0.0
@@ -44,6 +47,7 @@ class GenerationMetrics:
     num_samples: int = 0
     num_valid: int = 0
     num_compiled: int = 0
+    num_distinct_valid: int = 0
 
     def summary(self) -> dict[str, Any]:
         """Generate a summary dict suitable for logging or JSON export.
@@ -62,6 +66,7 @@ class GenerationMetrics:
             "num_samples": self.num_samples,
             "num_valid": self.num_valid,
             "num_compiled": self.num_compiled,
+            "num_distinct_valid": self.num_distinct_valid,
         }
 
 
@@ -402,6 +407,11 @@ class MetricsComputer:
         mean_reward = float(np.mean(rewards)) if rewards else 0.0
         reward_std = float(np.std(rewards)) if rewards else 0.0
 
+        # Distinct valid shapes by rounded bounding-box dimensions — a cheap
+        # diversity guard so a mode-collapsed generator emitting one valid shape
+        # cannot masquerade as a high validity rate.
+        num_distinct_valid = self.compute_distinct_valid(results)
+
         # Compute distance metrics if reference is provided
         mmd = 0.0
         jsd = 0.0
@@ -427,4 +437,33 @@ class MetricsComputer:
             num_samples=len(results),
             num_valid=sum(1 for r in results if r.is_valid),
             num_compiled=sum(1 for r in results if r.has_shape),
+            num_distinct_valid=num_distinct_valid,
         )
+
+    def compute_distinct_valid(
+        self, results: list[DisposalResult], ndigits: int = 3
+    ) -> int:
+        """Count distinct valid shapes by rounded bounding-box dimensions.
+
+        Two valid shapes are considered the same when their ``(w, h, d)``
+        bounding-box dimensions agree to ``ndigits`` decimals. Valid shapes
+        without a geometry report fall back to a per-result identity so they are
+        never silently merged.
+
+        Args:
+            results: Disposal results to inspect.
+            ndigits: Decimal places for the bounding-box comparison key.
+
+        Returns:
+            Number of distinct valid shapes.
+        """
+        seen: set[Any] = set()
+        for idx, r in enumerate(results):
+            if not r.is_valid:
+                continue
+            dims = r.geometry_report.bbox_dimensions if r.geometry_report else None
+            if dims is None:
+                seen.add(("nodims", idx))
+            else:
+                seen.add(tuple(round(float(d), ndigits) for d in dims))
+        return len(seen)

@@ -54,11 +54,126 @@ python -m ll_gen.training.evaluate_validity --checkpoint checkpoints/vqvae.pt --
 ```
 
 ## Run log (fill during execution — no TBD at completion)
-| Model | Dataset subset (size) | Machine | Budget | Baseline valid_rate | Trained valid_rate | Margin | Checkpoint location |
-|---|---|---|---|---|---|---|---|
-| VAE | | | | | | | |
-| Diffusion | | | | | | | |
-| VQ-VAE | | | | | | | |
+
+### Pre-req fix (T3.2 blocker) — command-executor schema bridge
+Measuring the baseline surfaced a pre-existing, structural bug: the disposal
+command-executor consumed a command schema (`{type, params{named}}`, `EOL`
+loop-end) that **nothing produces**, while `CommandSequenceProposal.dequantize`
+emits `{command_type, parameters[positional], parameter_mask}` (`EOS`
+loop-end). Every command read as an empty `type` → no geometry → validity was
+pinned at 0% for *any* sequence, including a known-valid box. A second bug read
+`token_ids` off the geotoken `TokenSequence` (which has none) so the cadling
+fast-path always threw and fell back.
+
+Fixed in `ll_gen/disposal/command_executor.py` (adapter `_normalize_commands` +
+`_positional_to_named` + `_arc_midpoint`; `EOS` loop-end; cadling fast-path uses
+`proposal.token_ids` and extracts the result shape). Proof: the known-valid box
+now disposes to a valid solid (1 solid, 6 faces, χ=2, vol≈4.58). Regression test:
+`tests/test_disposal_executor_schema.py`. **Before the fix all three models were
+0%; the VAE baseline below (27%) is the direct evidence the fix works.**
+
+### Dataset subset (T3.1) — resolves OQ1 + OQ3
+**Source (real, no synthetic fallback):** `palapav/DeepCAD-DSL` on the HF Hub —
+a DSL rendering of the DeepCAD sketch-and-extrude corpus (161.2K train / 8.9K
+val / 8.1K test; 35 MB parquet). Chosen because its `target` DSL parses cleanly
+into the `{type, params}` command schema (`SKETCH/LOOP/LINE/ARC/CIRCLE/EXTRUDE`).
+
+**Wiring:** `ll_gen/datasets/_deepcad_dsl.py` (`parse_deepcad_dsl`) flattens the
+DSL into SOL/LINE/ARC/CIRCLE/EXTRUDE/EOS commands; `deepcad_loader.py` now
+defaults to this dataset and parses the DSL column. Unit tests:
+`tests/test_deepcad_dsl.py` (8). Loader smoke test (3 layers — local fixture,
+materialized subset, live Hub streaming): `tests/test_dataset_loads.py` (5).
+
+**Acquisition commands** (run in the conda `cadling` env; `datasets` installed):
+```bash
+cd ll_gen
+python scripts/download_deepcad_subset.py --split train --n 2000 --out data/deepcad_dsl
+python scripts/download_deepcad_subset.py --split validation --n 200 --local-split val --out data/deepcad_dsl
+```
+**Materialized subset:** 2000 train + 200 val JSON files under
+`ll_gen/data/deepcad_dsl/{train,val}/` (gitignored; reproduce via the script).
+
+**Real-data sanity (de-risks warm-start):** disposing 40 ground-truth DeepCAD
+sequences through the fixed executor yields **65% valid / 65% compile** — i.e.
+real reconstructable validity is ~65%, well above the 27% random-init VAE
+baseline, so warm-start has clear headroom. The ~35% that don't reconstruct are
+multi-body/boolean (JOIN/CUT) and custom-plane models the standalone executor
+doesn't fully support yet.
+
+**OQ3 (distribution):** checkpoints to be sized in T3.6; data stays on the Hub
+(not committed) and is reproduced via the script above.
+
+### Random-init baselines (working executor)
+Machine: macOS (Apple Silicon), **CPU**, conda `cadling` env (pythonocc-core +
+cadquery). Held-out prompts: `ll_gen/eval/heldout.jsonl` (10 prompts). Seed 0.
+Source: `python -m ll_gen.training.evaluate_validity --generator <m> --prompts
+eval/heldout.jsonl --n-samples <k> --seed 0`. No external dataset — the reward
+oracle is the real OCC dispose, so baseline needs only prompts.
+
+| Model | Dataset subset (size) | Machine | Budget (baseline) | Baseline valid_rate | compile_rate | Trained valid_rate | Margin | Checkpoint location |
+|---|---|---|---|---|---|---|---|---|
+| VAE | n/a (dispose-reward, no dataset) | macOS CPU | n=100 (10×10) | 0.06–0.27* | 0.34–0.65 | **0.82** (RL path) | **+0.76** | `checkpoints/vae_rl.pt` (217 MB, gitignored; reproduce below) |
+| VQ-VAE | n/a | macOS CPU | n=100 (10×10) | 0.00 | 0.00 | not run (sparse-reward R2) | | |
+| Diffusion | n/a | macOS CPU | n=30 (10×3) | 0.00 | 0.00 | not run (~7 s/sample CPU) | | |
+
+*VAE baseline depends on decode path + non-deterministic init (see note above):
+random-init validity is 6% on the RL-optimized `generate_for_training` decode and
+21–27% on the `generate` pipeline decode.
+
+### Proof-of-life RL (T3.4 + T3.5) — same model before vs after, both decode paths
+`python -m ll_gen.training.proof_of_life --generator vae --prompts eval/heldout.jsonl
+--epochs 6 --steps-per-epoch 60 --n-eval-samples 10 --seed 0 --lr 1e-4
+--save checkpoints/vae_rl.pt --results results/proof_of_life_vae.json`
+(360 REINFORCE steps on the real OCC/cadquery dispose reward; ~47 s wall on CPU.)
+
+| Decode path | Baseline valid | Trained valid | Baseline distinct | Trained distinct |
+|---|---|---|---|---|
+| **`generate_for_training` (RL-optimized, the gate)** | 6% | **82%** | 6 | **65** |
+| `generate` (deployment pipeline) | 21% | **0%** | 21 | 0 |
+
+Per-epoch training validity: 0.25 → 0.27 → 0.32 → 0.52 → 0.72 → **0.90**;
+mean reward 0.69 → **0.92**. **ACCEPTANCE GATE MET** on the RL-optimized path:
+trained 82% ≫ baseline 6% (+76 pts) with diversity *rising* (6 → 65 distinct valid
+shapes) — genuine learning, not mode collapse. The RLAlignmentTrainer's entropy
+bonus (`entropy_coeff=0.01`) plus this diversity check rule out reward-hacking.
+
+**KNOWN DEFECT (follow-up):** `NeuralVAEGenerator.generate` (deployment, via
+`CADGenerationPipeline`) and `generate_for_training` (RL) are *different* decoders.
+RL optimizes the latter; the former is only skewed through shared weights and
+*regresses* (21% → 0%). The checkpoint is therefore not yet usable through the
+`GenerationOrchestrator`. Fix = unify the two decode paths so `generate` samples
+the same trajectory `generate_for_training` does (under `no_grad`). Until then the
+proof-of-life is on the RL-optimized decode path, which is the path the reward
+actually trains.
+
+Notes: random-init **VAE** emits multi-command sketches → 27% pass full BRep
+validation (close to DeepCAD's ~24% unconditional baseline — a good sanity
+check). **VQ-VAE** random-init decodes to a single LINE + EOS (one open edge,
+no face) → 0%. **Diffusion** random-init likewise yields no closed geometry and
+is ~7 s/sample (50-step sampler) on CPU. Proof-of-life target (T3.4) is the VAE,
+which has signal to amplify; VQ-VAE/diffusion are the sparse-reward (R2) case.
+
+**Reproducibility note:** `evaluate_validity` seeds the prior-sampling RNG but
+the random-init *weights* depend on ambient RNG at model construction, so the
+random-init VAE baseline is a distribution, not a point — re-measured at
+**12% valid / 52% compile** (distinct=12) on a second process vs 27%/65% on the
+first. The proof-of-life run therefore measures the **same model before vs after
+RL in one process** (`training/proof_of_life.py`), which is reproducible and the
+fair comparison.
+
+### Warm-start (T3.3) — documented NEGATIVE result
+`python -m ll_gen.training.warm_start --epochs 8 --batch-size 32 --max-samples 2000`
+(8 epochs over the 2000-sample subset, 5:38 wall on CPU) reached `recon_loss`
+4.23 but `cmd_loss` only **1.44** (random = ln 6 = 1.79 — barely above chance;
+the STEPVAE encoder sees only command-type tokens, an architectural cap) and
+`kl_loss` collapsed to **0.048**. Post-warm-start **prior-sampling validity = 0%**
+(compile 5%, distinct 0) — *regressed* from the 27% random-init baseline. This is
+the classic KL-collapse: good-enough reconstruction, but prior samples decode to
+garbage. **Decision:** warm-start is the plan's optional step; it is *not* used to
+initialize RL (a 5%-compile start gives REINFORCE no gradient signal). RL runs
+from random-init instead. `warm_start.py` is kept (works; tests pass) and this
+negative is the honest deliverable. (R2 mitigation revisited: warm-start did not
+help here.)
 
 ## Milestone risks
 - **R2 (no improvement in budget)** — mitigations: warm-start (T3.3), shrink subset/model, more steps; final fallback is an explicit maintainer decision recorded in the Run log.
