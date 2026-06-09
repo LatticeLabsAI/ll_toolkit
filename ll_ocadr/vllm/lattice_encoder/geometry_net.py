@@ -138,7 +138,11 @@ def query_ball_point(radius, nsample, xyz, new_xyz):
     sqrdists = square_distance(new_xyz, xyz)
     group_idx[sqrdists > radius ** 2] = N
     group_idx = group_idx.sort(dim=-1)[0][:, :, :nsample]
-    group_first = group_idx[:, :, 0].view(B, S, 1).repeat([1, 1, nsample])
+    # When the input cloud has fewer than `nsample` points, the slice above
+    # yields min(N, nsample) columns — repeat `group_first` to that actual width
+    # (not nsample) so the mask and the indexed tensor agree in shape.
+    actual_nsample = group_idx.shape[-1]
+    group_first = group_idx[:, :, 0].view(B, S, 1).repeat([1, 1, actual_nsample])
     mask = group_idx == N
     group_idx[mask] = group_first[mask]
     return group_idx
