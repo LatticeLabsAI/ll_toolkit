@@ -16,7 +16,7 @@ import pytest
 
 from ll_gen.generators.base import BaseNeuralGenerator
 from ll_gen.proposals.base import BaseProposal
-from ll_gen.proposals.disposal_result import DisposalResult
+from ll_gen.proposals.disposal_result import DisposalResult, GeometryReport
 from ll_gen.training.evaluate_validity import (
     _extract_state_dict,
     _normalize_prompts,
@@ -56,8 +56,13 @@ class _FakeGenerator(BaseNeuralGenerator):
 
 def _valid_result() -> DisposalResult:
     # has_shape is derived from `shape is not None`; a truthy sentinel marks a
-    # constructed, valid shape.
-    return DisposalResult(shape=object(), is_valid=True)
+    # constructed, valid shape. The reward now requires a closed solid for full
+    # credit, so a "valid result" fixture carries a solid geometry report.
+    return DisposalResult(
+        shape=object(),
+        is_valid=True,
+        geometry_report=GeometryReport(solid_count=1, is_solid=True),
+    )
 
 
 def _invalid_result() -> DisposalResult:

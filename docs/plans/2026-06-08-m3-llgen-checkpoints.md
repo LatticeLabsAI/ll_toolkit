@@ -192,14 +192,31 @@ term never fires and the reward is **pure topological validity, which a single
 planar face passes**. The policy therefore reward-hacked to "emit valid circles",
 not "build solids" — the actual-solid rate moved only 3% → 7%.
 
-**Honest conclusion:** M3 proves the *training machinery* end-to-end — the
-executor fix, the decode unification, the dispose → reward → gradient loop, and
-FR-G5 all work, and RL provably optimizes its reward (6% → 98%). It does **not**
-demonstrate real solid CAD generation. That requires a reward that rewards a
-closed solid (e.g. gate `validity_reward` on `geometry_report.is_solid` /
-`solid_count ≥ 1`) and prompt/dimension conditioning so the prompt actually
-constrains the output. Recorded as the honest result rather than relabeling
-98% face-validity as success.
+**Interim conclusion:** RL provably optimizes its reward (face-validity 6% → 98%),
+proving the machinery — but a too-permissive reward let it reward-hack non-solids.
+
+### Reward fix + retrain (T3.4b) — actual solids 3% → 66%
+Fixed the reward to require a closed solid: `compute_reward` now grants the full
+`validity_reward` only when `geometry_report.is_solid` / `solid_count ≥ 1`, and a
+`nonsolid_valid_fraction` (0.1) for valid-but-non-solid geometry
+(`config.py`, `feedback/reward_signal.py`; tests in `test_feedback.py`).
+Retrained (8 epochs × 80 steps, solid-gated reward):
+
+| | actual solids (`solid_count ≥ 1`) | BRepCheck-valid |
+|---|---|---|
+| random-init | 3/100 | 4–6/100 |
+| old reward (face-validity) | 7/100 | 98/100 |
+| **solid-gated reward** | **66/100** | 96/100 |
+
+Per-epoch validity 0.13 → 0.94. The policy now produces **real closed solids 66%
+of the time** (vs 3% random-init). Structural tally of the trained checkpoint:
+66× `(solid_count=1, face_count=3)` + 33× non-solid face — i.e. the solids are
+**predominantly cylinders** (circle + extrude). So this is a genuine proof-of-life
+of *solid* generation, with an honest limit: low structural variety and no prompt
+conditioning. Driving varied, prompt-constrained parts (LINE/ARC profiles,
+multi-body, dimensional reward) is the documented next step. Checkpoint:
+`checkpoints/vae_rl_solid.pt` (gitignored; reproduce via `proof_of_life` with the
+solid-gated reward, which is now the default `FeedbackConfig`).
 
 Notes: random-init **VAE** emits multi-command sketches → 27% pass full BRep
 validation (close to DeepCAD's ~24% unconditional baseline — a good sanity

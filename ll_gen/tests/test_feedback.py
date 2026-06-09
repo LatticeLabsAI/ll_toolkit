@@ -570,9 +570,45 @@ class TestComputeReward:
         """Valid result gets validity_reward plus shape_constructed_reward."""
         reward = compute_reward(disposal_result_valid)
 
-        # validity_reward (0.8) + shape_constructed_reward (0.16) = 0.96
+        # validity_reward (0.8) + shape_constructed_reward (0.16) = 0.96.
+        # The fixture is a closed solid (solid_count=1), so it earns full credit.
         assert reward == 0.96
         assert isinstance(reward, float)
+
+    def test_compute_reward_valid_nonsolid_face_is_penalized(self) -> None:
+        """A valid-but-non-solid result (a lone planar face) earns only a
+        fraction of validity_reward — guards against reward-hacking non-solids
+        (M3 T3.5)."""
+        from ll_gen.proposals.disposal_result import DisposalResult, GeometryReport
+
+        face = DisposalResult(
+            shape=object(),
+            is_valid=True,
+            geometry_report=GeometryReport(
+                solid_count=0, face_count=1, is_solid=False
+            ),
+        )
+        reward = compute_reward(face)
+        # validity_reward * nonsolid_valid_fraction (0.8 * 0.1 = 0.08) +
+        # shape_constructed_reward (0.16) = 0.24.
+        assert reward == pytest.approx(0.24)
+
+    def test_compute_reward_valid_solid_beats_valid_face(self) -> None:
+        """A closed solid must out-reward an otherwise-identical valid face, so
+        the policy gradient points toward solids."""
+        from ll_gen.proposals.disposal_result import DisposalResult, GeometryReport
+
+        solid = DisposalResult(
+            shape=object(),
+            is_valid=True,
+            geometry_report=GeometryReport(solid_count=1, is_solid=True),
+        )
+        face = DisposalResult(
+            shape=object(),
+            is_valid=True,
+            geometry_report=GeometryReport(solid_count=0, is_solid=False),
+        )
+        assert compute_reward(solid) > compute_reward(face)
 
     def test_compute_reward_no_shape(
         self,

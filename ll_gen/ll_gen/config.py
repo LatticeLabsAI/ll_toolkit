@@ -300,6 +300,13 @@ class FeedbackConfig:
     semantic_match_reward: float = 0.2
     critical_error_penalty: float = -0.1
 
+    # Fraction of validity_reward granted to a result that passes BRepCheck but
+    # is NOT a closed solid (e.g. a lone planar face). A single face is "valid"
+    # yet not a manufacturable CAD body, so rewarding it fully lets the policy
+    # reward-hack non-solids (observed in M3 T3.5). Require a solid for full
+    # credit; grant only this fraction for valid-but-not-solid geometry.
+    nonsolid_valid_fraction: float = 0.1
+
     # Dimensional match tolerance for semantic verification
     dimension_tolerance_pct: float = 0.10  # 10%
 
