@@ -1,7 +1,8 @@
-"""Neural VAE generator — wraps STEPVAE + CADGenerationPipeline.
+"""Neural VAE generator — wraps a STEPVAE.
 
-Generates command sequences from VAE latent space, with support for
-error-aware latent perturbation on retries.
+Generates command sequences from VAE latent space via a single shared decoder
+(``_decode_and_sample``), with support for error-aware latent perturbation on
+retries.
 """
 
 from __future__ import annotations
@@ -21,13 +22,16 @@ _log = logging.getLogger(__name__)
 
 
 class NeuralVAEGenerator(BaseNeuralGenerator):
-    """Neural generator wrapping STEPVAE + CADGenerationPipeline.
+    """Neural generator wrapping a STEPVAE.
+
+    All generation paths (generate, generate_for_training, generate_candidates,
+    generate_from_error_context) decode through the shared ``_decode_and_sample``,
+    so RL improvements to the policy are reflected at inference.
 
     Attributes:
         vae_config: Optional VAE configuration object.
         temperature: Sampling temperature (higher = more stochastic).
         max_seq_len: Maximum sequence length (default 60).
-        _pipeline: Lazy-initialized CADGenerationPipeline.
     """
 
     def __init__(
@@ -51,48 +55,6 @@ class NeuralVAEGenerator(BaseNeuralGenerator):
         self.vae_config = vae_config
         self.temperature = temperature
         self.max_seq_len = max_seq_len
-        self._pipeline: Any | None = None
-
-    def _extract_pipeline_result(
-        self,
-        result: dict[str, Any],
-    ) -> tuple[list[dict[str, Any]], list[int], Any, Any, np.ndarray | None]:
-        """Extract command dicts, token IDs, logits, and latent from a pipeline result.
-
-        Args:
-            result: Single result dict from CADGenerationPipeline.generate().
-
-        Returns:
-            Tuple of (command_dicts, token_ids, command_logits, param_logits, latent_vector).
-        """
-        command_dicts: list[dict[str, Any]] = []
-        if "commands" in result and result["commands"]:
-            command_dicts = result["commands"]
-
-        token_ids: list[int] = []
-        command_logits = result.get("command_logits")
-        param_logits = result.get("param_logits")
-
-        if command_logits is not None and param_logits is not None:
-            token_ids = self._logits_to_token_ids(
-                command_logits, param_logits, max_seq_len=self.max_seq_len
-            )
-
-        latent_vector: np.ndarray | None = None
-        if hasattr(self._model, "last_latent"):
-            last_latent = self._model.last_latent
-            if last_latent is not None:
-                try:
-                    import torch
-
-                    if isinstance(last_latent, torch.Tensor):
-                        latent_vector = last_latent.detach().cpu().numpy()
-                    else:
-                        latent_vector = np.array(last_latent)
-                except (ImportError, AttributeError):
-                    pass
-
-        return command_dicts, token_ids, command_logits, param_logits, latent_vector
 
     def generate(
         self,
@@ -191,19 +153,22 @@ class NeuralVAEGenerator(BaseNeuralGenerator):
         )
 
     def _decode_and_sample(
-        self, temp: float
+        self, temp: float, z: Any | None = None
     ) -> tuple[list[int], Any, float, np.ndarray | None, float]:
-        """Sample one command trajectory from a prior latent ``z ~ N(0, I)``.
+        """Sample one command trajectory from a latent ``z`` (prior if None).
 
-        Shared by ``generate`` (inference, called under ``torch.no_grad``) and
-        ``generate_for_training`` (RL, called with grad). Each token is sampled
-        once from the live decoder logits and its log-prob recorded on that same
-        sample — an unbiased REINFORCE estimator when gradients are tracked.
-        Unifying the two paths here is what makes RL improvements visible at
-        inference time.
+        The single decode path shared by ``generate`` (inference, under
+        ``torch.no_grad``), ``generate_for_training`` (RL, with grad),
+        ``generate_candidates``, and ``generate_from_error_context`` (which
+        passes a perturbed ``z``). Each token is sampled once from the live
+        decoder logits and its log-prob recorded on that same sample — an
+        unbiased REINFORCE estimator when gradients are tracked. Unifying every
+        path here is what makes RL improvements visible at inference time.
 
         Args:
             temp: Sampling temperature (already error-adjusted).
+            z: Optional latent ``[1, latent_dim]`` tensor; sampled from the
+                ``N(0, I)`` prior when None.
 
         Returns:
             ``(token_ids, total_log_prob, entropy_value, latent_vector,
@@ -221,7 +186,8 @@ class NeuralVAEGenerator(BaseNeuralGenerator):
         )
 
         device = torch.device(self.device)
-        z = torch.randn(1, self._model.latent_dim, device=device)
+        if z is None:
+            z = torch.randn(1, self._model.latent_dim, device=device)
         self._model.last_latent = z
 
         hidden = self._model.decode(z, seq_len=self.max_seq_len)
@@ -294,39 +260,34 @@ class NeuralVAEGenerator(BaseNeuralGenerator):
         if self._model is None:
             self._init_model()
 
+        import torch
+
+        # Each candidate is an independent draw from the same decoder the RL
+        # loop optimizes (under no_grad), so batch generation reflects training.
         proposals: list[CommandSequenceProposal] = []
-
-        for _ in range(num_candidates):
-            result_list = self._pipeline.generate(
-                num_samples=1,
-                reconstruct=False,
-                temperature=self.temperature,
-            )
-
-            if not result_list:
-                _log.warning("VAE pipeline returned empty result for candidate")
-                continue
-
-            command_dicts, token_ids, command_logits, param_logits, latent_vector = (
-                self._extract_pipeline_result(result_list[0])
-            )
-            confidence = self._compute_confidence(command_logits, param_logits)
-
-            proposal = CommandSequenceProposal(
-                token_ids=token_ids,
-                command_dicts=command_dicts,
-                source_prompt=prompt,
-                conditioning_source=(
-                    conditioning.source_type if conditioning else "unconditional"
-                ),
-                confidence=confidence,
-                generation_metadata=self._build_metadata(
-                    "STEPVAE",
-                    temperature=self.temperature,
-                ),
-                latent_vector=latent_vector,
-            )
-            proposals.append(proposal)
+        with torch.no_grad():
+            for _ in range(num_candidates):
+                token_ids, _log_probs, entropy_value, latent_vector, confidence = (
+                    self._decode_and_sample(self.temperature)
+                )
+                proposals.append(
+                    CommandSequenceProposal(
+                        token_ids=token_ids,
+                        command_dicts=[],
+                        source_prompt=prompt,
+                        conditioning_source=(
+                            conditioning.source_type
+                            if conditioning
+                            else "unconditional"
+                        ),
+                        confidence=confidence,
+                        generation_metadata=self._build_metadata(
+                            "STEPVAE", temperature=self.temperature
+                        ),
+                        latent_vector=latent_vector,
+                        entropy=entropy_value,
+                    )
+                )
 
         # Sort by confidence descending
         proposals.sort(key=lambda p: p.confidence, reverse=True)
@@ -387,7 +348,8 @@ class NeuralVAEGenerator(BaseNeuralGenerator):
                 perturbed_latent / perturbed_latent_norm
             ) * np.linalg.norm(latent_vector)
 
-        # Decode perturbed latent directly
+        # Decode the perturbed latent through the shared sampler (the same
+        # decoder the RL loop optimizes) instead of re-implementing decode.
         _log.info("Decoding perturbed latent vector for retry generation")
 
         token_ids: list[int] = []
@@ -403,20 +365,9 @@ class NeuralVAEGenerator(BaseNeuralGenerator):
             )
 
             with torch_mod.no_grad():
-                output = self._model.decode(latent_tensor)
-
-            command_logits = (
-                output.get("command_logits") if isinstance(output, dict) else None
-            )
-            param_logits = (
-                output.get("param_logits") if isinstance(output, dict) else None
-            )
-
-            if command_logits is not None and param_logits is not None:
-                token_ids = self._logits_to_token_ids(
-                    command_logits, param_logits, max_seq_len=self.max_seq_len
+                token_ids, _log_probs, _entropy, _latent, confidence = (
+                    self._decode_and_sample(self.temperature, z=latent_tensor)
                 )
-            confidence = self._compute_confidence(command_logits, param_logits)
         except (ImportError, AttributeError, RuntimeError) as exc:
             _log.warning(f"Failed to decode perturbed latent: {exc}")
 
@@ -437,7 +388,6 @@ class NeuralVAEGenerator(BaseNeuralGenerator):
         """Initialize the STEPVAE model lazily on first use."""
         try:
             from stepnet.config import STEPEncoderConfig
-            from stepnet.generation_pipeline import CADGenerationPipeline
             from stepnet.vae import STEPVAE
         except ImportError as e:
             raise ImportError(
@@ -483,12 +433,5 @@ class NeuralVAEGenerator(BaseNeuralGenerator):
             self._model = self._model.to(self.device)
 
         self._model.eval()
-
-        # Initialize pipeline
-        self._pipeline = CADGenerationPipeline(
-            model=self._model,
-            mode="vae",
-            device=self.device,
-        )
 
         _log.info("STEPVAE model initialized and ready")
