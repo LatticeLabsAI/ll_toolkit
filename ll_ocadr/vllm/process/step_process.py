@@ -3,21 +3,21 @@ STEP file processing for LL-OCADR.
 Handles CAD-specific preprocessing for STEP files using pythonocc-core.
 """
 
-import numpy as np
-from typing import Tuple, Optional
 from pathlib import Path
 
+import numpy as np
+
 try:
-    from OCC.Core.STEPControl import STEPControl_Reader
-    from OCC.Core.BRepMesh import BRepMesh_IncrementalMesh
-    from OCC.Core.BRep import BRep_Tool
-    from OCC.Core.TopExp import TopExp_Explorer
-    from OCC.Core.TopAbs import TopAbs_FACE, TopAbs_VERTEX
-    from OCC.Core.TopoDS import topods
-    from OCC.Core.gp import gp_Pnt
-    from OCC.Core.TopLoc import TopLoc_Location
     from OCC.Core.Bnd import Bnd_Box
+    from OCC.Core.BRep import BRep_Tool
     from OCC.Core.BRepBndLib import brepbndlib
+    from OCC.Core.BRepMesh import BRepMesh_IncrementalMesh
+    from OCC.Core.STEPControl import STEPControl_Reader
+    from OCC.Core.TopAbs import TopAbs_FACE, TopAbs_VERTEX
+    from OCC.Core.TopExp import TopExp_Explorer
+    from OCC.Core.TopLoc import TopLoc_Location
+    from OCC.Core.TopoDS import topods
+
     PYTHONOCC_AVAILABLE = True
 except ImportError:
     PYTHONOCC_AVAILABLE = False
@@ -48,10 +48,8 @@ class STEPProcessor:
         self.tessellation_tolerance = tessellation_tolerance
 
     def load_step_file(
-        self,
-        step_file: str,
-        compute_normals: bool = True
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, Tuple[np.ndarray, np.ndarray]]:
+        self, step_file: str, compute_normals: bool = True
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, tuple[np.ndarray, np.ndarray]]:
         """
         Load STEP file and convert to triangle mesh.
 
@@ -86,7 +84,7 @@ class STEPProcessor:
         if shape.IsNull():
             raise RuntimeError(f"Failed to extract shape from STEP file: {step_file}")
 
-        print(f"✓ Loaded STEP shape")
+        print("✓ Loaded STEP shape")
 
         # Tessellate B-Rep to triangle mesh
         vertices, faces = self._tessellate_shape(shape)
@@ -104,10 +102,7 @@ class STEPProcessor:
 
         return vertices, faces, normals, bbox
 
-    def _tessellate_shape(
-        self,
-        shape
-    ) -> Tuple[np.ndarray, np.ndarray]:
+    def _tessellate_shape(self, shape) -> tuple[np.ndarray, np.ndarray]:
         """
         Tessellate B-Rep shape to triangle mesh.
 
@@ -162,7 +157,7 @@ class STEPProcessor:
                     face_faces[i - 1] = [
                         v1 - 1 + vertex_offset,
                         v2 - 1 + vertex_offset,
-                        v3 - 1 + vertex_offset
+                        v3 - 1 + vertex_offset,
                     ]
 
                 vertices_list.append(face_vertices)
@@ -180,7 +175,7 @@ class STEPProcessor:
 
         return vertices, faces
 
-    def _compute_bbox(self, shape) -> Tuple[np.ndarray, np.ndarray]:
+    def _compute_bbox(self, shape) -> tuple[np.ndarray, np.ndarray]:
         """
         Compute bounding box of shape.
 
@@ -201,9 +196,7 @@ class STEPProcessor:
         return min_xyz, max_xyz
 
     def _compute_vertex_normals(
-        self,
-        vertices: np.ndarray,
-        faces: np.ndarray
+        self, vertices: np.ndarray, faces: np.ndarray
     ) -> np.ndarray:
         """
         Compute vertex normals from face normals.
@@ -254,7 +247,7 @@ class STEPProcessor:
             print(f"✗ File not found: {step_file}")
             return False
 
-        if step_path.suffix.lower() not in ['.step', '.stp']:
+        if step_path.suffix.lower() not in [".step", ".stp"]:
             print(f"✗ Not a STEP file: {step_file}")
             return False
 
@@ -317,7 +310,7 @@ def extract_step_metadata(step_file: str) -> dict:
             "num_vertices": num_vertices,
             "bbox_min": [xmin, ymin, zmin],
             "bbox_max": [xmax, ymax, zmax],
-            "bbox_volume": (xmax - xmin) * (ymax - ymin) * (zmax - zmin)
+            "bbox_volume": (xmax - xmin) * (ymax - ymin) * (zmax - zmin),
         }
 
     except Exception as e:
@@ -326,9 +319,8 @@ def extract_step_metadata(step_file: str) -> dict:
 
 # Convenience function for quick loading
 def load_step(
-    step_file: str,
-    tessellation_tolerance: float = 0.1
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, Tuple[np.ndarray, np.ndarray]]:
+    step_file: str, tessellation_tolerance: float = 0.1
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, tuple[np.ndarray, np.ndarray]]:
     """
     Quick load STEP file to mesh.
 

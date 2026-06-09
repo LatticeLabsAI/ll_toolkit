@@ -1,5 +1,6 @@
 """Scaffold self-check: the shared fixtures produce usable, correctly-shaped
 objects and the offline tiny model builds (SPEC-1 M4, T4.1)."""
+
 from __future__ import annotations
 
 import pytest
@@ -8,7 +9,9 @@ torch = pytest.importorskip("torch")
 
 
 @pytest.mark.requires_torch
-def test_synth_point_cloud_fixtures(synth_coords, synth_normals, synth_pointcloud_6d) -> None:
+def test_synth_point_cloud_fixtures(
+    synth_coords, synth_normals, synth_pointcloud_6d
+) -> None:
     assert synth_coords.shape == (1, 512, 3)
     assert synth_normals.shape == (1, 512, 3)
     assert synth_pointcloud_6d.shape == (512, 6)

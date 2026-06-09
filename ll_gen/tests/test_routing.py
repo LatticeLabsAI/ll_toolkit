@@ -7,6 +7,7 @@ Tests cover all aspects of the GenerationRouter and RoutingDecision classes:
 - Edge cases (empty prompts, conflicting signals, forced overrides)
 - Confidence scoring and explanations
 """
+
 from __future__ import annotations
 
 import pytest
@@ -14,10 +15,10 @@ import pytest
 from ll_gen.config import GenerationRoute, RoutingConfig
 from ll_gen.routing.router import GenerationRouter, RoutingDecision
 
-
 # ============================================================================
 # RoutingDecision Tests
 # ============================================================================
+
 
 class TestRoutingDecision:
     """Test RoutingDecision dataclass construction and defaults."""
@@ -58,6 +59,7 @@ class TestRoutingDecision:
 # ============================================================================
 # GenerationRouter Initialization Tests
 # ============================================================================
+
 
 class TestGenerationRouterInit:
     """Test GenerationRouter initialization with various configs."""
@@ -108,6 +110,7 @@ class TestGenerationRouterInit:
 # Route Selection Tests (Keyword Matching)
 # ============================================================================
 
+
 class TestRouteSelection:
     """Test basic route selection based on prompt keywords."""
 
@@ -118,7 +121,10 @@ class TestRouteSelection:
 
         assert decision.route == GenerationRoute.CODE_CADQUERY
         assert 0 <= decision.confidence <= 1
-        assert "bracket" in str(decision.reasons).lower() or "bolt" in str(decision.reasons).lower()
+        assert (
+            "bracket" in str(decision.reasons).lower()
+            or "bolt" in str(decision.reasons).lower()
+        )
 
     def test_route_openscad_prompt(self) -> None:
         """Prompt with OpenSCAD keywords should route to CODE_OPENSCAD."""
@@ -132,9 +138,7 @@ class TestRouteSelection:
     def test_route_neural_diffusion_freeform_prompt(self) -> None:
         """Prompt with freeform keywords should route to NEURAL_DIFFUSION."""
         router = GenerationRouter()
-        decision = router.route(
-            "A smooth flowing organic aerodynamic shape"
-        )
+        decision = router.route("A smooth flowing organic aerodynamic shape")
 
         assert decision.route == GenerationRoute.NEURAL_DIFFUSION
         assert 0 <= decision.confidence <= 1
@@ -142,9 +146,7 @@ class TestRouteSelection:
     def test_route_neural_vae_exploration_prompt(self) -> None:
         """Prompt with exploration keywords should route to NEURAL_VAE."""
         router = GenerationRouter()
-        decision = router.route(
-            "Interpolate and morph between these shapes"
-        )
+        decision = router.route("Interpolate and morph between these shapes")
 
         assert decision.route == GenerationRoute.NEURAL_VAE
         assert 0 <= decision.confidence <= 1
@@ -152,9 +154,7 @@ class TestRouteSelection:
     def test_route_neural_vqvae_codebook_prompt(self) -> None:
         """Prompt with codebook keywords should route to NEURAL_VQVAE."""
         router = GenerationRouter()
-        decision = router.route(
-            "Use the discrete codebook to quantize"
-        )
+        decision = router.route("Use the discrete codebook to quantize")
 
         assert decision.route == GenerationRoute.NEURAL_VQVAE
         assert 0 <= decision.confidence <= 1
@@ -164,28 +164,26 @@ class TestRouteSelection:
 # Multi-Signal Routing Tests
 # ============================================================================
 
+
 class TestMultiSignalRouting:
     """Test routing with combinations of signals (keywords, dimensions, images)."""
 
     def test_dimensional_cues_bias_cadquery(self) -> None:
         """Prompt with explicit dimensions should bias toward CODE_CADQUERY."""
         router = GenerationRouter()
-        decision = router.route(
-            "A plate 80mm wide, 3mm thick"
-        )
+        decision = router.route("A plate 80mm wide, 3mm thick")
 
         assert decision.route == GenerationRoute.CODE_CADQUERY
         assert 0 <= decision.confidence <= 1
-        assert any("dimension" in reason.lower() or "80mm" in reason
-                   for reason in decision.reasons)
+        assert any(
+            "dimension" in reason.lower() or "80mm" in reason
+            for reason in decision.reasons
+        )
 
     def test_image_presence_biases_diffusion(self) -> None:
         """Presence of image should bias toward NEURAL_DIFFUSION."""
         router = GenerationRouter()
-        decision = router.route(
-            "Make something like this",
-            has_image=True
-        )
+        decision = router.route("Make something like this", has_image=True)
 
         # Image presence adds 0.3 to diffusion and 0.1 to CadQuery.
         # CadQuery also gets default bonus (0.1) + short prompt bonus (0.1),
@@ -199,13 +197,14 @@ class TestMultiSignalRouting:
         """Presence of reference geometry should boost neural routes."""
         router = GenerationRouter()
         decision = router.route(
-            "Modify this shape slightly",
-            has_reference_geometry=True
+            "Modify this shape slightly", has_reference_geometry=True
         )
 
         assert 0 <= decision.confidence <= 1
-        assert any("reference" in reason.lower() or "geometry" in reason.lower()
-                   for reason in decision.reasons)
+        assert any(
+            "reference" in reason.lower() or "geometry" in reason.lower()
+            for reason in decision.reasons
+        )
 
     def test_mechanical_keywords_with_dimensions(self) -> None:
         """Mechanical keywords combined with dimensions should strongly favor CODE_CADQUERY."""
@@ -222,9 +221,7 @@ class TestMultiSignalRouting:
     def test_mixed_conflicting_signals(self) -> None:
         """Mixed mechanical and freeform keywords should make a decision."""
         router = GenerationRouter()
-        decision = router.route(
-            "A smooth organic bracket with extrusion"
-        )
+        decision = router.route("A smooth organic bracket with extrusion")
 
         # Should make a decision (not crash) even with conflicting signals
         assert decision.route in [
@@ -238,6 +235,7 @@ class TestMultiSignalRouting:
 # Prompt Length Heuristic Tests
 # ============================================================================
 
+
 class TestPromptLengthHeuristics:
     """Test prompt length-based scoring bonuses."""
 
@@ -245,15 +243,11 @@ class TestPromptLengthHeuristics:
         """Short prompts (≤15 words) should get CadQuery bonus."""
         router = GenerationRouter()
         # Exactly 15 words
-        decision = router.route(
-            "A box ten by twenty by thirty millimeters please now"
-        )
+        decision = router.route("A box ten by twenty by thirty millimeters please now")
 
         assert 0 <= decision.confidence <= 1
         # CadQuery should have received a +0.1 bonus for shortness
-        cadquery_score = decision.scores.get(
-            GenerationRoute.CODE_CADQUERY.value, 0
-        )
+        cadquery_score = decision.scores.get(GenerationRoute.CODE_CADQUERY.value, 0)
         assert cadquery_score >= 0.1
 
     def test_long_prompt_diffusion_bonus(self) -> None:
@@ -269,9 +263,7 @@ class TestPromptLengthHeuristics:
         decision = router.route(long_prompt)
 
         assert 0 <= decision.confidence <= 1
-        diffusion_score = decision.scores.get(
-            GenerationRoute.NEURAL_DIFFUSION.value, 0
-        )
+        diffusion_score = decision.scores.get(GenerationRoute.NEURAL_DIFFUSION.value, 0)
         # Should have at least the +0.1 length bonus (may have more from keywords)
         assert diffusion_score >= 0.1
 
@@ -279,6 +271,7 @@ class TestPromptLengthHeuristics:
 # ============================================================================
 # Force Route Override Tests
 # ============================================================================
+
 
 class TestForceRouteOverride:
     """Test explicit force_route parameter overriding normal analysis."""
@@ -289,7 +282,7 @@ class TestForceRouteOverride:
         # Despite mechanical keywords, force diffusion route
         decision = router.route(
             "A mounting bracket with bolt holes",
-            force_route=GenerationRoute.NEURAL_DIFFUSION
+            force_route=GenerationRoute.NEURAL_DIFFUSION,
         )
 
         assert decision.route == GenerationRoute.NEURAL_DIFFUSION
@@ -298,20 +291,14 @@ class TestForceRouteOverride:
     def test_forced_route_has_perfect_confidence(self) -> None:
         """Forced route should have confidence=1.0."""
         router = GenerationRouter()
-        decision = router.route(
-            "Any prompt",
-            force_route=GenerationRoute.CODE_OPENSCAD
-        )
+        decision = router.route("Any prompt", force_route=GenerationRoute.CODE_OPENSCAD)
 
         assert decision.confidence == 1.0
 
     def test_forced_route_has_forced_flag(self) -> None:
         """Forced route decision should have forced=True."""
         router = GenerationRouter()
-        decision = router.route(
-            "Some prompt",
-            force_route=GenerationRoute.NEURAL_VAE
-        )
+        decision = router.route("Some prompt", force_route=GenerationRoute.NEURAL_VAE)
 
         assert decision.forced is True
         assert "forced" in str(decision.reasons).lower()
@@ -319,10 +306,7 @@ class TestForceRouteOverride:
     def test_forced_route_scores_dict(self) -> None:
         """Forced route scores should show 1.0 for forced route."""
         router = GenerationRouter()
-        decision = router.route(
-            "prompt",
-            force_route=GenerationRoute.NEURAL_VQVAE
-        )
+        decision = router.route("prompt", force_route=GenerationRoute.NEURAL_VQVAE)
 
         assert decision.scores[GenerationRoute.NEURAL_VQVAE.value] == 1.0
 
@@ -330,6 +314,7 @@ class TestForceRouteOverride:
 # ============================================================================
 # Default Route and Fallback Tests
 # ============================================================================
+
 
 class TestDefaultRouteAndFallback:
     """Test fallback to default route when confidence is low."""
@@ -363,9 +348,7 @@ class TestDefaultRouteAndFallback:
 
     def test_low_confidence_fallback(self) -> None:
         """Low confidence scores trigger fallback to default route."""
-        router = GenerationRouter(
-            config=RoutingConfig(confidence_threshold=0.5)
-        )
+        router = GenerationRouter(config=RoutingConfig(confidence_threshold=0.5))
         # Minimal signal (only default bonus)
         decision = router.route("generic words here")
 
@@ -377,6 +360,7 @@ class TestDefaultRouteAndFallback:
 # ============================================================================
 # Scores Dictionary Tests
 # ============================================================================
+
 
 class TestScoresAndConfidence:
     """Test the scores dictionary and confidence calculations."""
@@ -426,14 +410,15 @@ class TestScoresAndConfidence:
 
         for score in decision.scores.values():
             # Check that score has at most 3 decimal places
-            str_score = f"{score:.10f}".rstrip('0').rstrip('.')
-            decimal_part = str_score.split('.')[-1] if '.' in str_score else ""
+            str_score = f"{score:.10f}".rstrip("0").rstrip(".")
+            decimal_part = str_score.split(".")[-1] if "." in str_score else ""
             assert len(decimal_part) <= 3
 
 
 # ============================================================================
 # Reasons List Tests
 # ============================================================================
+
 
 class TestReasonsAndSignalMatches:
     """Test the reasons list describing why a route was chosen."""
@@ -500,6 +485,7 @@ class TestReasonsAndSignalMatches:
 # Explain Method Tests
 # ============================================================================
 
+
 class TestExplainMethod:
     """Test the explain() method that produces human-readable explanations."""
 
@@ -553,8 +539,13 @@ class TestExplainMethod:
 
         assert "Score breakdown:" in explanation
         # Check that scored routes appear
-        for route_name in ["code_cadquery", "code_openscad",
-                          "neural_vae", "neural_diffusion", "neural_vqvae"]:
+        for route_name in [
+            "code_cadquery",
+            "code_openscad",
+            "neural_vae",
+            "neural_diffusion",
+            "neural_vqvae",
+        ]:
             assert route_name in explanation
 
     def test_explain_includes_reasons(self) -> None:
@@ -584,6 +575,7 @@ class TestExplainMethod:
 # Keyword Case Insensitivity Tests
 # ============================================================================
 
+
 class TestCaseInsensitivity:
     """Test that keyword matching is case-insensitive."""
 
@@ -612,6 +604,7 @@ class TestCaseInsensitivity:
 # ============================================================================
 # Dimension Pattern Recognition Tests
 # ============================================================================
+
 
 class TestDimensionPatternRecognition:
     """Test recognition of various dimensional cue formats."""
@@ -662,6 +655,7 @@ class TestDimensionPatternRecognition:
 # ============================================================================
 # Edge Case and Robustness Tests
 # ============================================================================
+
 
 class TestEdgeCasesAndRobustness:
     """Test edge cases and robustness of the router."""
@@ -725,6 +719,7 @@ class TestEdgeCasesAndRobustness:
 # Configuration Customization Tests
 # ============================================================================
 
+
 class TestConfigurationCustomization:
     """Test router behavior with custom configurations."""
 
@@ -768,9 +763,7 @@ class TestConfigurationCustomization:
 
     def test_custom_mechanical_keywords(self) -> None:
         """Router should use custom mechanical keywords from config."""
-        config = RoutingConfig(
-            mechanical_keywords=["custom_keyword"]
-        )
+        config = RoutingConfig(mechanical_keywords=["custom_keyword"])
         router = GenerationRouter(config=config)
 
         decision = router.route("This has custom_keyword in it")
@@ -779,9 +772,7 @@ class TestConfigurationCustomization:
 
     def test_multiple_routes_with_custom_keywords(self) -> None:
         """Router should handle routes individually with custom configs."""
-        config = RoutingConfig(
-            exploration_keywords=["special_word"]
-        )
+        config = RoutingConfig(exploration_keywords=["special_word"])
         router = GenerationRouter(config=config)
 
         decision = router.route("special_word for exploration")
@@ -791,6 +782,7 @@ class TestConfigurationCustomization:
 # ============================================================================
 # Integration Tests
 # ============================================================================
+
 
 class TestIntegration:
     """Integration tests with realistic scenarios."""
@@ -826,9 +818,7 @@ class TestIntegration:
     def test_exploration_workflow(self) -> None:
         """Exploration/interpolation prompts should route to VAE."""
         router = GenerationRouter()
-        decision = router.route(
-            "Interpolate between shape A and shape B"
-        )
+        decision = router.route("Interpolate between shape A and shape B")
 
         assert decision.route == GenerationRoute.NEURAL_VAE
         assert decision.confidence > 0.3
@@ -849,6 +839,7 @@ class TestIntegration:
 # ============================================================================
 # All Routes Coverage Tests
 # ============================================================================
+
 
 class TestAllRoutesCovered:
     """Verify all five generation routes can be selected."""

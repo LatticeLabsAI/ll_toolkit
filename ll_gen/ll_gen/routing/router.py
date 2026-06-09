@@ -210,7 +210,7 @@ class GenerationRouter:
         scores[GenerationRoute.CODE_CADQUERY] += 0.1
 
         # --- Select best route ---
-        best_route = max(scores, key=scores.get)
+        best_route = max(scores, key=lambda route: scores[route])
         best_score = scores[best_route]
 
         # Normalize scores to [0, 1]

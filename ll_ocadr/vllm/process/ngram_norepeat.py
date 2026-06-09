@@ -4,9 +4,9 @@ Prevents repetitive text generation by penalizing repeated n-grams.
 Adapted from DeepSeek-OCR's implementation.
 """
 
-from typing import List, Dict, Set, Tuple, Union
+from collections import OrderedDict, defaultdict
+
 import torch
-from collections import defaultdict, OrderedDict
 
 
 class NGramNoRepeatLogitsProcessor:
@@ -23,7 +23,7 @@ class NGramNoRepeatLogitsProcessor:
     def __init__(
         self,
         ngram_size: int = 3,
-        penalty: float = float('inf'),
+        penalty: float = float("inf"),
         min_sequence_length: int = 10,
         max_batch_entries: int = 1024,
     ):
@@ -43,15 +43,13 @@ class NGramNoRepeatLogitsProcessor:
         self.max_batch_entries = max_batch_entries
 
         # OrderedDict so we can evict oldest batch entries (LRU-style)
-        self._banned_map: OrderedDict[int, Dict[Tuple[int, ...], Set[int]]] = OrderedDict()
+        self._banned_map: OrderedDict[int, dict[tuple[int, ...], set[int]]] = (
+            OrderedDict()
+        )
         # Track last seen sequence length per batch item for incremental updates
-        self._last_seq_len: Dict[int, int] = {}
+        self._last_seq_len: dict[int, int] = {}
 
-    def __call__(
-        self,
-        input_ids: torch.Tensor,
-        scores: torch.Tensor
-    ) -> torch.Tensor:
+    def __call__(self, input_ids: torch.Tensor, scores: torch.Tensor) -> torch.Tensor:
         """
         Process logits to penalize repeated n-grams.
 
@@ -90,7 +88,7 @@ class NGramNoRepeatLogitsProcessor:
 
             if seq_len >= n:
                 # Get the last (n - 1) tokens as context
-                context = tuple(sequence[-(n - 1):])
+                context = tuple(sequence[-(n - 1) :])
 
                 # Look up banned tokens for this context — O(1)
                 banned_tokens = self._banned_map[batch_idx].get(context)
@@ -104,7 +102,7 @@ class NGramNoRepeatLogitsProcessor:
                 prev_len = self._last_seq_len.get(batch_idx, 0)
                 start = max(0, prev_len - n + 1)
                 for i in range(start, seq_len - n + 1):
-                    ngram = tuple(sequence[i:i + n])
+                    ngram = tuple(sequence[i : i + n])
                     self._banned_map[batch_idx][ngram[:-1]].add(ngram[-1])
                 self._last_seq_len[batch_idx] = seq_len
 
@@ -130,7 +128,7 @@ class BigramNoRepeatLogitsProcessor:
     repeating, useful for preventing "the the" or "is is" type errors.
     """
 
-    def __init__(self, penalty: float = float('inf')):
+    def __init__(self, penalty: float = float("inf")):
         """
         Initialize bigram no-repeat processor.
 
@@ -139,11 +137,7 @@ class BigramNoRepeatLogitsProcessor:
         """
         self.penalty = penalty
 
-    def __call__(
-        self,
-        input_ids: torch.Tensor,
-        scores: torch.Tensor
-    ) -> torch.Tensor:
+    def __call__(self, input_ids: torch.Tensor, scores: torch.Tensor) -> torch.Tensor:
         """
         Process logits to prevent immediate bigram repetition.
 
@@ -169,7 +163,7 @@ class BigramNoRepeatLogitsProcessor:
             # Collect all tokens that previously followed last_token,
             # forming bigrams (last_token, next_token). Penalize those
             # next_tokens so the same bigram doesn't repeat.
-            banned: Set[int] = set()
+            banned: set[int] = set()
             for i in range(seq_len - 1):
                 if sequence[i] == last_token:
                     banned.add(sequence[i + 1])
@@ -217,15 +211,13 @@ class AdaptiveNGramNoRepeatProcessor:
         self.max_batch_entries = max_batch_entries
 
         # OrderedDict so we can evict oldest batch entries (LRU-style)
-        self._count_map: OrderedDict[int, Dict[Tuple[int, ...], Dict[int, int]]] = OrderedDict()
+        self._count_map: OrderedDict[int, dict[tuple[int, ...], dict[int, int]]] = (
+            OrderedDict()
+        )
         # Track last seen sequence length per batch item for incremental updates
-        self._last_seq_len: Dict[int, int] = {}
+        self._last_seq_len: dict[int, int] = {}
 
-    def __call__(
-        self,
-        input_ids: torch.Tensor,
-        scores: torch.Tensor
-    ) -> torch.Tensor:
+    def __call__(self, input_ids: torch.Tensor, scores: torch.Tensor) -> torch.Tensor:
         """
         Process logits with adaptive penalties.
 
@@ -261,7 +253,7 @@ class AdaptiveNGramNoRepeatProcessor:
                 self._count_map.move_to_end(batch_idx)
 
             if seq_len >= n:
-                context = tuple(sequence[-(n - 1):])
+                context = tuple(sequence[-(n - 1) :])
 
                 # Look up token counts for this context — O(1) lookup
                 token_counts = self._count_map[batch_idx].get(context)
@@ -269,7 +261,7 @@ class AdaptiveNGramNoRepeatProcessor:
                     for token_id, count in token_counts.items():
                         if count > 0:
                             penalty = min(
-                                self.base_penalty * (self.penalty_scale ** count),
+                                self.base_penalty * (self.penalty_scale**count),
                                 self.max_penalty,
                             )
                             scores[batch_idx, token_id] -= penalty
@@ -278,7 +270,7 @@ class AdaptiveNGramNoRepeatProcessor:
                 prev_len = self._last_seq_len.get(batch_idx, 0)
                 start = max(0, prev_len - n + 1)
                 for i in range(start, seq_len - n + 1):
-                    ngram = tuple(sequence[i:i + n])
+                    ngram = tuple(sequence[i : i + n])
                     self._count_map[batch_idx][ngram[:-1]][ngram[-1]] += 1
                 self._last_seq_len[batch_idx] = seq_len
 
@@ -296,10 +288,12 @@ class AdaptiveNGramNoRepeatProcessor:
 
 
 def create_norepeat_processor(
-    mode: str = "standard",
-    ngram_size: int = 3,
-    **kwargs
-) -> Union[NGramNoRepeatLogitsProcessor, BigramNoRepeatLogitsProcessor, AdaptiveNGramNoRepeatProcessor]:
+    mode: str = "standard", ngram_size: int = 3, **kwargs
+) -> (
+    NGramNoRepeatLogitsProcessor
+    | BigramNoRepeatLogitsProcessor
+    | AdaptiveNGramNoRepeatProcessor
+):
     """
     Factory function to create no-repeat processor.
 
@@ -329,6 +323,6 @@ def get_recommended_processor_for_cad():
     """
     return NGramNoRepeatLogitsProcessor(
         ngram_size=3,
-        penalty=float('inf'),  # Hard block on repetition
-        min_sequence_length=15  # Allow some initial repetition for context
+        penalty=float("inf"),  # Hard block on repetition
+        min_sequence_length=15,  # Allow some initial repetition for context
     )

@@ -5,6 +5,7 @@ synthetic mesh + a prompt containing <mesh> placeholder tokens, and verifies the
 real pipeline runs: 3D encoders -> projector -> merge into LM embeddings ->
 language_model forward/generate. No network, no vLLM.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -22,7 +23,9 @@ def _mesh_prompt_ids(mesh_token_id: int, num_mesh_tokens: int = 4):
 @pytest.mark.integration
 @pytest.mark.slow
 class TestEndToEndGenerate:
-    def test_forward_produces_logits(self, ocadr_model, ocadr_config, synth_coords, synth_normals) -> None:
+    def test_forward_produces_logits(
+        self, ocadr_model, ocadr_config, synth_coords, synth_normals
+    ) -> None:
         input_ids = _mesh_prompt_ids(ocadr_config.mesh_token_id)
         attention_mask = torch.ones_like(input_ids)
 
@@ -40,7 +43,9 @@ class TestEndToEndGenerate:
         assert out.logits.shape[2] == 512  # tiny LM vocab
         assert torch.isfinite(out.logits).all()
 
-    def test_generate_emits_tokens(self, ocadr_model, ocadr_config, synth_coords, synth_normals) -> None:
+    def test_generate_emits_tokens(
+        self, ocadr_model, ocadr_config, synth_coords, synth_normals
+    ) -> None:
         input_ids = _mesh_prompt_ids(ocadr_config.mesh_token_id)
         attention_mask = torch.ones_like(input_ids)
 

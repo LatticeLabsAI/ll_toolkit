@@ -10,6 +10,7 @@ Tests cover all 5 classes in the conditioning package:
 All tests work without optional dependencies (torch, ll_stepnet, PIL).
 Fallback modes are comprehensively tested.
 """
+
 from __future__ import annotations
 
 import tempfile
@@ -338,9 +339,7 @@ class TestTextConditioningEncoder:
         emb2 = encoder.encode("prompt two")
 
         # Different prompts should produce different embeddings
-        assert not np.allclose(
-            emb1.pooled_embedding, emb2.pooled_embedding
-        )
+        assert not np.allclose(emb1.pooled_embedding, emb2.pooled_embedding)
 
     @pytest.mark.unit
     def test_encode_fallback_seq_len_bounds(self):
@@ -855,7 +854,9 @@ class TestConstraintPredictor:
         predictor = ConstraintPredictor()
         predictions = predictor.predict_from_prompt("A box 100mm × 50mm × 20mm")
 
-        bbox_preds = [p for p in predictions if p.constraint_type == ConstraintType.BOUNDING_BOX]
+        bbox_preds = [
+            p for p in predictions if p.constraint_type == ConstraintType.BOUNDING_BOX
+        ]
         assert len(bbox_preds) > 0
         assert bbox_preds[0].source == "dimension_regex"
         assert bbox_preds[0].parameters["count"] >= 3
@@ -866,7 +867,9 @@ class TestConstraintPredictor:
         predictor = ConstraintPredictor()
         predictions = predictor.predict_from_prompt("A symmetric mirror shape")
 
-        symmetry_preds = [p for p in predictions if p.constraint_type == ConstraintType.SYMMETRY]
+        symmetry_preds = [
+            p for p in predictions if p.constraint_type == ConstraintType.SYMMETRY
+        ]
         assert len(symmetry_preds) > 0
         assert symmetry_preds[0].confidence == 0.85
 
@@ -874,9 +877,13 @@ class TestConstraintPredictor:
     def test_predict_from_prompt_smoothness(self):
         """Test predict_from_prompt() detects smoothness."""
         predictor = ConstraintPredictor()
-        predictions = predictor.predict_from_prompt("A smooth rounded edge with fillets")
+        predictions = predictor.predict_from_prompt(
+            "A smooth rounded edge with fillets"
+        )
 
-        smoothness_preds = [p for p in predictions if p.constraint_type == ConstraintType.SMOOTHNESS]
+        smoothness_preds = [
+            p for p in predictions if p.constraint_type == ConstraintType.SMOOTHNESS
+        ]
         assert len(smoothness_preds) > 0
         assert smoothness_preds[0].source == "keyword"
 
@@ -884,9 +891,13 @@ class TestConstraintPredictor:
     def test_predict_from_prompt_regularity(self):
         """Test predict_from_prompt() detects regularity."""
         predictor = ConstraintPredictor()
-        predictions = predictor.predict_from_prompt("A grid pattern of evenly spaced holes")
+        predictions = predictor.predict_from_prompt(
+            "A grid pattern of evenly spaced holes"
+        )
 
-        regularity_preds = [p for p in predictions if p.constraint_type == ConstraintType.REGULARITY]
+        regularity_preds = [
+            p for p in predictions if p.constraint_type == ConstraintType.REGULARITY
+        ]
         assert len(regularity_preds) > 0
         assert regularity_preds[0].confidence == 0.80
 
@@ -896,7 +907,9 @@ class TestConstraintPredictor:
         predictor = ConstraintPredictor()
         predictions = predictor.predict_from_prompt("Two parts joined together")
 
-        connectivity_preds = [p for p in predictions if p.constraint_type == ConstraintType.CONNECTIVITY]
+        connectivity_preds = [
+            p for p in predictions if p.constraint_type == ConstraintType.CONNECTIVITY
+        ]
         assert len(connectivity_preds) > 0
 
     @pytest.mark.unit
@@ -905,7 +918,9 @@ class TestConstraintPredictor:
         predictor = ConstraintPredictor()
         predictions = predictor.predict_from_prompt("A closed solid printable shape")
 
-        watertight_preds = [p for p in predictions if p.constraint_type == ConstraintType.WATERTIGHT]
+        watertight_preds = [
+            p for p in predictions if p.constraint_type == ConstraintType.WATERTIGHT
+        ]
         assert len(watertight_preds) > 0
         assert watertight_preds[0].confidence == 0.85
 
@@ -915,7 +930,9 @@ class TestConstraintPredictor:
         predictor = ConstraintPredictor()
         predictions = predictor.predict_from_prompt("A flat planar surface")
 
-        planarity_preds = [p for p in predictions if p.constraint_type == ConstraintType.PLANARITY]
+        planarity_preds = [
+            p for p in predictions if p.constraint_type == ConstraintType.PLANARITY
+        ]
         assert len(planarity_preds) > 0
         assert planarity_preds[0].confidence == 0.80
 
@@ -937,7 +954,9 @@ class TestConstraintPredictor:
         predictor = ConstraintPredictor()
         predictions = predictor.predict_from_prompt("any prompt")
 
-        manifold_preds = [p for p in predictions if p.constraint_type == ConstraintType.MANIFOLD]
+        manifold_preds = [
+            p for p in predictions if p.constraint_type == ConstraintType.MANIFOLD
+        ]
         assert len(manifold_preds) > 0
         assert manifold_preds[0].confidence == 0.5
         assert manifold_preds[0].parameters.get("default") is True
@@ -1066,11 +1085,15 @@ class TestConstraintPredictor:
 
         # Lowercase
         preds_lower = predictor.predict_from_prompt("smooth edges")
-        smoothness_lower = [p for p in preds_lower if p.constraint_type == ConstraintType.SMOOTHNESS]
+        smoothness_lower = [
+            p for p in preds_lower if p.constraint_type == ConstraintType.SMOOTHNESS
+        ]
 
         # Uppercase
         preds_upper = predictor.predict_from_prompt("SMOOTH EDGES")
-        smoothness_upper = [p for p in preds_upper if p.constraint_type == ConstraintType.SMOOTHNESS]
+        smoothness_upper = [
+            p for p in preds_upper if p.constraint_type == ConstraintType.SMOOTHNESS
+        ]
 
         # Both should find smoothness
         assert len(smoothness_lower) > 0

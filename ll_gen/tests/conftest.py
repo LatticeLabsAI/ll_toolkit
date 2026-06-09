@@ -11,6 +11,7 @@ All fixtures are designed to work WITHOUT optional heavy dependencies
 (pythonocc, torch, cadquery, etc.) by using mock objects and realistic
 synthetic data.
 """
+
 from __future__ import annotations
 
 import copy
@@ -48,15 +49,16 @@ from ll_gen.proposals.disposal_result import (
 )
 from ll_gen.proposals.latent_proposal import LatentProposal
 
-
 # ---------------------------------------------------------------------------
 # Helper: skip if OCC not available
 # ---------------------------------------------------------------------------
+
 
 def _occ_available() -> bool:
     """Check whether pythonocc-core is importable."""
     try:
         from OCC.Core.TopoDS import TopoDS_Shape  # noqa: F401
+
         return True
     except ImportError:
         return False
@@ -72,6 +74,7 @@ def _torch_available() -> bool:
     """Check whether torch is importable."""
     try:
         import torch  # noqa: F401
+
         return True
     except ImportError:
         return False
@@ -87,6 +90,7 @@ def _cadquery_available() -> bool:
     """Check whether cadquery is importable."""
     try:
         import cadquery  # noqa: F401
+
         return True
     except ImportError:
         return False
@@ -102,6 +106,7 @@ def _geotoken_available() -> bool:
     """Check whether geotoken is importable."""
     try:
         from geotoken.tokenizer.token_types import TokenSequence  # noqa: F401
+
         return True
     except ImportError:
         return False
@@ -116,6 +121,7 @@ requires_geotoken = pytest.mark.skipif(
 # ---------------------------------------------------------------------------
 # Configuration fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def routing_config() -> RoutingConfig:
@@ -343,21 +349,21 @@ def command_proposal_token_ids() -> CommandSequenceProposal:
     """Command proposal using raw token IDs instead of dicts."""
     # BOS, SOL, LINE params, LINE params, EXTRUDE param, EOS
     token_ids = [
-        1,   # BOS
-        6,   # SOL
-        7,   # LINE
+        1,  # BOS
+        6,  # SOL
+        7,  # LINE
         12,  # param: 0
         12,  # param: 0
-        140, # param: 128
+        140,  # param: 128
         12,  # param: 0
-        7,   # LINE
-        140, # param: 128
+        7,  # LINE
+        140,  # param: 128
         12,  # param: 0
-        140, # param: 128
-        140, # param: 128
+        140,  # param: 128
+        140,  # param: 128
         10,  # EXTRUDE
         76,  # param: 64
-        2,   # EOS
+        2,  # EOS
     ]
     return CommandSequenceProposal(
         proposal_id="test_cmd_tokens_01",
@@ -435,6 +441,7 @@ def latent_proposal_minimal() -> LatentProposal:
 # GeometryReport fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def geometry_report_box() -> GeometryReport:
     """GeometryReport for a 100×50×20 box."""
@@ -459,9 +466,10 @@ def geometry_report_box() -> GeometryReport:
 def geometry_report_cylinder() -> GeometryReport:
     """GeometryReport for a cylinder r=10, h=30."""
     import math
+
     return GeometryReport(
-        volume=math.pi * 10 ** 2 * 30,
-        surface_area=2 * math.pi * 10 * 30 + 2 * math.pi * 10 ** 2,
+        volume=math.pi * 10**2 * 30,
+        surface_area=2 * math.pi * 10 * 30 + 2 * math.pi * 10**2,
         bounding_box=(-10.0, -10.0, 0.0, 10.0, 10.0, 30.0),
         center_of_mass=(0.0, 0.0, 15.0),
         face_count=3,
@@ -492,6 +500,7 @@ def geometry_report_no_bbox() -> GeometryReport:
 # ---------------------------------------------------------------------------
 # DisposalResult fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def disposal_result_valid(geometry_report_box: GeometryReport) -> DisposalResult:
@@ -678,6 +687,7 @@ def disposal_result_self_intersection() -> DisposalResult:
 # Temporary directory fixture
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def tmp_output_dir(tmp_path: Path) -> Path:
     """Temporary output directory for test exports."""
@@ -690,10 +700,12 @@ def tmp_output_dir(tmp_path: Path) -> Path:
 # Cadling integration fixtures
 # ---------------------------------------------------------------------------
 
+
 def _cadling_available() -> bool:
     """Check whether cadling is importable."""
     try:
         import cadling  # noqa: F401
+
         return True
     except ImportError:
         return False
@@ -733,6 +745,7 @@ difference() {
 # Neural model mock fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def mock_stepvae() -> MagicMock:
     """Mock STEPVAE model for testing without torch."""
@@ -748,11 +761,15 @@ def mock_vqvae() -> MagicMock:
     """Mock VQ-VAE model for testing without torch."""
     mock_model = MagicMock()
     mock_model.encode = MagicMock(return_value=np.random.randint(0, 512, (60,)))
-    mock_model.decode = MagicMock(return_value=np.random.randn(60, 17).astype(np.float32))
-    mock_model.quantize = MagicMock(return_value=(
-        np.random.randn(1, 256).astype(np.float32),
-        np.random.randint(0, 512, (256,)),
-    ))
+    mock_model.decode = MagicMock(
+        return_value=np.random.randn(60, 17).astype(np.float32)
+    )
+    mock_model.quantize = MagicMock(
+        return_value=(
+            np.random.randn(1, 256).astype(np.float32),
+            np.random.randint(0, 512, (256,)),
+        )
+    )
     return mock_model
 
 
@@ -760,10 +777,16 @@ def mock_vqvae() -> MagicMock:
 def mock_diffusion() -> MagicMock:
     """Mock diffusion model for testing without torch."""
     mock_model = MagicMock()
-    mock_model.sample = MagicMock(return_value={
-        "face_grids": [np.random.randn(32, 32, 3).astype(np.float32) for _ in range(6)],
-        "edge_points": [np.random.randn(64, 3).astype(np.float32) for _ in range(12)],
-    })
+    mock_model.sample = MagicMock(
+        return_value={
+            "face_grids": [
+                np.random.randn(32, 32, 3).astype(np.float32) for _ in range(6)
+            ],
+            "edge_points": [
+                np.random.randn(64, 3).astype(np.float32) for _ in range(12)
+            ],
+        }
+    )
     return mock_model
 
 
@@ -771,11 +794,23 @@ def mock_diffusion() -> MagicMock:
 # Geotoken mock fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def mock_token_sequence() -> MagicMock:
     """Mock geotoken TokenSequence for testing without geotoken."""
     mock_seq = MagicMock()
-    mock_seq.token_ids = [1, 6, 7, 12, 12, 140, 12, 10, 76, 2]  # BOS, SOL, LINE, params, EXTRUDE, param, EOS
+    mock_seq.token_ids = [
+        1,
+        6,
+        7,
+        12,
+        12,
+        140,
+        12,
+        10,
+        76,
+        2,
+    ]  # BOS, SOL, LINE, params, EXTRUDE, param, EOS
     mock_seq.tokens = []
     mock_seq.__len__ = MagicMock(return_value=10)
     return mock_seq
@@ -796,6 +831,7 @@ def mock_cad_vocabulary() -> MagicMock:
 # ---------------------------------------------------------------------------
 # Test file path fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def sample_step_file(tmp_path: Path) -> Optional[Path]:
@@ -855,6 +891,7 @@ def sample_stl_file(tmp_path: Path) -> Optional[Path]:
 # OCC shape fixtures (for integration tests)
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def occ_box_shape():
     """Create a simple OCC box shape for testing.
@@ -866,6 +903,7 @@ def occ_box_shape():
 
     try:
         from OCC.Core.BRepPrimAPI import BRepPrimAPI_MakeBox
+
         return BRepPrimAPI_MakeBox(100, 50, 20).Shape()
     except Exception:
         return None
@@ -882,6 +920,7 @@ def occ_cylinder_shape():
 
     try:
         from OCC.Core.BRepPrimAPI import BRepPrimAPI_MakeCylinder
+
         return BRepPrimAPI_MakeCylinder(10, 30).Shape()
     except Exception:
         return None

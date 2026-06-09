@@ -8,6 +8,7 @@ All fixtures are fully offline and deterministic — the "tiny LM" is a small
 GPT-2 constructed and saved to a temp dir, so the end-to-end tests need no
 network access or model download.
 """
+
 from __future__ import annotations
 
 import os
@@ -15,9 +16,8 @@ import os
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 
 # Import torch first for OpenMP protection (stdlib imports above are fine).
-import torch  # noqa: E402
-
 import pytest  # noqa: E402
+import torch  # noqa: E402
 
 # A real point cloud size: must be >= 256 so ShapeNet's fixed 256-patch
 # embedding and GeometryNet's set-abstraction both have enough points.
@@ -25,14 +25,14 @@ _NUM_POINTS = 512
 
 
 @pytest.fixture
-def synth_coords() -> "torch.Tensor":
+def synth_coords() -> torch.Tensor:
     """Deterministic [1, N, 3] vertex coordinates."""
     gen = torch.Generator().manual_seed(0)
     return torch.randn(1, _NUM_POINTS, 3, generator=gen)
 
 
 @pytest.fixture
-def synth_normals() -> "torch.Tensor":
+def synth_normals() -> torch.Tensor:
     """Deterministic [1, N, 3] unit-ish vertex normals."""
     gen = torch.Generator().manual_seed(1)
     n = torch.randn(1, _NUM_POINTS, 3, generator=gen)
@@ -40,7 +40,7 @@ def synth_normals() -> "torch.Tensor":
 
 
 @pytest.fixture
-def synth_pointcloud_6d(synth_coords, synth_normals) -> "torch.Tensor":
+def synth_pointcloud_6d(synth_coords, synth_normals) -> torch.Tensor:
     """[N, 6] coord+normal point cloud (single mesh, batch dim removed)."""
     return torch.cat([synth_coords[0], synth_normals[0]], dim=-1)
 
@@ -123,8 +123,18 @@ def tiny_lm_with_tokenizer_dir(tmp_path_factory) -> str:
     d = tmp_path_factory.mktemp("tiny_lm_tok")
 
     words = [
-        "[PAD]", "[UNK]", "[BOS]", "[EOS]", "<mesh>",
-        "describe", "this", "cad", "part", "a", "box", "sphere",
+        "[PAD]",
+        "[UNK]",
+        "[BOS]",
+        "[EOS]",
+        "<mesh>",
+        "describe",
+        "this",
+        "cad",
+        "part",
+        "a",
+        "box",
+        "sphere",
     ]
     vocab = {w: i for i, w in enumerate(words)}
     tk = Tokenizer(models.WordLevel(vocab=vocab, unk_token="[UNK]"))
@@ -138,7 +148,9 @@ def tiny_lm_with_tokenizer_dir(tmp_path_factory) -> str:
     )
 
     GPT2LMHeadModel(
-        GPT2Config(vocab_size=len(words), n_positions=512, n_embd=64, n_layer=2, n_head=2)
+        GPT2Config(
+            vocab_size=len(words), n_positions=512, n_embd=64, n_layer=2, n_head=2
+        )
     ).save_pretrained(str(d))
     fast.save_pretrained(str(d))
     return str(d)

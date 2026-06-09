@@ -8,6 +8,7 @@ This test module covers:
 All pure Python tests (prompt_library) run without dependencies.
 Proposer tests use mocks and are skipped if cadling is not available.
 """
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
@@ -22,7 +23,6 @@ from ll_gen.codegen import (
 from ll_gen.codegen.cadquery_proposer import CadQueryProposer
 from ll_gen.codegen.openscad_proposer import OpenSCADProposer
 from ll_gen.config import CodeLanguage, CodegenConfig, ErrorCategory
-
 
 # =============================================================================
 # Tests for prompt_library module (Pure Python, no dependencies)
@@ -104,9 +104,9 @@ class TestCadQueryExamples:
         for name, code in prompt_library.CADQUERY_EXAMPLES.items():
             has_result_var = "result" in code
             has_val_method = ".val()" in code
-            assert has_result_var or has_val_method, (
-                f"Example '{name}' missing result variable or .val() method"
-            )
+            assert (
+                has_result_var or has_val_method
+            ), f"Example '{name}' missing result variable or .val() method"
 
     def test_bracket_example_contains_import(self):
         """bracket example imports Workplane correctly."""
@@ -156,17 +156,13 @@ class TestErrorRecoveryTemplates:
 
     def test_invalid_params_recovery_is_string(self):
         """INVALID_PARAMS recovery template is a non-empty string."""
-        template = prompt_library.ERROR_RECOVERY_TEMPLATES[
-            ErrorCategory.INVALID_PARAMS
-        ]
+        template = prompt_library.ERROR_RECOVERY_TEMPLATES[ErrorCategory.INVALID_PARAMS]
         assert isinstance(template, str)
         assert len(template) > 0
 
     def test_topology_error_recovery_is_string(self):
         """TOPOLOGY_ERROR recovery template is a non-empty string."""
-        template = prompt_library.ERROR_RECOVERY_TEMPLATES[
-            ErrorCategory.TOPOLOGY_ERROR
-        ]
+        template = prompt_library.ERROR_RECOVERY_TEMPLATES[ErrorCategory.TOPOLOGY_ERROR]
         assert isinstance(template, str)
         assert len(template) > 0
 
@@ -221,9 +217,7 @@ class TestGetSystemPromptCadQuery:
 
     def test_get_system_prompt_cadquery_with_examples(self):
         """get_system_prompt with include_examples=True includes example code."""
-        prompt = prompt_library.get_system_prompt(
-            "cadquery", include_examples=True
-        )
+        prompt = prompt_library.get_system_prompt("cadquery", include_examples=True)
         # Should contain example code
         assert "bracket" in prompt.lower() or "box" in prompt.lower()
         # Should contain actual code snippet
@@ -231,9 +225,7 @@ class TestGetSystemPromptCadQuery:
 
     def test_get_system_prompt_cadquery_without_examples(self):
         """get_system_prompt with include_examples=False excludes example code."""
-        prompt = prompt_library.get_system_prompt(
-            "cadquery", include_examples=False
-        )
+        prompt = prompt_library.get_system_prompt("cadquery", include_examples=False)
         # Should not contain the working examples section
         assert "WORKING EXAMPLES" not in prompt
         # But should still contain API reference
@@ -308,17 +300,13 @@ class TestGetSystemPromptOpenSCAD:
 
     def test_get_system_prompt_openscad_with_examples_includes_code(self):
         """get_system_prompt('openscad', include_examples=True) includes examples."""
-        prompt = prompt_library.get_system_prompt(
-            "openscad", include_examples=True
-        )
+        prompt = prompt_library.get_system_prompt("openscad", include_examples=True)
         assert "WORKING EXAMPLES" in prompt
         assert "difference()" in prompt or "cube(" in prompt
 
     def test_get_system_prompt_openscad_without_examples(self):
         """get_system_prompt('openscad', include_examples=False) excludes examples."""
-        prompt = prompt_library.get_system_prompt(
-            "openscad", include_examples=False
-        )
+        prompt = prompt_library.get_system_prompt("openscad", include_examples=False)
         assert "WORKING EXAMPLES" not in prompt
 
     def test_get_system_prompt_openscad_includes_syntax_info(self):
@@ -472,9 +460,7 @@ class TestCadQueryProposerInit:
 
     def test_cadquery_proposer_init_custom_config(self, codegen_config):
         """CadQueryProposer initializes with custom config."""
-        custom_config = CodegenConfig(
-            model_name="gpt-4", api_provider="openai"
-        )
+        custom_config = CodegenConfig(model_name="gpt-4", api_provider="openai")
         proposer = CadQueryProposer(config=custom_config)
         assert proposer.config == custom_config
         assert proposer.config.model_name == "gpt-4"
@@ -538,9 +524,7 @@ class TestCadQueryProposerWithoutCadling:
 
     def test_cadquery_proposer_propose_raises_without_cadling(self):
         """propose() raises ImportError if cadling not available."""
-        with patch.object(
-            cadquery_proposer, "_CADLING_AVAILABLE", False
-        ):
+        with patch.object(cadquery_proposer, "_CADLING_AVAILABLE", False):
             proposer = CadQueryProposer()
             proposer.generator = None  # Force unavailable state
 
@@ -550,9 +534,7 @@ class TestCadQueryProposerWithoutCadling:
 
     def test_cadquery_proposer_propose_batch_raises_without_cadling(self):
         """propose_batch() raises ImportError if cadling not available."""
-        with patch.object(
-            cadquery_proposer, "_CADLING_AVAILABLE", False
-        ):
+        with patch.object(cadquery_proposer, "_CADLING_AVAILABLE", False):
             proposer = CadQueryProposer()
             proposer.generator = None
 
@@ -650,9 +632,7 @@ class TestOpenSCADProposerWithoutCadling:
 
     def test_openscad_proposer_propose_raises_without_cadling(self):
         """propose() raises ImportError if cadling not available."""
-        with patch.object(
-            openscad_proposer, "_CADLING_AVAILABLE", False
-        ):
+        with patch.object(openscad_proposer, "_CADLING_AVAILABLE", False):
             proposer = OpenSCADProposer()
             proposer.generator = None
 
@@ -662,9 +642,7 @@ class TestOpenSCADProposerWithoutCadling:
 
     def test_openscad_proposer_propose_batch_raises_without_cadling(self):
         """propose_batch() raises ImportError if cadling not available."""
-        with patch.object(
-            openscad_proposer, "_CADLING_AVAILABLE", False
-        ):
+        with patch.object(openscad_proposer, "_CADLING_AVAILABLE", False):
             proposer = OpenSCADProposer()
             proposer.generator = None
 

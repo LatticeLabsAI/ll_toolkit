@@ -13,7 +13,9 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, TypeVar
+
+_ProposalT = TypeVar("_ProposalT", bound="BaseProposal")
 
 
 @dataclass
@@ -94,7 +96,7 @@ class BaseProposal:
         """
         return min(self.attempt + 1, self.max_attempts)
 
-    def with_error_context(self, error: dict[str, Any]) -> BaseProposal:
+    def with_error_context(self: _ProposalT, error: dict[str, Any]) -> _ProposalT:
         """Create a shallow copy with updated error context and incremented attempt.
 
         This is used by the orchestrator when building a retry proposal:

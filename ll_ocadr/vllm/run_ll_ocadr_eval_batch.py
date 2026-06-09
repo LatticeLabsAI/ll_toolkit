@@ -12,28 +12,28 @@ import argparse
 import asyncio
 import json
 import time
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import List, Dict, Any, Optional
-from dataclasses import dataclass, asdict
+from typing import Any
 
 import torch
-from tqdm import tqdm
-
 from run_ll_ocadr import LLOCADRInference
+from tqdm import tqdm
 
 
 @dataclass
 class EvaluationResult:
     """Single evaluation result."""
+
     mesh_file: str
     prompt: str
     generated_text: str
-    reference_text: Optional[str] = None
+    reference_text: str | None = None
     processing_time: float = 0.0
     num_tokens: int = 0
-    error: Optional[str] = None
+    error: str | None = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return asdict(self)
 
@@ -49,7 +49,7 @@ class BatchEvaluator:
         model_path: str,
         model_size: str = "7b",
         device: str = "cuda",
-        use_vllm: bool = True
+        use_vllm: bool = True,
     ):
         """
         Initialize batch evaluator.
@@ -64,16 +64,14 @@ class BatchEvaluator:
             model_path=model_path,
             model_size=model_size,
             device=device,
-            use_vllm=use_vllm
+            use_vllm=use_vllm,
         )
         self.use_vllm = use_vllm
-        self.results: List[EvaluationResult] = []
+        self.results: list[EvaluationResult] = []
 
     def find_mesh_files(
-        self,
-        data_dir: str,
-        extensions: Optional[List[str]] = None
-    ) -> List[Path]:
+        self, data_dir: str, extensions: list[str] | None = None
+    ) -> list[Path]:
         """
         Find all mesh files in directory.
 
@@ -85,10 +83,10 @@ class BatchEvaluator:
             List of mesh file paths
         """
         if extensions is None:
-            extensions = ['.step', '.stp', '.stl', '.obj', '.ply']
+            extensions = [".step", ".stp", ".stl", ".obj", ".ply"]
 
         data_path = Path(data_dir)
-        mesh_files = []
+        mesh_files: list[Path] = []
 
         for ext in extensions:
             mesh_files.extend(data_path.glob(f"**/*{ext}"))
@@ -97,9 +95,9 @@ class BatchEvaluator:
 
     def load_prompts(
         self,
-        prompt_file: Optional[str] = None,
-        default_prompt: str = "<mesh>\nDescribe this CAD model."
-    ) -> Dict[str, str]:
+        prompt_file: str | None = None,
+        default_prompt: str = "<mesh>\nDescribe this CAD model.",
+    ) -> dict[str, str]:
         """
         Load prompts for evaluation.
 
@@ -118,15 +116,12 @@ class BatchEvaluator:
             print(f"⚠ Prompt file not found: {prompt_file}")
             return {}
 
-        with open(prompt_path, 'r') as f:
+        with open(prompt_path) as f:
             prompts = json.load(f)
 
         return prompts
 
-    def load_references(
-        self,
-        reference_file: Optional[str] = None
-    ) -> Dict[str, str]:
+    def load_references(self, reference_file: str | None = None) -> dict[str, str]:
         """
         Load reference texts for evaluation.
 
@@ -144,20 +139,20 @@ class BatchEvaluator:
             print(f"⚠ Reference file not found: {reference_file}")
             return {}
 
-        with open(ref_path, 'r') as f:
+        with open(ref_path) as f:
             references = json.load(f)
 
         return references
 
     async def evaluate_async(
         self,
-        mesh_files: List[Path],
-        prompts: Dict[str, str],
-        references: Dict[str, str],
+        mesh_files: list[Path],
+        prompts: dict[str, str],
+        references: dict[str, str],
         default_prompt: str,
         temperature: float = 0.7,
         max_tokens: int = 512,
-        top_p: float = 0.9
+        top_p: float = 0.9,
     ):
         """
         Evaluate batch asynchronously using vLLM.
@@ -172,7 +167,7 @@ class BatchEvaluator:
             top_p: Nucleus sampling parameter
         """
         print(f"\n🚀 Starting batch evaluation ({len(mesh_files)} files)")
-        print(f"   Using vLLM async inference")
+        print("   Using vLLM async inference")
 
         for mesh_file in tqdm(mesh_files, desc="Processing"):
             filename = mesh_file.name
@@ -196,7 +191,7 @@ class BatchEvaluator:
                     prompt=prompt,
                     temperature=temperature,
                     max_tokens=max_tokens,
-                    top_p=top_p
+                    top_p=top_p,
                 )
             except Exception as e:
                 error = str(e)
@@ -215,19 +210,19 @@ class BatchEvaluator:
                 reference_text=reference,
                 processing_time=processing_time,
                 num_tokens=num_tokens,
-                error=error
+                error=error,
             )
             self.results.append(result)
 
     def evaluate_sync(
         self,
-        mesh_files: List[Path],
-        prompts: Dict[str, str],
-        references: Dict[str, str],
+        mesh_files: list[Path],
+        prompts: dict[str, str],
+        references: dict[str, str],
         default_prompt: str,
         temperature: float = 0.7,
         max_tokens: int = 512,
-        top_p: float = 0.9
+        top_p: float = 0.9,
     ):
         """
         Evaluate batch synchronously using native PyTorch.
@@ -242,7 +237,7 @@ class BatchEvaluator:
             top_p: Nucleus sampling parameter
         """
         print(f"\n🚀 Starting batch evaluation ({len(mesh_files)} files)")
-        print(f"   Using native PyTorch inference")
+        print("   Using native PyTorch inference")
 
         for mesh_file in tqdm(mesh_files, desc="Processing"):
             filename = mesh_file.name
@@ -266,7 +261,7 @@ class BatchEvaluator:
                     prompt=prompt,
                     temperature=temperature,
                     max_tokens=max_tokens,
-                    top_p=top_p
+                    top_p=top_p,
                 )
             except Exception as e:
                 error = str(e)
@@ -285,7 +280,7 @@ class BatchEvaluator:
                 reference_text=reference,
                 processing_time=processing_time,
                 num_tokens=num_tokens,
-                error=error
+                error=error,
             )
             self.results.append(result)
 
@@ -299,9 +294,9 @@ class BatchEvaluator:
         output_path = Path(output_file)
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        with open(output_path, 'w') as f:
+        with open(output_path, "w") as f:
             for result in self.results:
-                f.write(json.dumps(result.to_dict()) + '\n')
+                f.write(json.dumps(result.to_dict()) + "\n")
 
         print(f"\n✓ Saved {len(self.results)} results to {output_file}")
 
@@ -321,9 +316,9 @@ class BatchEvaluator:
         total_tokens = sum(r.num_tokens for r in self.results)
         avg_tokens = total_tokens / successful if successful > 0 else 0
 
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("EVALUATION SUMMARY")
-        print("="*60)
+        print("=" * 60)
         print(f"Total files:        {total}")
         print(f"Successful:         {successful}")
         print(f"Failed:             {failed}")
@@ -338,7 +333,7 @@ class BatchEvaluator:
                 if result.error:
                     print(f"  ✗ {Path(result.mesh_file).name}: {result.error}")
 
-        print("="*60 + "\n")
+        print("=" * 60 + "\n")
 
 
 async def main_async(args):
@@ -348,13 +343,13 @@ async def main_async(args):
         model_path=args.model_path,
         model_size=args.model_size,
         device=args.device,
-        use_vllm=True
+        use_vllm=True,
     )
 
     # Find mesh files
     mesh_files = evaluator.find_mesh_files(
         data_dir=args.data_dir,
-        extensions=args.extensions.split(',') if args.extensions else None
+        extensions=args.extensions.split(",") if args.extensions else None,
     )
 
     if not mesh_files:
@@ -369,7 +364,7 @@ async def main_async(args):
 
     # Limit number of files if specified
     if args.max_files:
-        mesh_files = mesh_files[:args.max_files]
+        mesh_files = mesh_files[: args.max_files]
         print(f"✓ Limited to {len(mesh_files)} files (--max-files {args.max_files})")
 
     # Evaluate
@@ -380,7 +375,7 @@ async def main_async(args):
         default_prompt=args.default_prompt,
         temperature=args.temperature,
         max_tokens=args.max_tokens,
-        top_p=args.top_p
+        top_p=args.top_p,
     )
 
     # Save results
@@ -397,13 +392,13 @@ def main_sync(args):
         model_path=args.model_path,
         model_size=args.model_size,
         device=args.device,
-        use_vllm=False
+        use_vllm=False,
     )
 
     # Find mesh files
     mesh_files = evaluator.find_mesh_files(
         data_dir=args.data_dir,
-        extensions=args.extensions.split(',') if args.extensions else None
+        extensions=args.extensions.split(",") if args.extensions else None,
     )
 
     if not mesh_files:
@@ -418,7 +413,7 @@ def main_sync(args):
 
     # Limit number of files if specified
     if args.max_files:
-        mesh_files = mesh_files[:args.max_files]
+        mesh_files = mesh_files[: args.max_files]
         print(f"✓ Limited to {len(mesh_files)} files (--max-files {args.max_files})")
 
     # Evaluate
@@ -429,7 +424,7 @@ def main_sync(args):
         default_prompt=args.default_prompt,
         temperature=args.temperature,
         max_tokens=args.max_tokens,
-        top_p=args.top_p
+        top_p=args.top_p,
     )
 
     # Save results
@@ -441,22 +436,14 @@ def main_sync(args):
 
 def parse_args():
     """Parse command line arguments."""
-    parser = argparse.ArgumentParser(
-        description="Batch evaluation for LL-OCADR"
-    )
+    parser = argparse.ArgumentParser(description="Batch evaluation for LL-OCADR")
 
     # Required arguments
     parser.add_argument(
-        "--data-dir",
-        type=str,
-        required=True,
-        help="Directory containing mesh files"
+        "--data-dir", type=str, required=True, help="Directory containing mesh files"
     )
     parser.add_argument(
-        "--output-file",
-        type=str,
-        required=True,
-        help="Output JSONL file for results"
+        "--output-file", type=str, required=True, help="Output JSONL file for results"
     )
 
     # Model arguments
@@ -464,14 +451,14 @@ def parse_args():
         "--model-path",
         type=str,
         default="latticelabs/ll-ocadr-7b",
-        help="Path to model checkpoint or HuggingFace model ID"
+        help="Path to model checkpoint or HuggingFace model ID",
     )
     parser.add_argument(
         "--model-size",
         type=str,
         default="7b",
         choices=["1.8b", "7b", "14b"],
-        help="Model size"
+        help="Model size",
     )
 
     # Prompt arguments
@@ -479,63 +466,52 @@ def parse_args():
         "--default-prompt",
         type=str,
         default="<mesh>\nDescribe this CAD model and list its key features.",
-        help="Default prompt for all files"
+        help="Default prompt for all files",
     )
     parser.add_argument(
-        "--prompt-file",
-        type=str,
-        help="JSON file mapping filenames to prompts"
+        "--prompt-file", type=str, help="JSON file mapping filenames to prompts"
     )
     parser.add_argument(
         "--reference-file",
         type=str,
-        help="JSON file mapping filenames to reference texts"
+        help="JSON file mapping filenames to reference texts",
     )
 
     # Generation arguments
     parser.add_argument(
-        "--temperature",
-        type=float,
-        default=0.7,
-        help="Sampling temperature"
+        "--temperature", type=float, default=0.7, help="Sampling temperature"
     )
     parser.add_argument(
-        "--max-tokens",
-        type=int,
-        default=512,
-        help="Maximum tokens to generate"
+        "--max-tokens", type=int, default=512, help="Maximum tokens to generate"
     )
     parser.add_argument(
-        "--top-p",
-        type=float,
-        default=0.9,
-        help="Nucleus sampling parameter"
+        "--top-p", type=float, default=0.9, help="Nucleus sampling parameter"
     )
 
     # File filtering
     parser.add_argument(
         "--extensions",
         type=str,
-        help="Comma-separated list of extensions (e.g., '.step,.stl')"
+        help="Comma-separated list of extensions (e.g., '.step,.stl')",
     )
     parser.add_argument(
-        "--max-files",
-        type=int,
-        help="Maximum number of files to process"
+        "--max-files", type=int, help="Maximum number of files to process"
     )
 
     # Device arguments
     parser.add_argument(
         "--device",
         type=str,
-        default="cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu",
+        default=(
+            "cuda"
+            if torch.cuda.is_available()
+            else "mps" if torch.backends.mps.is_available() else "cpu"
+        ),
         choices=["cuda", "mps", "cpu"],
-        help="Device to run on"
+        help="Device to run on",
     )
     parser.add_argument(
-        "--no-vllm",
-        action="store_true",
-        help="Disable vLLM (use native PyTorch)"
+        "--no-vllm", action="store_true", help="Disable vLLM (use native PyTorch)"
     )
 
     return parser.parse_args()
@@ -546,6 +522,7 @@ if __name__ == "__main__":
 
     # Check if vLLM should be used
     from run_ll_ocadr import VLLM_AVAILABLE
+
     use_vllm = VLLM_AVAILABLE and not args.no_vllm
 
     if use_vllm:

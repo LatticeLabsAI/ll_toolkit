@@ -7,6 +7,7 @@ Tests cover:
 
 All tests work WITHOUT torch installed by mocking heavy dependencies.
 """
+
 from __future__ import annotations
 
 import json
@@ -706,6 +707,7 @@ def _has_torch() -> bool:
     """Check if torch is available."""
     try:
         import torch  # noqa: F401
+
         return True
     except ImportError:
         return False
@@ -819,10 +821,7 @@ class TestMetricsEdgeCases:
         computer = MetricsComputer()
         # Create 1000 results with 75% validity
         n = 1000
-        results = [
-            DisposalResult(is_valid=(i % 4 != 0))
-            for i in range(n)
-        ]
+        results = [DisposalResult(is_valid=(i % 4 != 0)) for i in range(n)]
         rate = computer.compute_validity_rate(results)
         assert rate == pytest.approx(0.75, abs=0.01)
 
@@ -1000,7 +999,9 @@ class TestMetricsComputerIntegration:
 
         # Create sample results
         results = [
-            DisposalResult(is_valid=i % 2 == 0, shape=mock.Mock(), reward_signal=0.5 + 0.1 * i)
+            DisposalResult(
+                is_valid=i % 2 == 0, shape=mock.Mock(), reward_signal=0.5 + 0.1 * i
+            )
             for i in range(10)
         ]
 

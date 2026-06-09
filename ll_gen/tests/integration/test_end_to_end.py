@@ -5,6 +5,7 @@ Tests the full generation workflow:
 
 These tests verify the complete pipeline works correctly.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -20,28 +21,25 @@ from ll_gen.proposals.command_proposal import CommandSequenceProposal
 from ll_gen.proposals.latent_proposal import LatentProposal
 from ll_gen.proposals.disposal_result import DisposalResult, GeometryReport
 
-
 # Check dependencies
 try:
     from OCC.Core.TopoDS import TopoDS_Shape
+
     _OCC_AVAILABLE = True
 except ImportError:
     _OCC_AVAILABLE = False
 
 try:
     import cadquery
+
     _CADQUERY_AVAILABLE = True
 except ImportError:
     _CADQUERY_AVAILABLE = False
 
-requires_occ = pytest.mark.skipif(
-    not _OCC_AVAILABLE,
-    reason="pythonocc not installed"
-)
+requires_occ = pytest.mark.skipif(not _OCC_AVAILABLE, reason="pythonocc not installed")
 
 requires_cadquery = pytest.mark.skipif(
-    not _CADQUERY_AVAILABLE,
-    reason="cadquery not installed"
+    not _CADQUERY_AVAILABLE, reason="cadquery not installed"
 )
 
 
@@ -153,6 +151,7 @@ class TestFeedbackIntegration:
     def test_error_mapper_available(self) -> None:
         """Test error mapper module is available."""
         from ll_gen.feedback.error_mapper import OCC_ERROR_MAP
+
         assert OCC_ERROR_MAP is not None
         assert len(OCC_ERROR_MAP) > 0
 
@@ -162,6 +161,7 @@ class TestFeedbackIntegration:
             build_code_feedback,
             build_neural_feedback,
         )
+
         assert callable(build_code_feedback)
         assert callable(build_neural_feedback)
 
@@ -383,7 +383,7 @@ class TestConfigurationIntegration:
             **{
                 "codegen.temperature": 0.5,
                 "disposal.tolerance": 1e-6,
-            }
+            },
         )
 
         assert config.max_retries == 5

@@ -1,4 +1,5 @@
 """Unit tests for ShapeNet (ViT global encoder) — SPEC-1 M4, T4.2."""
+
 from __future__ import annotations
 
 import pytest
@@ -35,7 +36,9 @@ class TestShapeNetForward:
 @pytest.mark.requires_torch
 @pytest.mark.unit
 class TestPointPatchEmbedding:
-    def test_emits_256_patches_when_evenly_divisible(self, synth_coords, synth_normals) -> None:
+    def test_emits_256_patches_when_evenly_divisible(
+        self, synth_coords, synth_normals
+    ) -> None:
         """N=512 divides into exactly 256 patches (no remainder), embed_dim wide."""
         embed = PointPatchEmbedding(embed_dim=768).eval()
         with torch.no_grad():

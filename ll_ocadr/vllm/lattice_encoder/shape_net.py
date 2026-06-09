@@ -8,7 +8,6 @@ import logging
 
 import torch
 import torch.nn as nn
-import numpy as np
 
 _log = logging.getLogger(__name__)
 
@@ -29,14 +28,14 @@ class PointPatchEmbedding(nn.Module):
             nn.Conv1d(6, 128, 1),  # Input: xyz + normals (6 dims)
             nn.BatchNorm1d(128),
             nn.ReLU(),
-            nn.Conv1d(128, 256, 1)
+            nn.Conv1d(128, 256, 1),
         )
 
         self.second_conv = nn.Sequential(
             nn.Conv1d(512, 512, 1),
             nn.BatchNorm1d(512),
             nn.ReLU(),
-            nn.Conv1d(512, embed_dim, 1)
+            nn.Conv1d(512, embed_dim, 1),
         )
 
     def forward(self, coords, normals):
@@ -59,7 +58,9 @@ class PointPatchEmbedding(nn.Module):
 
         # Max pool to get patch-level features
         feature_global = torch.max(feature, dim=2, keepdim=True)[0]  # [B, 256, 1]
-        feature = torch.cat([feature_global.expand(-1, -1, N), feature], dim=1)  # [B, 512, N]
+        feature = torch.cat(
+            [feature_global.expand(-1, -1, N), feature], dim=1
+        )  # [B, 512, N]
 
         feature = self.second_conv(feature)  # [B, embed_dim, N]
 
@@ -74,7 +75,7 @@ class PointPatchEmbedding(nn.Module):
 
         # Reshape into patches and max pool within each patch
         remainder = N - num_patches * patch_size
-        aligned = feature[:, :, :num_patches * patch_size].view(
+        aligned = feature[:, :, : num_patches * patch_size].view(
             B, self.embed_dim, num_patches, patch_size
         )
         patch_tokens = torch.max(aligned, dim=-1)[0]  # [B, embed_dim, num_patches]
@@ -83,14 +84,19 @@ class PointPatchEmbedding(nn.Module):
             _log.debug(
                 "PointPatchEmbedding: %d/%d tail vertices form partial patch "
                 "(patch_size=%d, num_patches=%d)",
-                remainder, N, patch_size, num_patches,
+                remainder,
+                N,
+                patch_size,
+                num_patches,
             )
             # Max-pool the leftover points directly into one extra patch token.
             # (Zero-padding to `patch_size` is both unnecessary and wrong: with
             # remainder > patch_size it produces a negative pad dimension, and
             # padding with zeros would bias the max-pool toward 0 when features
             # are negative.)
-            tail = feature[:, :, num_patches * patch_size:]  # [B, embed_dim, remainder]
+            tail = feature[
+                :, :, num_patches * patch_size :
+            ]  # [B, embed_dim, remainder]
             tail_token = torch.max(tail, dim=-1)[0].unsqueeze(2)  # [B, embed_dim, 1]
             patch_tokens = torch.cat([patch_tokens, tail_token], dim=2)
 
@@ -117,7 +123,7 @@ class TransformerBlock(nn.Module):
             nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(mlp_hidden_dim, embed_dim),
-            nn.Dropout(dropout)
+            nn.Dropout(dropout),
         )
 
     def forward(self, x):
@@ -158,9 +164,7 @@ class ShapeNet(nn.Module):
         self.embed_dim = embed_dim
 
         # Point cloud tokenizer
-        self.patch_embed = PointPatchEmbedding(
-            patch_size=32, embed_dim=embed_dim
-        )
+        self.patch_embed = PointPatchEmbedding(patch_size=32, embed_dim=embed_dim)
 
         # CLS token for global representation
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
@@ -171,10 +175,12 @@ class ShapeNet(nn.Module):
         )
 
         # Transformer encoder blocks
-        self.blocks = nn.ModuleList([
-            TransformerBlock(embed_dim, num_heads, mlp_ratio=4.0)
-            for _ in range(depth)
-        ])
+        self.blocks = nn.ModuleList(
+            [
+                TransformerBlock(embed_dim, num_heads, mlp_ratio=4.0)
+                for _ in range(depth)
+            ]
+        )
 
         self.norm = nn.LayerNorm(embed_dim)
 
@@ -204,7 +210,9 @@ class ShapeNet(nn.Module):
         num_patches = patch_tokens.shape[1]
         if num_patches < 256:
             # Pad with zeros
-            padding = torch.zeros(B, 256 - num_patches, self.embed_dim, device=patch_tokens.device)
+            padding = torch.zeros(
+                B, 256 - num_patches, self.embed_dim, device=patch_tokens.device
+            )
             patch_tokens = torch.cat([patch_tokens, padding], dim=1)
         elif num_patches > 256:
             # Truncate

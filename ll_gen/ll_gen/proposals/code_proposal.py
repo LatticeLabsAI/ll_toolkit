@@ -155,13 +155,13 @@ class CodeProposal(BaseProposal):
         """
         if self.language == CodeLanguage.OPENSCAD:
             # OpenSCAD uses include/use, not Python imports
-            modules: list[str] = []
+            scad_modules: list[str] = []
             for match in re.finditer(r"(?:include|use)\s*<([^>]+)>", self.code):
-                modules.append(match.group(1))
-            return sorted(set(modules))
+                scad_modules.append(match.group(1))
+            return sorted(set(scad_modules))
 
         # Python-based languages
-        modules = set()
+        modules: set[str] = set()
         try:
             tree = ast.parse(self.code)
         except SyntaxError:

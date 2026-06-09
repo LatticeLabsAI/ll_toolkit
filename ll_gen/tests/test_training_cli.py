@@ -5,6 +5,7 @@ prompts file and verifies it runs an epoch end to end and writes a checkpoint.
 Disposal degrades gracefully without pythonocc (the reward signal still gives
 partial credit), so real gradient steps occur and the run completes.
 """
+
 from __future__ import annotations
 
 import json
@@ -33,15 +34,25 @@ def test_training_cli_runs_and_saves_checkpoint(tmp_path) -> None:
 
     result = subprocess.run(
         [
-            sys.executable, "-m", "ll_gen.training.run",
-            "--generator", "vae",
-            "--prompts-file", str(prompts),
-            "--max-samples", "2",
-            "--epochs", "1",
-            "--seed", "0",
-            "--save", str(checkpoint),
-            "--output-dir", str(tmp_path / "out"),
-            "--log-level", "ERROR",
+            sys.executable,
+            "-m",
+            "ll_gen.training.run",
+            "--generator",
+            "vae",
+            "--prompts-file",
+            str(prompts),
+            "--max-samples",
+            "2",
+            "--epochs",
+            "1",
+            "--seed",
+            "0",
+            "--save",
+            str(checkpoint),
+            "--output-dir",
+            str(tmp_path / "out"),
+            "--log-level",
+            "ERROR",
         ],
         cwd=str(_REPO_ROOT),
         capture_output=True,
@@ -55,4 +66,6 @@ def test_training_cli_runs_and_saves_checkpoint(tmp_path) -> None:
     # The CLI prints the final epoch metrics as JSON on stdout.
     last_line = [ln for ln in result.stdout.splitlines() if ln.strip()][-1]
     metrics = json.loads(last_line)
-    assert {"mean_reward", "mean_loss", "validity_rate", "epoch_time_ms"} <= set(metrics)
+    assert {"mean_reward", "mean_loss", "validity_rate", "epoch_time_ms"} <= set(
+        metrics
+    )

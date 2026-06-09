@@ -7,6 +7,7 @@ Tests visual verification functionality:
 - VLM-based verification (mocked)
 - VerificationResult structure
 """
+
 from __future__ import annotations
 
 import re
@@ -21,7 +22,6 @@ from ll_gen.pipeline.verification import (
     VisualVerifier,
 )
 from ll_gen.proposals.disposal_result import GeometryReport
-
 
 # ============================================================================
 # SECTION 1: VerificationResult Tests
@@ -255,7 +255,8 @@ class TestVLMVerificationMocked:
         """Test that VLM failures are handled gracefully."""
         verifier = VisualVerifier(vlm_backend="clip")
         with patch.object(
-            verifier, "_verify_vlm",
+            verifier,
+            "_verify_vlm",
             side_effect=Exception("VLM failed"),
         ):
             result = verifier.verify(
@@ -300,7 +301,9 @@ class TestDimensionPatternExtraction:
 
     def test_extract_multi_dimension_pattern(self) -> None:
         """Test extraction of 'N x N x N' pattern."""
-        pattern = r"(\d+(?:\.\d+)?)\s*[xX×]\s*(\d+(?:\.\d+)?)(?:\s*[xX×]\s*(\d+(?:\.\d+)?))?"
+        pattern = (
+            r"(\d+(?:\.\d+)?)\s*[xX×]\s*(\d+(?:\.\d+)?)(?:\s*[xX×]\s*(\d+(?:\.\d+)?))?"
+        )
         text = "A box 100 x 50 x 20"
         match = re.search(pattern, text)
         assert match is not None
@@ -355,6 +358,7 @@ class TestModuleImport:
     def test_module_importable(self) -> None:
         """Test that verification module is importable."""
         from ll_gen.pipeline import verification
+
         assert hasattr(verification, "VisualVerifier")
         assert hasattr(verification, "VerificationResult")
 

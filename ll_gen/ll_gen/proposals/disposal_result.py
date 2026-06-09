@@ -87,7 +87,7 @@ class GeometryReport:
         dims = self.bbox_dimensions
         if dims is None:
             return None
-        return (dims[0] ** 2 + dims[1] ** 2 + dims[2] ** 2) ** 0.5
+        return float((dims[0] ** 2 + dims[1] ** 2 + dims[2] ** 2) ** 0.5)
 
     def matches_dimensions(
         self,

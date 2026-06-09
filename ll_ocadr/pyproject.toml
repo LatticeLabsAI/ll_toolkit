@@ -76,6 +76,35 @@ markers = [
 line-length = 100
 target-version = ['py310']
 
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+# Match the sibling M-series packages (ll_gen, ll_clouds): the same lint
+# standard across the toolkit. The broad root-level select enforces rules
+# (e.g. PLC0415 import-outside-top-level) that conflict with this repo's
+# mandated lazy-import pattern for heavy deps (torch / pythonocc), so ll_ocadr
+# uses the package-local select its siblings use.
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "N",   # pep8-naming
+    "UP",  # pyupgrade
+    "B",   # bugbear
+]
+ignore = [
+    "E501",  # line too long (handled by black)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"vllm/lattice_encoder/**/*.py" = [
+    "N806",  # uppercase tensor-dim locals (B, N, C, S, M) — standard DL notation
+    "N812",  # `import torch.nn.functional as F` — universal PyTorch convention
+]
+
 [tool.isort]
 profile = "black"
 line_length = 100

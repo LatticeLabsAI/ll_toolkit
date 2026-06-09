@@ -51,7 +51,8 @@ _CADLING_EXECUTOR_AVAILABLE = False
 _cadling_executor = None
 CadlingCommandExecutor = None  # sentinel for unittest.mock.patch
 try:
-    from cadling.generation.reconstruction.command_executor import (
+    # no-redef: intentional rebinding of the module-level mock.patch sentinel
+    from cadling.generation.reconstruction.command_executor import (  # type: ignore[no-redef]
         CommandExecutor as CadlingCommandExecutor,
     )
 
@@ -288,8 +289,8 @@ def _extract_sketch_groups(
     Returns:
         List of sketch groups, where each group is a list of commands.
     """
-    groups = []
-    current_group = []
+    groups: list[list[dict[str, Any]]] = []
+    current_group: list[dict[str, Any]] = []
 
     for cmd in commands:
         cmd_type = cmd.get("type", "")

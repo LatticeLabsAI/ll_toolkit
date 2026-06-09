@@ -10,6 +10,7 @@ default (untrained) configuration. Output quality is NOT asserted here — only
 that the propose track is wired and constructs without ``ImportError`` /
 ``TypeError``.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -28,27 +29,31 @@ class TestNeuralGeneratorInit:
     def test_vae_init_builds_module(self) -> None:
         gen = NeuralVAEGenerator(device="cpu")
         gen._init_model()
-        assert isinstance(gen._model, torch.nn.Module), (
-            "NeuralVAEGenerator._model must be a torch.nn.Module after init"
-        )
+        assert isinstance(
+            gen._model, torch.nn.Module
+        ), "NeuralVAEGenerator._model must be a torch.nn.Module after init"
         # A real module exposes parameters.
         assert any(True for _ in gen._model.parameters()), "VAE model has no parameters"
 
     def test_diffusion_init_builds_module(self) -> None:
         gen = NeuralDiffusionGenerator(device="cpu")
         gen._init_model()
-        assert isinstance(gen._model, torch.nn.Module), (
-            "NeuralDiffusionGenerator._model must be a torch.nn.Module after init"
-        )
-        assert any(True for _ in gen._model.parameters()), "Diffusion model has no parameters"
+        assert isinstance(
+            gen._model, torch.nn.Module
+        ), "NeuralDiffusionGenerator._model must be a torch.nn.Module after init"
+        assert any(
+            True for _ in gen._model.parameters()
+        ), "Diffusion model has no parameters"
 
     def test_vqvae_init_builds_module(self) -> None:
         gen = NeuralVQVAEGenerator(device="cpu")
         gen._init_model()
-        assert isinstance(gen._model, torch.nn.Module), (
-            "NeuralVQVAEGenerator._model must be a torch.nn.Module after init"
-        )
-        assert any(True for _ in gen._model.parameters()), "VQ-VAE model has no parameters"
+        assert isinstance(
+            gen._model, torch.nn.Module
+        ), "NeuralVQVAEGenerator._model must be a torch.nn.Module after init"
+        assert any(
+            True for _ in gen._model.parameters()
+        ), "VQ-VAE model has no parameters"
 
 
 @pytest.mark.requires_torch

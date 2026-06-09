@@ -10,6 +10,7 @@ Tests all neural generator classes and latent space sampler utilities:
 All tests work WITHOUT optional dependencies (torch, ll_stepnet) by mocking
 heavy imports and verifying graceful fallback behavior.
 """
+
 from __future__ import annotations
 
 import logging
@@ -71,10 +72,20 @@ def sample_command_result() -> dict[str, Any]:
     """Mock result from VAE/VQ-VAE pipeline."""
     return {
         "commands": [
-            {"command_type": "SOL", "parameters": [0] * 16, "parameter_mask": [True, True] + [False] * 14},
-            {"command_type": "LINE", "parameters": [10, 20, 30, 40] + [0] * 12, "parameter_mask": [True] * 4 + [False] * 12},
+            {
+                "command_type": "SOL",
+                "parameters": [0] * 16,
+                "parameter_mask": [True, True] + [False] * 14,
+            },
+            {
+                "command_type": "LINE",
+                "parameters": [10, 20, 30, 40] + [0] * 12,
+                "parameter_mask": [True] * 4 + [False] * 12,
+            },
         ],
-        "command_logits": np.random.randn(1, 10, 6).astype(np.float32),  # (batch, seq, num_commands)
+        "command_logits": np.random.randn(1, 10, 6).astype(
+            np.float32
+        ),  # (batch, seq, num_commands)
         "param_logits": {
             0: np.random.randn(1, 10, 256).astype(np.float32),  # param 0
             1: np.random.randn(1, 10, 256).astype(np.float32),  # param 1
@@ -126,6 +137,7 @@ class TestBaseNeuralGenerator:
         class IncompleteGenerator(BaseNeuralGenerator):
             def generate(self, prompt, conditioning=None, error_context=None):
                 pass
+
             # Missing generate_candidates
 
         with pytest.raises(TypeError, match="generate_candidates"):
@@ -158,6 +170,7 @@ class TestBaseNeuralGenerator:
 
         # Patch torch import to make cuda unavailable
         with patch("builtins.__import__") as mock_import:
+
             def import_side_effect(name, *args, **kwargs):
                 if name == "torch":
                     raise ImportError("torch not available")
@@ -194,7 +207,9 @@ class TestBaseNeuralGenerator:
                 return []
 
         gen = ConcreteGenerator(device="cpu")
-        metadata = gen._build_metadata("TestModel", temperature=0.8, custom_field="value")
+        metadata = gen._build_metadata(
+            "TestModel", temperature=0.8, custom_field="value"
+        )
 
         assert metadata["model_name"] == "TestModel"
         assert metadata["device"] == "cpu"
@@ -343,7 +358,13 @@ class TestNeuralVAEGenerator:
         # optimizes; mock it to test the wrapper without a real torch model.
         gen._model = MagicMock()
         gen._decode_and_sample = MagicMock(
-            return_value=([1, 6, 11, 2], None, 0.5, np.zeros(256, dtype=np.float32), 0.7)
+            return_value=(
+                [1, 6, 11, 2],
+                None,
+                0.5,
+                np.zeros(256, dtype=np.float32),
+                0.7,
+            )
         )
 
         proposal = gen.generate("create a box")
@@ -377,15 +398,15 @@ class TestNeuralVAEGenerator:
         deployment/inference path can condition, not only training."""
         gen = NeuralVAEGenerator()
         gen._model = MagicMock()
-        gen._decode_and_sample = MagicMock(
-            return_value=([1, 2], None, 0.0, None, 0.5)
-        )
+        gen._decode_and_sample = MagicMock(return_value=([1, 2], None, 0.0, None, 0.5))
 
         gen.generate("shape", target_dimensions=(1.0, 2.0, 3.0))
 
-        assert gen._decode_and_sample.call_args.kwargs.get(
-            "target_dimensions"
-        ) == (1.0, 2.0, 3.0)
+        assert gen._decode_and_sample.call_args.kwargs.get("target_dimensions") == (
+            1.0,
+            2.0,
+            3.0,
+        )
 
     @pytest.mark.unit
     def test_candidates_populate_command_dicts_from_tokens(self):
@@ -448,7 +469,11 @@ class TestNeuralVAEGenerator:
         assert gen._decode_and_sample.call_count == 3
         assert all(isinstance(p, CommandSequenceProposal) for p in proposals)
         # Sorted by confidence descending
-        assert proposals[0].confidence >= proposals[1].confidence >= proposals[2].confidence
+        assert (
+            proposals[0].confidence
+            >= proposals[1].confidence
+            >= proposals[2].confidence
+        )
 
     @pytest.mark.unit
     def test_generate_from_error_context(self):
@@ -482,7 +507,9 @@ class TestNeuralVAEGenerator:
         gen = NeuralVAEGenerator()
         gen._model = MagicMock()
 
-        error_ctx = {"error_category": ErrorCategory.TOPOLOGY_ERROR.value}  # No prior latent
+        error_ctx = {
+            "error_category": ErrorCategory.TOPOLOGY_ERROR.value
+        }  # No prior latent
         proposal = gen.generate_from_error_context(error_ctx)
 
         assert proposal is None
@@ -564,7 +591,9 @@ class TestNeuralDiffusionGenerator:
 
         # Mock torch at import time with proper Tensor class
         mock_torch = MagicMock()
-        mock_torch.Tensor = type("MockTensor", (), {})  # Create a real class, not MagicMock
+        mock_torch.Tensor = type(
+            "MockTensor", (), {}
+        )  # Create a real class, not MagicMock
         with patch.dict("sys.modules", {"torch": mock_torch}):
             proposal = gen.generate("create a curved surface")
 
@@ -1111,7 +1140,9 @@ class TestGeneratorsEdgeCases:
             def generate(self, prompt, conditioning=None, error_context=None):
                 self._pipeline.generate.return_value = []
                 # Simulate the behavior
-                result_list = self._pipeline.generate(num_samples=1, reconstruct=False, temperature=0.8)
+                result_list = self._pipeline.generate(
+                    num_samples=1, reconstruct=False, temperature=0.8
+                )
                 if not result_list:
                     return CommandSequenceProposal(
                         source_prompt=prompt,

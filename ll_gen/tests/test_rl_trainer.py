@@ -6,6 +6,7 @@ and changes the model parameters. The disposal/reward oracle is stubbed with a
 deterministic reward so the test needs no cadquery/pythonocc — the gradient
 mechanics under test are entirely real.
 """
+
 from __future__ import annotations
 
 import types
@@ -73,7 +74,8 @@ def test_train_step_zero_reward_no_first_step_collapse(tmp_path, monkeypatch) ->
         lambda proposal, export=False: types.SimpleNamespace(is_valid=False),
     )
     monkeypatch.setattr(
-        rl_mod, "compute_reward",
+        rl_mod,
+        "compute_reward",
         lambda result, config=None, target_dimensions=None: 0.0,
     )
     result = trainer.train_step("a 20mm cube")

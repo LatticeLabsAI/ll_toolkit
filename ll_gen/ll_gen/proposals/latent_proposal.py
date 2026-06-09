@@ -170,7 +170,8 @@ class LatentProposal(BaseProposal):
         pts = np.concatenate(all_points, axis=0)
         mins = pts.min(axis=0)
         maxs = pts.max(axis=0)
-        return np.concatenate([mins, maxs])
+        bbox: np.ndarray = np.concatenate([mins, maxs])
+        return bbox
 
     def compute_face_areas_approximate(self) -> list[float]:
         """Approximate face areas from point grid spacing.
@@ -193,9 +194,9 @@ class LatentProposal(BaseProposal):
                     p01 = g[u, v + 1]
                     p11 = g[u + 1, v + 1]
                     # Triangle 1: p00, p10, p01
-                    area += 0.5 * np.linalg.norm(np.cross(p10 - p00, p01 - p00))
+                    area += float(0.5 * np.linalg.norm(np.cross(p10 - p00, p01 - p00)))
                     # Triangle 2: p10, p11, p01
-                    area += 0.5 * np.linalg.norm(np.cross(p11 - p10, p01 - p10))
+                    area += float(0.5 * np.linalg.norm(np.cross(p11 - p10, p01 - p10)))
             areas.append(float(area))
         return areas
 
