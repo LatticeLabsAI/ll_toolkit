@@ -49,9 +49,28 @@
 ## Verification
 ```bash
 cd ll_gen
-python -m ll_gen.training.evaluate_validity --checkpoint checkpoints/vqvae.pt --prompts eval/heldout.jsonl
+# Reproduce the proof-of-life (random-init -> RL), saving the checkpoint + report:
+python -m ll_gen.training.proof_of_life --generator vae --prompts eval/heldout.jsonl \
+    --epochs 6 --steps-per-epoch 60 --n-eval-samples 10 --seed 0 --lr 1e-4 \
+    --save checkpoints/vae_rl.pt --results results/proof_of_life_vae.json
+# -> trained validity ~0.98 on both decode paths vs ~0.04-0.06 baseline.
+
+# Evaluate the trained checkpoint on its own (FR-G5 checkpoint_path load):
+python -m ll_gen.training.evaluate_validity --generator vae \
+    --checkpoint checkpoints/vae_rl.pt --prompts eval/heldout.jsonl --n-samples 10 --seed 12345
 # trained valid_rate must exceed the recorded random-init baseline
 ```
+
+### Checkpoint distribution (T3.6) — resolves OQ3
+The trained checkpoint `checkpoints/vae_rl.pt` is **217 MB** (model + optimizer
+state), exceeding the 50 MB commit threshold, so it is **gitignored and
+reproduced** via the deterministic `proof_of_life` command above (seed 0) rather
+than committed or hosted. **FR-G5 wiring verified:** `BaseNeuralGenerator.load_checkpoint`
+now unwraps the trainer's nested `{"model_state_dict", ...}` format, so
+`NeuralVAEGenerator(checkpoint_path="checkpoints/vae_rl.pt")` loads the trained
+weights directly — confirmed *non-trivial* (loaded `generate()` scores 98%
+validity, not random-init ~4%). Regression test:
+`tests/test_checkpoint_roundtrip.py::test_generator_loads_trainer_checkpoint_via_checkpoint_path`.
 
 ## Run log (fill during execution — no TBD at completion)
 
@@ -191,8 +210,8 @@ help here.)
 - **Compute** — if no GPU, runs may be infeasible at useful scale; flag to maintainer rather than reporting a vacuous CPU result.
 
 ## Done checklist
-- [ ] Dataset subset acquired + documented.
-- [ ] Random-init baseline recorded per model.
-- [ ] Trained checkpoints exist and load via `checkpoint_path`.
-- [ ] Trained valid_rate > baseline (or honest negative result + escalation) recorded in Run log.
-- [ ] Reproduce command documented.
+- [x] Dataset subset acquired + documented (`palapav/DeepCAD-DSL`, 2000 train / 200 val).
+- [x] Random-init baseline recorded per model (VAE 4–6% / VQ-VAE 0% / diffusion 0%).
+- [x] Trained checkpoint exists and loads via `checkpoint_path` (FR-G5, non-trivial load verified).
+- [x] Trained valid_rate > baseline recorded in Run log (VAE **4%→98%** deployed; warm-start negative + VQ-VAE/diffusion R2 deferral documented honestly).
+- [x] Reproduce command documented (`python -m ll_gen.training.proof_of_life ...`).
