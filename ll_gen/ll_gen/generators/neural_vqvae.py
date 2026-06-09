@@ -163,8 +163,12 @@ class NeuralVQVAEGenerator(BaseNeuralGenerator):
         prompt: str,
         conditioning: ConditioningEmbeddings | None = None,
         error_context: dict[str, Any] | None = None,
+        target_dimensions: tuple[float, float, float] | None = None,
     ) -> CommandSequenceProposal:
         """Generate with gradients for RL training.
+
+        ``target_dimensions`` is accepted for trainer-call uniformity (VQ-VAE
+        does not yet condition on it).
 
         Bypasses ``CADGenerationPipeline.generate()`` (which wraps
         everything in ``torch.no_grad``) and instead runs the three

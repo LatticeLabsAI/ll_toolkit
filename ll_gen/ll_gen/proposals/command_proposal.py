@@ -264,6 +264,26 @@ class CommandSequenceProposal(BaseProposal):
 
         return result
 
+    def command_dicts_from_token_ids(self) -> list[dict[str, Any]]:
+        """Decode ``token_ids`` into structured command dicts (quantized params).
+
+        Returns the same ``{command_type, parameters, parameter_mask}`` schema
+        as a pipeline-decoded proposal, so a token-id-only proposal can expose
+        per-command structure to consumers (and matches the pre-unification
+        behavior of the generators). Returns ``[]`` when there are no token ids.
+        """
+        if not self.token_ids:
+            return []
+        token_sequence = self._decode_token_ids_to_sequence()
+        return [
+            {
+                "command_type": ct.command_type.value,
+                "parameters": list(ct.parameters),
+                "parameter_mask": list(ct.parameter_mask),
+            }
+            for ct in token_sequence.command_tokens
+        ]
+
     # ------------------------------------------------------------------
     # Properties
     # ------------------------------------------------------------------

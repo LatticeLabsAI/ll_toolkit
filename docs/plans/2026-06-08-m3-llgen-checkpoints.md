@@ -218,6 +218,38 @@ multi-body, dimensional reward) is the documented next step. Checkpoint:
 `checkpoints/vae_rl_solid.pt` (gitignored; reproduce via `proof_of_life` with the
 solid-gated reward, which is now the default `FeedbackConfig`).
 
+### Dimension conditioning (follow-up B) — honest NEGATIVE
+Attempted to make the prompt constrain output: added a **dense** dimensional
+reward (`exp(-‖bbox−target‖/scale)` — the existing semantic match is binary and
+gives a conditioner no gradient), a **zero-init dimension encoder** that shifts
+the latent by a learned offset of the requested `(w,h,d)`, and threaded
+`target_dimensions` through `train_step → generate_for_training → _decode_and_sample`
+and into `compute_reward`. Warm-started from `vae_rl_solid.pt`; RL-trained over 3
+discrete target boxes (small/medium/large), 480 steps on CPU
+(`scripts/condition_experiment.py`). The architecture is mechanically verified
+(zero-init = no-op preserving the 66% solids; once non-zero, distinct targets
+shift the latent differently).
+
+**Result — the achieved bbox does NOT track the request:**
+
+| target | requested Σdims | achieved Σdims (mean over valid solids) |
+|---|---|---|
+| small  | 0.9 | 4.23 |
+| medium | 4.5 | 4.65 |
+| large  | 9.5 | 4.05 |
+
+Achieved size is ~constant (~4.0–4.6) regardless of target — not monotonic, not
+correlated. Validity stayed healthy (0.65–0.93), so the policy optimized
+solid-validity but did not learn a size→shape mapping in this budget. Honest
+read (per the advisor's framing, reported like the warm-start negative): the
+dense reward + conditioning architecture are correct and the loop runs, but
+REINFORCE through discrete command sampling gives a weak, noisy gradient to the
+dimensional term (a small fraction of the validity-dominated reward) — so a tiny
+CPU model over 480 steps does not learn dimensional control. Plausible paths to a
+positive result (future work, not pursued here): a much larger step budget on
+GPU, a heavier dimensional reward weight, or conditioning the *parameter* tokens
+directly rather than only shifting the latent. Reproduce:
+`python -m scripts.condition_experiment --results results/condition_experiment.json`.
 Notes: random-init **VAE** emits multi-command sketches → 27% pass full BRep
 validation (close to DeepCAD's ~24% unconditional baseline — a good sanity
 check). **VQ-VAE** random-init decodes to a single LINE + EOS (one open edge,

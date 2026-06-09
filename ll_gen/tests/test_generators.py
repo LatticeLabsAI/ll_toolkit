@@ -354,6 +354,55 @@ class TestNeuralVAEGenerator:
         assert 0.0 <= proposal.confidence <= 1.0
 
     @pytest.mark.unit
+    def test_generate_populates_command_dicts_from_tokens(self):
+        """generate() exposes per-command structure decoded from token_ids
+        (not an empty list), matching the pre-unification pipeline behavior."""
+        gen = NeuralVAEGenerator()
+        gen._model = MagicMock()
+        # BOS, SOL, CIRCLE + 3 params, EOS.
+        gen._decode_and_sample = MagicMock(
+            return_value=([1, 6, 9, 12, 12, 140, 2], None, 0.0, None, 0.5)
+        )
+
+        proposal = gen.generate("a disc")
+
+        assert proposal.command_dicts, "command_dicts should be decoded, not empty"
+        assert all("command_type" in c for c in proposal.command_dicts)
+        types = [c["command_type"] for c in proposal.command_dicts]
+        assert "SOL" in types and "CIRCLE" in types
+
+    @pytest.mark.unit
+    def test_generate_forwards_target_dimensions(self):
+        """generate() threads target_dimensions to the shared decoder so the
+        deployment/inference path can condition, not only training."""
+        gen = NeuralVAEGenerator()
+        gen._model = MagicMock()
+        gen._decode_and_sample = MagicMock(
+            return_value=([1, 2], None, 0.0, None, 0.5)
+        )
+
+        gen.generate("shape", target_dimensions=(1.0, 2.0, 3.0))
+
+        assert gen._decode_and_sample.call_args.kwargs.get(
+            "target_dimensions"
+        ) == (1.0, 2.0, 3.0)
+
+    @pytest.mark.unit
+    def test_candidates_populate_command_dicts_from_tokens(self):
+        """Each candidate exposes decoded command_dicts (regression vs the old
+        pipeline path that surfaced per-candidate commands)."""
+        gen = NeuralVAEGenerator()
+        gen._model = MagicMock()
+        gen._decode_and_sample = MagicMock(
+            return_value=([1, 6, 9, 12, 12, 140, 2], None, 0.0, None, 0.5)
+        )
+
+        proposals = gen.generate_candidates("shape", num_candidates=2)
+
+        assert len(proposals) == 2
+        assert all(p.command_dicts for p in proposals)
+
+    @pytest.mark.unit
     def test_generate_with_conditioning(self):
         """generate() preserves conditioning source information."""
         gen = NeuralVAEGenerator()
@@ -381,35 +430,35 @@ class TestNeuralVAEGenerator:
 
     @pytest.mark.unit
     def test_generate_candidates(self):
-        """generate_candidates() returns multiple sorted proposals."""
+        """generate_candidates() returns multiple proposals sorted by confidence,
+        each an independent draw from the shared decoder."""
         gen = NeuralVAEGenerator()
         gen._model = MagicMock()
-        gen._pipeline = MagicMock()
-
-        # Return 3 results with different logits
-        logits1 = np.ones((1, 5, 6), dtype=np.float32)  # High confidence
-        logits2 = np.random.randn(1, 5, 6).astype(np.float32)
-        logits3 = np.zeros((1, 5, 6), dtype=np.float32)  # Low confidence
-
-        gen._pipeline.generate.return_value = [
-            {"command_logits": logits1, "param_logits": {}, "commands": []},
-            {"command_logits": logits2, "param_logits": {}, "commands": []},
-            {"command_logits": logits3, "param_logits": {}, "commands": []},
-        ]
+        gen._decode_and_sample = MagicMock(
+            side_effect=[
+                ([1, 9, 2], None, 0.0, np.zeros(8, dtype=np.float32), 0.9),
+                ([1, 7, 2], None, 0.0, np.zeros(8, dtype=np.float32), 0.5),
+                ([1, 2], None, 0.0, np.zeros(8, dtype=np.float32), 0.2),
+            ]
+        )
 
         proposals = gen.generate_candidates("shape", num_candidates=3)
 
         assert len(proposals) == 3
+        assert gen._decode_and_sample.call_count == 3
         assert all(isinstance(p, CommandSequenceProposal) for p in proposals)
         # Sorted by confidence descending
         assert proposals[0].confidence >= proposals[1].confidence >= proposals[2].confidence
 
     @pytest.mark.unit
     def test_generate_from_error_context(self):
-        """generate_from_error_context() perturbs latent vector."""
+        """generate_from_error_context() perturbs the latent and decodes it via
+        the shared sampler."""
         gen = NeuralVAEGenerator()
         gen._model = MagicMock()
-        gen._pipeline = MagicMock()
+        gen._decode_and_sample = MagicMock(
+            return_value=([1, 9, 2], None, 0.0, None, 0.7)
+        )
 
         prior_latent = np.random.randn(256).astype(np.float32)
         error_ctx = {
@@ -420,16 +469,18 @@ class TestNeuralVAEGenerator:
         proposal = gen.generate_from_error_context(error_ctx)
 
         assert isinstance(proposal, CommandSequenceProposal)
+        # The perturbed latent (same shape, renormalized) is decoded via the
+        # shared sampler, which produced the token ids.
+        gen._decode_and_sample.assert_called_once()
         assert proposal.latent_vector is not None
-        # Perturbed latent should be different but same norm
         assert proposal.latent_vector.shape == prior_latent.shape
+        assert proposal.token_ids == [1, 9, 2]
 
     @pytest.mark.unit
     def test_generate_from_error_context_no_latent(self):
         """generate_from_error_context() returns None without prior latent."""
         gen = NeuralVAEGenerator()
         gen._model = MagicMock()
-        gen._pipeline = MagicMock()
 
         error_ctx = {"error_category": ErrorCategory.TOPOLOGY_ERROR.value}  # No prior latent
         proposal = gen.generate_from_error_context(error_ctx)

@@ -109,7 +109,19 @@ def compute_reward(
     # 5. Semantic match (dimension + volume share a single reward budget)
     semantic_reward = 0.0
     if target_dimensions is not None and result.geometry_report is not None:
-        if result.geometry_report.matches_dimensions(
+        dims = result.geometry_report.bbox_dimensions
+        if config.dense_dimension_reward and dims is not None:
+            # Smooth shaping: closeness-weighted reward so a dimension-conditioner
+            # gets gradient even before any exact match. Compare sorted dims so
+            # axis order doesn't matter (mirrors matches_dimensions).
+            import math
+
+            actual = sorted(dims)
+            target = sorted(target_dimensions)
+            err = math.sqrt(sum((a - t) ** 2 for a, t in zip(actual, target)))
+            scale = config.dimension_reward_scale or 1.0
+            semantic_reward += config.semantic_match_reward * math.exp(-err / scale)
+        elif result.geometry_report.matches_dimensions(
             target_dimensions, config.dimension_tolerance_pct
         ):
             semantic_reward += config.semantic_match_reward

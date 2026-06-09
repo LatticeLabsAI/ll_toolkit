@@ -310,6 +310,15 @@ class FeedbackConfig:
     # Dimensional match tolerance for semantic verification
     dimension_tolerance_pct: float = 0.10  # 10%
 
+    # Dense dimensional reward (for dimension-conditioned generation, M3
+    # follow-up). The default semantic_match term is binary (fires only within
+    # tolerance of a valid solid), so at init it is ~never true and gives a
+    # dimension-conditioner no gradient. When enabled, add a smooth term
+    # ``semantic_match_reward * exp(-||bbox_dims - target_dims|| / scale)`` so
+    # even a wrong-sized shape gets a warmer/colder signal REINFORCE can climb.
+    dense_dimension_reward: bool = False
+    dimension_reward_scale: float = 0.5
+
 
 @dataclass
 class DatasetConfig:
