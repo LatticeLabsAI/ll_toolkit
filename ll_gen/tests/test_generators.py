@@ -336,34 +336,29 @@ class TestNeuralVAEGenerator:
 
     @pytest.mark.unit
     def test_generate_basic(self):
-        """generate() returns a CommandSequenceProposal."""
+        """generate() returns a CommandSequenceProposal from the shared decoder."""
         gen = NeuralVAEGenerator()
 
-        # Mock the initialization directly
+        # generate() now decodes via the same _decode_and_sample path RL
+        # optimizes; mock it to test the wrapper without a real torch model.
         gen._model = MagicMock()
-        gen._pipeline = MagicMock()
-        gen._pipeline.generate.return_value = [
-            {
-                "commands": [{"command_type": "SOL", "parameters": [0] * 16}],
-                "command_logits": np.random.randn(1, 5, 6).astype(np.float32),
-                "param_logits": {0: np.random.randn(1, 5, 256).astype(np.float32)},
-            }
-        ]
+        gen._decode_and_sample = MagicMock(
+            return_value=([1, 6, 11, 2], None, 0.5, np.zeros(256, dtype=np.float32), 0.7)
+        )
 
         proposal = gen.generate("create a box")
 
         assert isinstance(proposal, CommandSequenceProposal)
         assert proposal.source_prompt == "create a box"
-        assert proposal.confidence >= 0.0
-        assert proposal.confidence <= 1.0
+        assert proposal.token_ids == [1, 6, 11, 2]
+        assert 0.0 <= proposal.confidence <= 1.0
 
     @pytest.mark.unit
     def test_generate_with_conditioning(self):
         """generate() preserves conditioning source information."""
         gen = NeuralVAEGenerator()
         gen._model = MagicMock()
-        gen._pipeline = MagicMock()
-        gen._pipeline.generate.return_value = [{"commands": [], "command_logits": None, "param_logits": None}]
+        gen._decode_and_sample = MagicMock(return_value=([1, 2], None, 0.0, None, 0.5))
 
         cond = ConditioningEmbeddings(source_type="image", source_model="dino_vits16")
         proposal = gen.generate("shape", conditioning=cond)
@@ -375,15 +370,14 @@ class TestNeuralVAEGenerator:
         """generate() adjusts temperature based on error category."""
         gen = NeuralVAEGenerator(temperature=1.0)
         gen._model = MagicMock()
-        gen._pipeline = MagicMock()
-        gen._pipeline.generate.return_value = [{"commands": [], "command_logits": None, "param_logits": None}]
+        gen._decode_and_sample = MagicMock(return_value=([1, 2], None, 0.0, None, 0.5))
 
         error_ctx = {"error_category": ErrorCategory.TOPOLOGY_ERROR.value}
         gen.generate("shape", error_context=error_ctx)
 
-        # Verify pipeline was called with adjusted temperature
-        call_kwargs = gen._pipeline.generate.call_args[1]
-        assert call_kwargs["temperature"] == pytest.approx(0.7)  # 1.0 * 0.7
+        # The error-adjusted temperature (1.0 * 0.7) is passed to the decoder.
+        gen._decode_and_sample.assert_called_once()
+        assert gen._decode_and_sample.call_args[0][0] == pytest.approx(0.7)
 
     @pytest.mark.unit
     def test_generate_candidates(self):

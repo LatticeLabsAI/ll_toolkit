@@ -7,6 +7,7 @@ Tests command sequence execution functionality:
 - Extrusion direction detection
 - Fallback to OCC when cadling unavailable
 """
+
 from __future__ import annotations
 
 from typing import Any, Dict, List
@@ -21,7 +22,6 @@ from ll_gen.disposal.command_executor import (
     _extract_sketch_groups,
 )
 
-
 # ============================================================================
 # SECTION 1: Module Import Tests
 # ============================================================================
@@ -33,18 +33,21 @@ class TestModuleImport:
     def test_module_importable(self) -> None:
         """Test that command_executor module is importable."""
         from ll_gen.disposal import command_executor
+
         assert hasattr(command_executor, "execute_command_proposal")
         assert hasattr(command_executor, "_extract_sketch_groups")
 
     def test_availability_flags_are_boolean(self) -> None:
         """Test that availability flags are boolean values."""
         from ll_gen.disposal import command_executor
+
         assert isinstance(command_executor._OCC_AVAILABLE, bool)
         assert isinstance(command_executor._CADLING_EXECUTOR_AVAILABLE, bool)
 
     def test_execute_function_is_callable(self) -> None:
         """Test that execute_command_proposal is callable."""
         from ll_gen.disposal.command_executor import execute_command_proposal
+
         assert callable(execute_command_proposal)
 
 
@@ -144,13 +147,15 @@ class TestExecuteCommandProposalMocked:
             confidence=0.8,
             source_prompt="Test",
             command_dicts=[
-                {"command_type": "SOL", "parameters": [0] * 16, "parameter_mask": [False] * 16},
+                {
+                    "command_type": "SOL",
+                    "parameters": [0] * 16,
+                    "parameter_mask": [False] * 16,
+                },
             ],
             quantization_bits=8,
         )
-        with patch(
-            "ll_gen.disposal.command_executor._OCC_AVAILABLE", False
-        ):
+        with patch("ll_gen.disposal.command_executor._OCC_AVAILABLE", False):
             with patch(
                 "ll_gen.disposal.command_executor._CADLING_EXECUTOR_AVAILABLE", False
             ):
@@ -159,19 +164,26 @@ class TestExecuteCommandProposalMocked:
                 assert "OCC libraries are not available" in str(exc_info.value)
 
     def test_cadling_executor_preferred_when_available(self) -> None:
-        """Test that cadling executor is used when available."""
+        """Cadling executor runs on the proposal's flat token_ids; its shape is
+        returned.
+
+        Regression: the cadling fast-path must read ``proposal.token_ids`` (a
+        flat int list) and extract ``result["shape"]`` — not
+        ``to_token_sequence().token_ids`` (a geotoken TokenSequence has no
+        ``token_ids`` attribute, which is the bug this guards against).
+        """
+        token_ids = [1, 6, 7, 12, 12, 140, 12, 10, 76, 2]
         proposal = CommandSequenceProposal(
             proposal_id="test",
             confidence=0.8,
             source_prompt="Test",
-            command_dicts=[
-                {"command_type": "SOL", "parameters": [0] * 16, "parameter_mask": [False] * 16},
-            ],
+            token_ids=token_ids,
             quantization_bits=8,
         )
 
+        sentinel_shape = object()
         mock_executor = MagicMock()
-        mock_executor.execute.return_value = MagicMock()
+        mock_executor.execute.return_value = {"shape": sentinel_shape, "valid": True}
 
         with patch(
             "ll_gen.disposal.command_executor._CADLING_EXECUTOR_AVAILABLE", True
@@ -180,20 +192,50 @@ class TestExecuteCommandProposalMocked:
                 "ll_gen.disposal.command_executor.CadlingCommandExecutor",
                 return_value=mock_executor,
             ):
-                with patch.object(proposal, "to_token_sequence") as mock_to_token:
-                    mock_to_token.return_value = MagicMock(token_ids=[1, 2, 3])
-                    result = execute_command_proposal(proposal)
-                    mock_executor.execute.assert_called_once()
+                result = execute_command_proposal(proposal)
 
-    def test_fallback_to_standalone_on_cadling_failure(self) -> None:
-        """Test fallback to standalone execution when cadling fails."""
+        mock_executor.execute.assert_called_once_with(token_ids)
+        assert result is sentinel_shape
+
+    def test_cadling_skipped_without_token_ids(self) -> None:
+        """A proposal with only command_dicts (no token_ids) bypasses the
+        cadling fast-path and uses the standalone executor."""
         proposal = CommandSequenceProposal(
             proposal_id="test",
             confidence=0.8,
             source_prompt="Test",
             command_dicts=[
-                {"command_type": "SOL", "parameters": [0] * 16, "parameter_mask": [False] * 16},
+                {
+                    "command_type": "SOL",
+                    "parameters": [0] * 16,
+                    "parameter_mask": [False] * 16,
+                },
             ],
+            quantization_bits=8,
+        )
+
+        mock_executor = MagicMock()
+
+        with patch(
+            "ll_gen.disposal.command_executor._CADLING_EXECUTOR_AVAILABLE", True
+        ):
+            with patch("ll_gen.disposal.command_executor._OCC_AVAILABLE", False):
+                with patch(
+                    "ll_gen.disposal.command_executor.CadlingCommandExecutor",
+                    return_value=mock_executor,
+                ):
+                    with pytest.raises(RuntimeError):
+                        execute_command_proposal(proposal)
+
+        mock_executor.execute.assert_not_called()
+
+    def test_fallback_to_standalone_on_cadling_failure(self) -> None:
+        """When the cadling executor raises, fall back to the standalone path."""
+        proposal = CommandSequenceProposal(
+            proposal_id="test",
+            confidence=0.8,
+            source_prompt="Test",
+            token_ids=[1, 6, 7, 12, 12, 140, 12, 10, 76, 2],
             quantization_bits=8,
         )
 
@@ -203,19 +245,15 @@ class TestExecuteCommandProposalMocked:
         with patch(
             "ll_gen.disposal.command_executor._CADLING_EXECUTOR_AVAILABLE", True
         ):
-            with patch(
-                "ll_gen.disposal.command_executor._OCC_AVAILABLE", False
-            ):
+            with patch("ll_gen.disposal.command_executor._OCC_AVAILABLE", False):
                 with patch(
                     "ll_gen.disposal.command_executor.CadlingCommandExecutor",
                     return_value=mock_executor,
                 ):
-                    with patch.object(proposal, "to_token_sequence") as mock_to_token:
-                        mock_to_token.return_value = MagicMock(token_ids=[1, 2, 3])
-                        with pytest.raises(RuntimeError) as exc_info:
-                            execute_command_proposal(proposal)
-                        # Should fall back and fail on OCC unavailable
-                        assert "OCC libraries are not available" in str(exc_info.value)
+                    with pytest.raises(RuntimeError) as exc_info:
+                        execute_command_proposal(proposal)
+                    # cadling raised -> fall back to standalone -> OCC unavailable
+                    assert "OCC libraries are not available" in str(exc_info.value)
 
 
 # ============================================================================
@@ -230,7 +268,7 @@ class TestCommandParsing:
         """Test LINE command dictionary structure."""
         line_cmd = {
             "type": "LINE",
-            "params": {"x1": 0.0, "y1": 0.0, "x2": 10.0, "y2": 0.0}
+            "params": {"x1": 0.0, "y1": 0.0, "x2": 10.0, "y2": 0.0},
         }
         assert line_cmd["type"] == "LINE"
         assert "x1" in line_cmd["params"]
@@ -243,10 +281,13 @@ class TestCommandParsing:
         arc_cmd = {
             "type": "ARC",
             "params": {
-                "x_start": 0.0, "y_start": 0.0,
-                "x_mid": 5.0, "y_mid": 5.0,
-                "x_end": 10.0, "y_end": 0.0
-            }
+                "x_start": 0.0,
+                "y_start": 0.0,
+                "x_mid": 5.0,
+                "y_mid": 5.0,
+                "x_end": 10.0,
+                "y_end": 0.0,
+            },
         }
         assert arc_cmd["type"] == "ARC"
         assert "x_start" in arc_cmd["params"]
@@ -255,10 +296,7 @@ class TestCommandParsing:
 
     def test_circle_command_structure(self) -> None:
         """Test CIRCLE command dictionary structure."""
-        circle_cmd = {
-            "type": "CIRCLE",
-            "params": {"cx": 5.0, "cy": 5.0, "r": 2.5}
-        }
+        circle_cmd = {"type": "CIRCLE", "params": {"cx": 5.0, "cy": 5.0, "r": 2.5}}
         assert circle_cmd["type"] == "CIRCLE"
         assert "cx" in circle_cmd["params"]
         assert "cy" in circle_cmd["params"]
@@ -268,7 +306,7 @@ class TestCommandParsing:
         """Test EXTRUDE command dictionary structure."""
         extrude_cmd = {
             "type": "EXTRUDE",
-            "params": {"dx": 0.0, "dy": 0.0, "dz": 1.0, "extent": 10.0}
+            "params": {"dx": 0.0, "dy": 0.0, "dz": 1.0, "extent": 10.0},
         }
         assert extrude_cmd["type"] == "EXTRUDE"
         assert "dx" in extrude_cmd["params"]
@@ -369,7 +407,9 @@ class TestDequantization:
         quantized_value = 128  # Middle value
 
         # Dequantize: (value / 255) * 2.0 - 1.0
-        expected = (quantized_value / 255) * normalization_range - (normalization_range / 2)
+        expected = (quantized_value / 255) * normalization_range - (
+            normalization_range / 2
+        )
 
         # 128/255 * 2 - 1 ≈ 0.00392...
         assert abs(expected - 0.00392156862745098) < 0.0001
@@ -390,7 +430,11 @@ class TestProposalInterface:
             confidence=0.8,
             source_prompt="Test",
             command_dicts=[
-                {"command_type": "SOL", "parameters": [0] * 16, "parameter_mask": [False] * 16},
+                {
+                    "command_type": "SOL",
+                    "parameters": [0] * 16,
+                    "parameter_mask": [False] * 16,
+                },
             ],
             quantization_bits=8,
         )
@@ -444,9 +488,7 @@ class TestErrorHandling:
         with patch(
             "ll_gen.disposal.command_executor._CADLING_EXECUTOR_AVAILABLE", False
         ):
-            with patch(
-                "ll_gen.disposal.command_executor._OCC_AVAILABLE", True
-            ):
+            with patch("ll_gen.disposal.command_executor._OCC_AVAILABLE", True):
                 # Should fail because no geometry is generated
                 with pytest.raises(RuntimeError):
                     execute_command_proposal(proposal)
@@ -459,7 +501,11 @@ class TestErrorHandling:
             confidence=0.8,
             source_prompt="Test",
             command_dicts=[
-                {"command_type": "SOL", "parameters": [0] * 16, "parameter_mask": [False] * 16},
+                {
+                    "command_type": "SOL",
+                    "parameters": [0] * 16,
+                    "parameter_mask": [False] * 16,
+                },
             ],
             quantization_bits=8,
         )
@@ -467,12 +513,11 @@ class TestErrorHandling:
         with patch(
             "ll_gen.disposal.command_executor._CADLING_EXECUTOR_AVAILABLE", False
         ):
-            with patch(
-                "ll_gen.disposal.command_executor._OCC_AVAILABLE", True
-            ):
+            with patch("ll_gen.disposal.command_executor._OCC_AVAILABLE", True):
                 with patch.object(
-                    proposal, "dequantize",
-                    side_effect=ValueError("Invalid quantization")
+                    proposal,
+                    "dequantize",
+                    side_effect=ValueError("Invalid quantization"),
                 ):
                     with pytest.raises(RuntimeError) as exc_info:
                         execute_command_proposal(proposal)
@@ -509,11 +554,17 @@ class TestSketchGroupExecution:
         """Test group containing ARC command."""
         commands = [
             {"type": "SOL"},
-            {"type": "ARC", "params": {
-                "x_start": 0, "y_start": 0,
-                "x_mid": 5, "y_mid": 5,
-                "x_end": 10, "y_end": 0,
-            }},
+            {
+                "type": "ARC",
+                "params": {
+                    "x_start": 0,
+                    "y_start": 0,
+                    "x_mid": 5,
+                    "y_mid": 5,
+                    "x_end": 10,
+                    "y_end": 0,
+                },
+            },
         ]
         groups = _extract_sketch_groups(commands)
         assert len(groups) == 1
@@ -556,7 +607,9 @@ class TestWithFixtures:
         assert hasattr(command_proposal, "normalization_range")
         assert len(command_proposal.command_dicts) > 0
 
-    def test_command_proposal_token_ids_fixture(self, command_proposal_token_ids) -> None:
+    def test_command_proposal_token_ids_fixture(
+        self, command_proposal_token_ids
+    ) -> None:
         """Test command_proposal_token_ids fixture has expected structure."""
         assert hasattr(command_proposal_token_ids, "token_ids")
         assert len(command_proposal_token_ids.token_ids) > 0

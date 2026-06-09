@@ -113,34 +113,23 @@ class NeuralVAEGenerator(BaseNeuralGenerator):
         if self._model is None:
             self._init_model()
 
+        import torch
+
         temp = self._adjust_temperature_for_error(self.temperature, error_context)
 
-        result_list = self._pipeline.generate(
-            num_samples=1,
-            reconstruct=False,
-            temperature=temp,
-        )
-
-        if not result_list:
-            _log.warning("VAE pipeline returned empty result")
-            return CommandSequenceProposal(
-                source_prompt=prompt,
-                conditioning_source=(
-                    conditioning.source_type if conditioning else "unconditional"
-                ),
-                confidence=0.0,
-                generation_metadata=self._build_metadata("STEPVAE", temperature=temp),
-                error_context=error_context,
+        # Decode the SAME sampled trajectory the RL path optimizes, under
+        # no_grad. Using the identical decoder at inference (rather than the
+        # separate CADGenerationPipeline decode) ensures the policy improvements
+        # made by generate_for_training's REINFORCE updates show up when the
+        # orchestrator calls generate().
+        with torch.no_grad():
+            token_ids, _log_probs, entropy_value, latent_vector, confidence = (
+                self._decode_and_sample(temp)
             )
-
-        command_dicts, token_ids, command_logits, param_logits, latent_vector = (
-            self._extract_pipeline_result(result_list[0])
-        )
-        confidence = self._compute_confidence(command_logits, param_logits)
 
         return CommandSequenceProposal(
             token_ids=token_ids,
-            command_dicts=command_dicts,
+            command_dicts=[],
             source_prompt=prompt,
             conditioning_source=(
                 conditioning.source_type if conditioning else "unconditional"
@@ -178,40 +167,66 @@ class NeuralVAEGenerator(BaseNeuralGenerator):
         Returns:
             CommandSequenceProposal with ``log_probs`` and ``entropy`` set.
         """
-        import torch
-        import torch.nn.functional as functional
-
         if self._model is None:
             self._init_model()
 
         temp = self._adjust_temperature_for_error(self.temperature, error_context)
+        token_ids, total_log_prob, entropy_value, latent_vector, confidence = (
+            self._decode_and_sample(temp)
+        )
 
-        # --- Forward pass WITHOUT no_grad so gradients flow ---
-        # We bypass the pipeline (which uses torch.no_grad) and call the
-        # model directly to get logits with a live computation graph.
-        device = torch.device(self.device)
-        z = torch.randn(1, self._model.latent_dim, device=device)
+        return CommandSequenceProposal(
+            token_ids=token_ids,
+            command_dicts=[],
+            source_prompt=prompt,
+            conditioning_source=(
+                conditioning.source_type if conditioning else "unconditional"
+            ),
+            confidence=confidence,
+            generation_metadata=self._build_metadata("STEPVAE", temperature=temp),
+            latent_vector=latent_vector,
+            error_context=error_context,
+            log_probs=total_log_prob,
+            entropy=entropy_value,
+        )
 
-        # Store latent for downstream inspection
-        self._model.last_latent = z
+    def _decode_and_sample(
+        self, temp: float
+    ) -> tuple[list[int], Any, float, np.ndarray | None, float]:
+        """Sample one command trajectory from a prior latent ``z ~ N(0, I)``.
 
-        hidden = self._model.decode(z, seq_len=self.max_seq_len)
-        command_logits = self._model.command_head(hidden)  # [1, S, C]
-        param_logits = [
-            head(hidden) for head in self._model.param_heads  # 16 × [1, S, P]
-        ]
+        Shared by ``generate`` (inference, called under ``torch.no_grad``) and
+        ``generate_for_training`` (RL, called with grad). Each token is sampled
+        once from the live decoder logits and its log-prob recorded on that same
+        sample — an unbiased REINFORCE estimator when gradients are tracked.
+        Unifying the two paths here is what makes RL improvements visible at
+        inference time.
 
-        # Strip batch dim → [S, C] and [S, P] respectively
-        command_logits = command_logits[0]
-        param_logits_2d = [pl[0] for pl in param_logits]  # 16 × [S, P]
+        Args:
+            temp: Sampling temperature (already error-adjusted).
 
-        # --- Single-pass sampling + log-prob accumulation ---
+        Returns:
+            ``(token_ids, total_log_prob, entropy_value, latent_vector,
+            confidence)``. ``total_log_prob`` is a differentiable scalar tensor
+            (or None if no tokens were sampled); under ``no_grad`` it carries no
+            graph and inference callers ignore it.
+        """
+        import torch
+
         from ll_gen.generators.base import (
             BOS_TOKEN_ID,
             CMD_TOKEN_MAP,
             EOS_CMD_TOKEN_ID,
             EOS_TOKEN_ID,
         )
+
+        device = torch.device(self.device)
+        z = torch.randn(1, self._model.latent_dim, device=device)
+        self._model.last_latent = z
+
+        hidden = self._model.decode(z, seq_len=self.max_seq_len)
+        command_logits = self._model.command_head(hidden)[0]  # [S, C]
+        param_logits_2d = [head(hidden)[0] for head in self._model.param_heads]
 
         seq_len = min(command_logits.shape[0], self.max_seq_len)
         log_probs_accum: list[torch.Tensor] = []
@@ -220,9 +235,6 @@ class NeuralVAEGenerator(BaseNeuralGenerator):
 
         for pos in range(seq_len):
             cmd_logits_pos = command_logits[pos] / max(temp, 1e-8)
-            functional.log_softmax(cmd_logits_pos, dim=-1)
-
-            # Sample command type (single draw)
             cmd_dist = torch.distributions.Categorical(logits=cmd_logits_pos)
             cmd_type_t = cmd_dist.sample()
             cmd_type = int(cmd_type_t.item())
@@ -232,10 +244,8 @@ class NeuralVAEGenerator(BaseNeuralGenerator):
 
             if cmd_type not in CMD_TOKEN_MAP:
                 break
-
             cmd_token = CMD_TOKEN_MAP[cmd_type]
             token_ids.append(cmd_token)
-
             if cmd_token in (EOS_CMD_TOKEN_ID, EOS_TOKEN_ID):
                 break
 
@@ -259,28 +269,11 @@ class NeuralVAEGenerator(BaseNeuralGenerator):
             total_log_prob = torch.stack(log_probs_accum).sum()
             entropy_value = float(torch.stack(entropy_accum).mean().detach().cpu())
 
-        # Extract latent vector for metadata
         latent_vector: np.ndarray | None = z.detach().cpu().numpy()
-
-        # Confidence from the live logits (detached for scalar computation)
         confidence = self._compute_confidence(
             command_logits.detach(), [pl.detach() for pl in param_logits_2d]
         )
-
-        return CommandSequenceProposal(
-            token_ids=token_ids,
-            command_dicts=[],
-            source_prompt=prompt,
-            conditioning_source=(
-                conditioning.source_type if conditioning else "unconditional"
-            ),
-            confidence=confidence,
-            generation_metadata=self._build_metadata("STEPVAE", temperature=temp),
-            latent_vector=latent_vector,
-            error_context=error_context,
-            log_probs=total_log_prob,
-            entropy=entropy_value,
-        )
+        return token_ids, total_log_prob, entropy_value, latent_vector, confidence
 
     def generate_candidates(
         self,

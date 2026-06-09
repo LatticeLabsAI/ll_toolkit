@@ -81,9 +81,17 @@ def compute_reward(
 
     reward = 0.0
 
-    # 1. Base validity
+    # 1. Base validity — require a closed solid for full credit. A lone planar
+    #    face passes BRepCheck (``is_valid``) but is not a manufacturable CAD
+    #    body; granting it the full validity_reward lets the policy reward-hack
+    #    non-solids (M3 T3.5 found ~90% of "valid" outputs were single faces).
     if result.is_valid:
-        reward += config.validity_reward
+        gr = result.geometry_report
+        is_solid = gr is not None and (gr.is_solid or gr.solid_count >= 1)
+        if is_solid:
+            reward += config.validity_reward
+        else:
+            reward += config.validity_reward * config.nonsolid_valid_fraction
 
     # 2. Shape constructed
     if result.has_shape:

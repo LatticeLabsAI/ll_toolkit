@@ -7,6 +7,7 @@ geometry through sketch->extrude->boolean operations.
 from __future__ import annotations
 
 import logging
+import math
 from typing import Any
 
 from ll_gen.proposals.command_proposal import CommandSequenceProposal
@@ -74,16 +75,31 @@ def execute_command_proposal(proposal: CommandSequenceProposal) -> Any:
     Raises:
         RuntimeError: If execution fails or required OCC libraries are unavailable.
     """
-    # Try to use cadling's CommandExecutor if available
-    if _CADLING_EXECUTOR_AVAILABLE:
+    # Try cadling's CommandExecutor first when the proposal carries a flat
+    # token-id sequence (its execute() consumes List[int] token ids, not a
+    # TokenSequence object).  Proposals built from command_dicts have no
+    # token_ids, so they skip straight to the standalone path below.
+    if _CADLING_EXECUTOR_AVAILABLE and proposal.token_ids:
         try:
             _log.debug("Using cadling's CommandExecutor for execution")
-            token_sequence = proposal.to_token_sequence()
-            token_ids = token_sequence.token_ids
             executor = CadlingCommandExecutor()
-            result = executor.execute(token_ids)
-            _log.info("Successfully executed proposal via cadling executor")
-            return result
+            exec_result = executor.execute(list(proposal.token_ids))
+            shape = (
+                exec_result.get("shape")
+                if isinstance(exec_result, dict)
+                else exec_result
+            )
+            if shape is not None:
+                _log.info("Successfully executed proposal via cadling executor")
+                return shape
+            errors = (
+                exec_result.get("errors") if isinstance(exec_result, dict) else None
+            )
+            _log.debug(
+                "Cadling executor produced no shape (%s); "
+                "falling back to standalone execution",
+                errors,
+            )
         except Exception as e:
             _log.warning(
                 f"Cadling executor failed, falling back to standalone execution: {e}"
@@ -104,6 +120,10 @@ def execute_command_proposal(proposal: CommandSequenceProposal) -> Any:
     except Exception as e:
         _log.error(f"Failed to dequantize proposal: {e}")
         raise RuntimeError(f"Failed to dequantize command proposal: {e}") from e
+
+    # Map the dequantized schema (command_type + positional parameter list) onto
+    # the internal schema the geometry builders consume (type + named params).
+    commands = _normalize_commands(commands)
 
     # Extract sketch groups
     try:
@@ -150,6 +170,110 @@ def execute_command_proposal(proposal: CommandSequenceProposal) -> Any:
     return current_shape
 
 
+def _arc_midpoint(
+    x1: float, y1: float, x2: float, y2: float, cx: float, cy: float
+) -> tuple[float, float]:
+    """Compute a point on the arc between start and end, given its center.
+
+    The geometry builder defines arcs by three points (start, mid, end) while
+    the command schema encodes (start, end, center).  The midpoint is the arc
+    point at the half-angle along the shorter sweep from start to end.
+
+    Args:
+        x1, y1: Arc start point.
+        x2, y2: Arc end point.
+        cx, cy: Arc center.
+
+    Returns:
+        ``(x_mid, y_mid)`` on the arc; the chord midpoint as a degenerate
+        fallback when the center coincides with the start.
+    """
+    radius = math.hypot(x1 - cx, y1 - cy)
+    if radius <= 0.0:
+        return ((x1 + x2) / 2.0, (y1 + y2) / 2.0)
+    angle_start = math.atan2(y1 - cy, x1 - cx)
+    angle_end = math.atan2(y2 - cy, x2 - cx)
+    delta = angle_end - angle_start
+    # Normalize to (-pi, pi] so we sweep the shorter way around the circle.
+    while delta <= -math.pi:
+        delta += 2.0 * math.pi
+    while delta > math.pi:
+        delta -= 2.0 * math.pi
+    angle_mid = angle_start + delta / 2.0
+    return (cx + radius * math.cos(angle_mid), cy + radius * math.sin(angle_mid))
+
+
+def _positional_to_named(ctype: str, raw: list[float]) -> dict[str, float]:
+    """Map a positional parameter list to the named keys the builders expect.
+
+    The positional layout follows ``ll_gen.generators.base.PARAMETER_MASKS``:
+    LINE ``[x1, y1, x2, y2]``, ARC ``[x1, y1, x2, y2, cx, cy]``, CIRCLE
+    ``[cx, cy, r]``, EXTRUDE ``[depth, ...]``.
+
+    Args:
+        ctype: Upper-cased command type name.
+        raw: Dequantized positional parameter values.
+
+    Returns:
+        Named-parameter dict for the matching ``_create_*``/``_extrude_*``
+        builder (empty for commands without geometry parameters).
+    """
+
+    def g(i: int) -> float:
+        return float(raw[i]) if i < len(raw) else 0.0
+
+    if ctype == "LINE":
+        return {"x1": g(0), "y1": g(1), "x2": g(2), "y2": g(3)}
+    if ctype == "CIRCLE":
+        return {"cx": g(0), "cy": g(1), "r": g(2)}
+    if ctype == "ARC":
+        x_start, y_start = g(0), g(1)
+        x_end, y_end = g(2), g(3)
+        x_mid, y_mid = _arc_midpoint(x_start, y_start, x_end, y_end, g(4), g(5))
+        return {
+            "x_start": x_start,
+            "y_start": y_start,
+            "x_mid": x_mid,
+            "y_mid": y_mid,
+            "x_end": x_end,
+            "y_end": y_end,
+        }
+    if ctype == "EXTRUDE":
+        # depth is the first active EXTRUDE parameter; extrude along +Z.
+        return {"dx": 0.0, "dy": 0.0, "dz": 1.0, "extent": g(0)}
+    return {}
+
+
+def _normalize_commands(commands: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Adapt dequantized commands to the executor's internal command schema.
+
+    ``CommandSequenceProposal.dequantize`` yields
+    ``{"command_type": <CommandType value>, "parameters": [16 floats],
+    "parameter_mask": [16 bools]}``, whereas the geometry builders here consume
+    ``{"type": <NAME>, "params": {named coords}}`` and ``_apply_boolean_operation``
+    reads the raw positional list.  Without this bridge every command read as an
+    empty ``type`` and no geometry was ever produced.
+
+    Args:
+        commands: Dequantized command dicts.
+
+    Returns:
+        Commands in the internal ``{type, params, raw_parameters}`` schema.
+    """
+    normalized: list[dict[str, Any]] = []
+    for cmd in commands:
+        ctype = str(cmd.get("command_type") or cmd.get("type") or "").upper()
+        raw = list(cmd.get("parameters", cmd.get("raw_parameters", [])) or [])
+        normalized.append(
+            {
+                "type": ctype,
+                "params": _positional_to_named(ctype, raw),
+                "raw_parameters": raw,
+            }
+        )
+    return normalized
+
+
 def _extract_sketch_groups(
     commands: list[dict[str, Any]],
 ) -> list[list[dict[str, Any]]]:
@@ -178,8 +302,8 @@ def _extract_sketch_groups(
         else:
             current_group.append(cmd)
 
-            # EOL marks the end of a sketch group
-            if cmd_type == "EOL":
+            # EOL/EOS marks the end of a sketch group
+            if cmd_type in ("EOL", "EOS"):
                 groups.append(current_group)
                 current_group = []
 
@@ -224,7 +348,7 @@ def _execute_sketch_group(
         cmd_type = cmd.get("type", "")
         if cmd_type == "EXTRUDE":
             extrude_command = cmd
-        elif cmd_type != "SOL" and cmd_type != "EOL":
+        elif cmd_type not in ("SOL", "EOL", "EOS"):
             sketch_commands.append(cmd)
 
     if not sketch_commands:
@@ -555,8 +679,10 @@ def _apply_boolean_operation(
             _log.warning("No extrude command found for boolean operation")
             return base_shape
 
-        # Extract operation type from parameters
-        parameters = extrude_command.get("params", [])
+        # Extract operation type from the raw positional parameter list
+        # (`params` now holds named geometry keys; the boolean op type lives in
+        # the original positional vector preserved as `raw_parameters`).
+        parameters = extrude_command.get("raw_parameters", [])
 
         if len(parameters) > 13:
             # Parameter index 13 is the boolean operation type

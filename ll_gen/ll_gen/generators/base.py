@@ -326,6 +326,15 @@ class BaseNeuralGenerator(ABC):
         except TypeError:
             # PyTorch < 2.0 does not support weights_only
             state_dict = torch.load(path, map_location=self.device)
+        except Exception:
+            # A checkpoint carrying non-tensor metadata (e.g. RLAlignmentTrainer's
+            # step_count/baseline) can be rejected by the weights_only unpickler.
+            state_dict = torch.load(path, map_location=self.device, weights_only=False)
+        # RLAlignmentTrainer.save_checkpoint nests the weights alongside optimizer
+        # and bookkeeping state; unwrap so checkpoint_path loading (FR-G5) accepts
+        # both trainer checkpoints and bare state dicts.
+        if isinstance(state_dict, dict) and "model_state_dict" in state_dict:
+            state_dict = state_dict["model_state_dict"]
         self._model.load_state_dict(state_dict)
         self._model = self._model.to(self.device)
         _log.info("Checkpoint loaded successfully")

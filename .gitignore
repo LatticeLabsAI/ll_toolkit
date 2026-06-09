@@ -143,6 +143,14 @@ test_checkpoints/
 *.pkl
 *.pickle
 
+# ll_gen M3: downloaded datasets + run artifacts (reproduced via scripts, not committed)
+ll_gen/data/
+ll_gen/results/
+ll_gen/eval_output/
+ll_gen/training_output/
+ll_gen/*_out/
+ll_gen/*_output/
+
 # CAD files
 *.step
 *.stp

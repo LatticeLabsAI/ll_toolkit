@@ -635,7 +635,8 @@ class TestDataclassStructure:
     def test_feedback_config_field_count(self) -> None:
         """Test FeedbackConfig has expected number of fields."""
         config_fields = fields(FeedbackConfig)
-        assert len(config_fields) == 7
+        # 6 reward weights + nonsolid_valid_fraction + dimension_tolerance_pct.
+        assert len(config_fields) == 8
 
     def test_dataset_config_field_count(self) -> None:
         """Test DatasetConfig has expected number of fields."""

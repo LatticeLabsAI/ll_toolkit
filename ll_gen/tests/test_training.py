@@ -100,6 +100,7 @@ class TestGenerationMetrics:
             "num_samples",
             "num_valid",
             "num_compiled",
+            "num_distinct_valid",
         }
         assert set(summary.keys()) == expected_keys
 

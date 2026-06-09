@@ -69,3 +69,38 @@ def test_checkpoint_roundtrip_restores_state(tmp_path, monkeypatch) -> None:
     # Bookkeeping restored.
     assert trainer_b._step_count == trainer_a._step_count == 1
     assert trainer_b._baseline == pytest.approx(trainer_a._baseline)
+
+
+@pytest.mark.requires_torch
+def test_generator_loads_trainer_checkpoint_via_checkpoint_path(
+    tmp_path, monkeypatch
+) -> None:
+    """FR-G5: a generator constructed with checkpoint_path loads a trainer-saved
+    (nested) checkpoint and restores the trained weights.
+
+    RLAlignmentTrainer.save_checkpoint nests weights under "model_state_dict";
+    BaseNeuralGenerator.load_checkpoint must unwrap that so a generator can be
+    constructed straight from a training checkpoint (else it silently fails or
+    restarts from random init).
+    """
+    gen_a = NeuralVAEGenerator(device="cpu")
+    gen_a._init_model()
+    trainer_a = RLAlignmentTrainer(
+        gen_a, learning_rate=1e-2, device="cpu", output_dir=str(tmp_path / "a"), seed=0
+    )
+    trainer_a._init_training()
+    _stub_reward(trainer_a, monkeypatch)
+    trainer_a.train_step("a 20mm cube")
+
+    ckpt = tmp_path / "trained.pt"
+    trainer_a.save_checkpoint(ckpt)
+
+    # Construct a fresh generator purely from the checkpoint path.
+    gen_b = NeuralVAEGenerator(checkpoint_path=ckpt, device="cpu")
+    gen_b._init_model()
+
+    sd_a = gen_a._model.state_dict()
+    sd_b = gen_b._model.state_dict()
+    assert sd_a.keys() == sd_b.keys()
+    for key in sd_a:
+        assert torch.equal(sd_a[key], sd_b[key]), f"param {key} not restored"
