@@ -104,9 +104,10 @@ def run_experiment(
         for name, dims in target_items:
             sums, achieved = [], []
             for _ in range(eval_samples):
-                prop = generator.generate_for_training(
-                    f"a {name} part", target_dimensions=dims
-                )
+                # Measure the inference path (generate), not the RL training
+                # path — same decoder, but no log-prob/entropy plumbing, so this
+                # reflects deployment behavior.
+                prop = generator.generate(f"a {name} part", target_dimensions=dims)
                 r = eng.dispose(prop, export=False)
                 if r.is_valid and r.geometry_report and r.geometry_report.solid_count >= 1:
                     bd = r.geometry_report.bbox_dimensions

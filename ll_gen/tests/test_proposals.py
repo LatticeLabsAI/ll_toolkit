@@ -11,11 +11,7 @@ Tests all proposal types and related classes:
 """
 from __future__ import annotations
 
-import copy
 import hashlib
-import uuid
-from pathlib import Path
-from typing import Dict, List
 
 import numpy as np
 import pytest
@@ -25,13 +21,11 @@ from ll_gen.proposals.base import BaseProposal
 from ll_gen.proposals.code_proposal import CodeProposal
 from ll_gen.proposals.command_proposal import CommandSequenceProposal
 from ll_gen.proposals.disposal_result import (
-    DisposalResult,
     GeometryReport,
     RepairAction,
     ValidationFinding,
 )
 from ll_gen.proposals.latent_proposal import LatentProposal
-
 
 # =============================================================================
 # BaseProposal Tests
@@ -550,6 +544,31 @@ class TestCommandSequenceProposalSequenceLength:
         """sequence_length is 0 for empty proposal."""
         prop = CommandSequenceProposal(proposal_id="test")
         assert prop.sequence_length == 0
+
+
+class TestCommandSequenceProposalCommandDictsFromTokens:
+    """Test command_dicts_from_token_ids (token_ids -> structured commands)."""
+
+    def test_decodes_token_ids_to_command_dicts(self, command_proposal_token_ids):
+        """A token-id-only proposal decodes into structured command dicts."""
+        pytest.importorskip("geotoken")
+        dicts = command_proposal_token_ids.command_dicts_from_token_ids()
+        assert dicts, "should decode commands from token_ids"
+        assert all(
+            {"command_type", "parameters", "parameter_mask"} <= set(c) for c in dicts
+        )
+        # The fixture's token sequence starts with a SOL (token id 6).
+        assert "SOL" in [c["command_type"] for c in dicts]
+
+    def test_empty_token_ids_returns_empty(self):
+        """No token_ids -> empty list (nothing to decode)."""
+        prop = CommandSequenceProposal(
+            proposal_id="t",
+            command_dicts=[
+                {"command_type": "SOL", "parameters": [0] * 16, "parameter_mask": [False] * 16}
+            ],
+        )
+        assert prop.command_dicts_from_token_ids() == []
 
 
 class TestCommandSequenceProposalCommandCounts:

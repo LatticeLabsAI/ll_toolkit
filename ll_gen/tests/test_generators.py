@@ -354,6 +354,55 @@ class TestNeuralVAEGenerator:
         assert 0.0 <= proposal.confidence <= 1.0
 
     @pytest.mark.unit
+    def test_generate_populates_command_dicts_from_tokens(self):
+        """generate() exposes per-command structure decoded from token_ids
+        (not an empty list), matching the pre-unification pipeline behavior."""
+        gen = NeuralVAEGenerator()
+        gen._model = MagicMock()
+        # BOS, SOL, CIRCLE + 3 params, EOS.
+        gen._decode_and_sample = MagicMock(
+            return_value=([1, 6, 9, 12, 12, 140, 2], None, 0.0, None, 0.5)
+        )
+
+        proposal = gen.generate("a disc")
+
+        assert proposal.command_dicts, "command_dicts should be decoded, not empty"
+        assert all("command_type" in c for c in proposal.command_dicts)
+        types = [c["command_type"] for c in proposal.command_dicts]
+        assert "SOL" in types and "CIRCLE" in types
+
+    @pytest.mark.unit
+    def test_generate_forwards_target_dimensions(self):
+        """generate() threads target_dimensions to the shared decoder so the
+        deployment/inference path can condition, not only training."""
+        gen = NeuralVAEGenerator()
+        gen._model = MagicMock()
+        gen._decode_and_sample = MagicMock(
+            return_value=([1, 2], None, 0.0, None, 0.5)
+        )
+
+        gen.generate("shape", target_dimensions=(1.0, 2.0, 3.0))
+
+        assert gen._decode_and_sample.call_args.kwargs.get(
+            "target_dimensions"
+        ) == (1.0, 2.0, 3.0)
+
+    @pytest.mark.unit
+    def test_candidates_populate_command_dicts_from_tokens(self):
+        """Each candidate exposes decoded command_dicts (regression vs the old
+        pipeline path that surfaced per-candidate commands)."""
+        gen = NeuralVAEGenerator()
+        gen._model = MagicMock()
+        gen._decode_and_sample = MagicMock(
+            return_value=([1, 6, 9, 12, 12, 140, 2], None, 0.0, None, 0.5)
+        )
+
+        proposals = gen.generate_candidates("shape", num_candidates=2)
+
+        assert len(proposals) == 2
+        assert all(p.command_dicts for p in proposals)
+
+    @pytest.mark.unit
     def test_generate_with_conditioning(self):
         """generate() preserves conditioning source information."""
         gen = NeuralVAEGenerator()

@@ -61,6 +61,7 @@ class NeuralVAEGenerator(BaseNeuralGenerator):
         prompt: str,
         conditioning: ConditioningEmbeddings | None = None,
         error_context: dict[str, Any] | None = None,
+        target_dimensions: tuple[float, float, float] | None = None,
     ) -> CommandSequenceProposal:
         """Generate a command sequence from the VAE model.
 
@@ -68,9 +69,12 @@ class NeuralVAEGenerator(BaseNeuralGenerator):
             prompt: User prompt (stored in proposal for tracing).
             conditioning: Optional conditioning embeddings.
             error_context: Optional error context from a failed attempt.
+            target_dimensions: Optional ``(w, h, d)`` to condition generation on
+                (shifts the latent via the trained dimension encoder). Lets the
+                deployment/inference path use conditioning, not just training.
 
         Returns:
-            CommandSequenceProposal with decoded token sequence.
+            CommandSequenceProposal with decoded token sequence and command dicts.
         """
         if self._model is None:
             self._init_model()
@@ -86,12 +90,11 @@ class NeuralVAEGenerator(BaseNeuralGenerator):
         # orchestrator calls generate().
         with torch.no_grad():
             token_ids, _log_probs, entropy_value, latent_vector, confidence = (
-                self._decode_and_sample(temp)
+                self._decode_and_sample(temp, target_dimensions=target_dimensions)
             )
 
-        return CommandSequenceProposal(
+        proposal = CommandSequenceProposal(
             token_ids=token_ids,
-            command_dicts=[],
             source_prompt=prompt,
             conditioning_source=(
                 conditioning.source_type if conditioning else "unconditional"
@@ -101,6 +104,10 @@ class NeuralVAEGenerator(BaseNeuralGenerator):
             latent_vector=latent_vector,
             error_context=error_context,
         )
+        # Expose per-command structure (decoded from the sampled token ids) so
+        # downstream consumers see the same richness as the old pipeline path.
+        proposal.command_dicts = proposal.command_dicts_from_token_ids()
+        return proposal
 
     def generate_for_training(
         self,
@@ -191,11 +198,21 @@ class NeuralVAEGenerator(BaseNeuralGenerator):
         # Dimension conditioning: shift the latent by a learned offset of the
         # requested (w, h, d). dim_encoder is zero-initialized, so this is a
         # no-op until the conditioner is trained.
-        if target_dimensions is not None and hasattr(self._model, "dim_encoder"):
-            dim_t = torch.tensor(
-                [list(target_dimensions)], dtype=torch.float32, device=device
-            )
-            z = z + self._model.dim_encoder(dim_t)
+        if target_dimensions is not None:
+            if hasattr(self._model, "dim_encoder"):
+                dim_t = torch.tensor(
+                    [list(target_dimensions)], dtype=torch.float32, device=device
+                )
+                z = z + self._model.dim_encoder(dim_t)
+            else:
+                # Fail loudly rather than silently degrade to unconditional
+                # generation — a conditioning experiment must not pass quietly.
+                _log.warning(
+                    "target_dimensions=%s requested but the model has no "
+                    "dim_encoder; generating UNCONDITIONALLY. Rebuild the "
+                    "generator (a fresh _init_model attaches the conditioner).",
+                    target_dimensions,
+                )
         self._model.last_latent = z
 
         hidden = self._model.decode(z, seq_len=self.max_seq_len)
@@ -278,24 +295,25 @@ class NeuralVAEGenerator(BaseNeuralGenerator):
                 token_ids, _log_probs, entropy_value, latent_vector, confidence = (
                     self._decode_and_sample(self.temperature)
                 )
-                proposals.append(
-                    CommandSequenceProposal(
-                        token_ids=token_ids,
-                        command_dicts=[],
-                        source_prompt=prompt,
-                        conditioning_source=(
-                            conditioning.source_type
-                            if conditioning
-                            else "unconditional"
-                        ),
-                        confidence=confidence,
-                        generation_metadata=self._build_metadata(
-                            "STEPVAE", temperature=self.temperature
-                        ),
-                        latent_vector=latent_vector,
-                        entropy=entropy_value,
-                    )
+                candidate = CommandSequenceProposal(
+                    token_ids=token_ids,
+                    source_prompt=prompt,
+                    conditioning_source=(
+                        conditioning.source_type
+                        if conditioning
+                        else "unconditional"
+                    ),
+                    confidence=confidence,
+                    generation_metadata=self._build_metadata(
+                        "STEPVAE", temperature=self.temperature
+                    ),
+                    latent_vector=latent_vector,
+                    entropy=entropy_value,
                 )
+                # Expose per-command structure per candidate (decoded from the
+                # sampled token ids), matching the old pipeline-based behavior.
+                candidate.command_dicts = candidate.command_dicts_from_token_ids()
+                proposals.append(candidate)
 
         # Sort by confidence descending
         proposals.sort(key=lambda p: p.confidence, reverse=True)
