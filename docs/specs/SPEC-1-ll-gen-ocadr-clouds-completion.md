@@ -4,7 +4,7 @@
 |---|---|
 | **Spec ID** | SPEC-1 |
 | **Title** | Make `ll_gen`, `ll_ocadr`, and `ll_clouds` 100% working and real |
-| **Status** | In progress — M1 ✅ (PR #4, merged) · M4 ✅ (PR #5, merged) · M5 ✅ (PR #6, merged) · M2 ✅ (PR #7, in review) · M6 ◐ (quality gate + truth-up) · M3 ⬜ (training, pending data+compute) |
+| **Status** | Done — M1 ✅ (PR #4) · M2 ✅ (PR #7) · M3 ✅ (PRs #9/#11, VAE proof-of-life) · M4 ✅ (PR #5) · M5 ✅ (PR #6) · M6 ✅ (2026-06-09, ruff/black/mypy clean across the 3 packages; spec/status truthed up). Deferred by design (NG1/R2): VQ-VAE/diffusion proof-of-life training, true-DDPO diffusion log-prob, dimension-conditioning positive result — see `docs/plans/2026-06-09-finish-all-plans.md` Track B. |
 | **Author** | LatticeLabs (LayerDynamics) |
 | **Owner** | Maintainer (solo) |
 | **Created** | 2026-06-08 |
@@ -253,9 +253,9 @@ A milestone-complete spec is satisfied when **all** hold:
 
 | # | Question | Owner | Default if unanswered |
 |---|---|---|---|
-| OQ1 | Which exact DeepCAD/ABC subset + size for G2 training? | Maintainer | ⬜ OPEN (M3) — to be decided at M3.T3.1 when data+compute are available. |
+| OQ1 | Which exact DeepCAD/ABC subset + size for G2 training? | Maintainer | ✅ RESOLVED (M3) — `palapav/DeepCAD-DSL` on the HF Hub, materialized to 2000 train / 200 val JSON (gitignored; reproduced via `scripts/download_deepcad_subset.py`). |
 | OQ2 | Point-cloud backend for `ll_clouds`: numpy/scipy/trimesh only, or optional open3d accelerator? | Maintainer | ✅ RESOLVED (M5) — numpy/scipy/trimesh required; open3d not used (optional accelerator only). |
-| OQ3 | Commit checkpoints to git or host on HF Hub? | Maintainer | ⬜ OPEN (M3) — decide when the first checkpoints exist. |
+| OQ3 | Commit checkpoints to git or host on HF Hub? | Maintainer | ✅ RESOLVED (M3) — neither: the VAE checkpoint is 217 MB (>50 MB threshold), so it is **gitignored and deterministically reproduced** via `python -m ll_gen.training.proof_of_life` (seed 0), not committed or hosted. |
 | OQ4 | Smallest HF LLM to use for `ll_ocadr` tests/inference default? | Maintainer | ✅ RESOLVED (M4) — a tiny **offline** GPT-2 (n_embd 64) built in the test fixtures; no network/download. |
 | OQ5 | Should `ll_clouds` bridges live in `ll_clouds` or in `cadling`/`ll_ocadr`? | Maintainer | ✅ RESOLVED (M5) — in `ll_clouds`, lazily imported; verified `import ll_clouds` pulls in none of cadling/ll_ocadr/torch/trimesh. |
 
