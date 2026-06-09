@@ -171,8 +171,12 @@ class RLAlignmentTrainer:
                 "Disposal engine not initialized — call _init_training() first"
             )
 
-        # 1. Generate proposal WITH gradients (log-probs on the sampled trajectory)
-        proposal = self.generator.generate_for_training(prompt)
+        # 1. Generate proposal WITH gradients (log-probs on the sampled
+        # trajectory). target_dimensions also feeds the generator so a
+        # dimension-conditioned policy can act on the requested size.
+        proposal = self.generator.generate_for_training(
+            prompt, target_dimensions=target_dimensions
+        )
 
         # 2. Dispose (deterministic execution + validation — no grad needed)
         result = self._disposal_engine.dispose(proposal, export=False)

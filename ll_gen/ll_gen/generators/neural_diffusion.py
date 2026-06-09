@@ -155,8 +155,12 @@ class NeuralDiffusionGenerator(BaseNeuralGenerator):
         prompt: str,
         conditioning: ConditioningEmbeddings | None = None,
         error_context: dict[str, Any] | None = None,
+        target_dimensions: tuple[float, float, float] | None = None,
     ) -> LatentProposal:
         """Generate with a (decoupled) policy gradient signal for RL training.
+
+        ``target_dimensions`` is accepted for trainer-call uniformity (diffusion
+        does not yet condition on it).
 
         IMPORTANT — the REINFORCE signal returned here is currently DECOUPLED
         from the geometry that is actually produced. ``StructuredDiffusion``

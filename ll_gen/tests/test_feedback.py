@@ -610,6 +610,50 @@ class TestComputeReward:
         )
         assert compute_reward(solid) > compute_reward(face)
 
+    def test_dense_dimension_reward_is_closeness_weighted(self) -> None:
+        """With dense_dimension_reward a closer bbox earns strictly more reward
+        than a far one — the smooth gradient a dimension-conditioner needs."""
+        from ll_gen.proposals.disposal_result import DisposalResult, GeometryReport
+
+        cfg = FeedbackConfig(dense_dimension_reward=True, dimension_reward_scale=0.5)
+        target = (1.0, 1.0, 1.0)
+
+        def solid(dims):
+            bbox = (0.0, 0.0, 0.0, dims[0], dims[1], dims[2])
+            return DisposalResult(
+                shape=object(),
+                is_valid=True,
+                geometry_report=GeometryReport(
+                    bounding_box=bbox, solid_count=1, is_solid=True
+                ),
+            )
+
+        exact = compute_reward(solid((1.0, 1.0, 1.0)), cfg, target_dimensions=target)
+        near = compute_reward(solid((1.3, 1.3, 1.3)), cfg, target_dimensions=target)
+        far = compute_reward(solid((4.0, 4.0, 4.0)), cfg, target_dimensions=target)
+        # Strictly monotonic in closeness — a non-flat gradient everywhere.
+        assert exact > near > far
+
+    def test_dense_dimension_reward_off_by_default(self) -> None:
+        """Default config keeps the binary semantic match (no dense shaping)."""
+        from ll_gen.proposals.disposal_result import DisposalResult, GeometryReport
+
+        cfg = FeedbackConfig()  # dense_dimension_reward defaults False
+        assert cfg.dense_dimension_reward is False
+        far = DisposalResult(
+            shape=object(),
+            is_valid=True,
+            geometry_report=GeometryReport(
+                bounding_box=(0.0, 0.0, 0.0, 9.0, 9.0, 9.0),
+                solid_count=1,
+                is_solid=True,
+            ),
+        )
+        # A far-off bbox earns no dimensional reward under the binary default:
+        # validity (0.8, solid) + shape_constructed (0.16) only.
+        r = compute_reward(far, cfg, target_dimensions=(1.0, 1.0, 1.0))
+        assert r == pytest.approx(0.96)
+
     def test_compute_reward_no_shape(
         self,
         disposal_result_no_shape: DisposalResult,

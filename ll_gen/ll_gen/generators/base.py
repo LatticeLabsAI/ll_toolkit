@@ -214,8 +214,13 @@ class BaseNeuralGenerator(ABC):
         prompt: str,
         conditioning: ConditioningEmbeddings | None = None,
         error_context: dict[str, Any] | None = None,
+        target_dimensions: tuple[float, float, float] | None = None,
     ) -> BaseProposal:
         """Generate a proposal while retaining the computation graph for RL.
+
+        ``target_dimensions`` is accepted uniformly so the trainer can pass it to
+        any generator; subclasses that support dimension conditioning act on it,
+        the default implementation ignores it.
 
         Unlike ``generate()`` (which runs under ``torch.no_grad``), this
         method keeps gradients flowing so that ``proposal.log_probs`` is a
@@ -335,7 +340,14 @@ class BaseNeuralGenerator(ABC):
         # both trainer checkpoints and bare state dicts.
         if isinstance(state_dict, dict) and "model_state_dict" in state_dict:
             state_dict = state_dict["model_state_dict"]
-        self._model.load_state_dict(state_dict)
+        # strict=False so a checkpoint predating an added submodule (e.g. the
+        # dimension conditioner) still warm-starts the shared weights; log any
+        # missing/unexpected keys so a real mismatch is visible, not silent.
+        incompatible = self._model.load_state_dict(state_dict, strict=False)
+        if incompatible.missing_keys:
+            _log.info("Checkpoint missing keys (left at init): %s", incompatible.missing_keys)
+        if incompatible.unexpected_keys:
+            _log.warning("Checkpoint has unexpected keys (ignored): %s", incompatible.unexpected_keys)
         self._model = self._model.to(self.device)
         _log.info("Checkpoint loaded successfully")
 

@@ -107,24 +107,21 @@ class NeuralVAEGenerator(BaseNeuralGenerator):
         prompt: str,
         conditioning: ConditioningEmbeddings | None = None,
         error_context: dict[str, Any] | None = None,
+        target_dimensions: tuple[float, float, float] | None = None,
     ) -> CommandSequenceProposal:
         """Generate with gradients, computing log-probs on the sampled trajectory.
 
-        Runs the VAE forward pass *directly* (bypassing
-        ``CADGenerationPipeline.generate()`` which wraps everything in
-        ``torch.no_grad``).  This keeps the computation graph alive so
-        that the returned ``proposal.log_probs`` is a differentiable
-        scalar usable in a REINFORCE loss.
-
-        The key correctness property: each token is sampled **once** from
-        the logits produced by the live forward pass, and log-probs are
-        evaluated on that same sample — ensuring an unbiased REINFORCE
-        estimator.
+        Runs the shared ``_decode_and_sample`` with gradients live so the
+        returned ``proposal.log_probs`` is a differentiable scalar usable in a
+        REINFORCE loss. Each token is sampled once from the live forward pass and
+        its log-prob evaluated on that same sample — an unbiased estimator.
 
         Args:
             prompt: User prompt (stored for tracing).
             conditioning: Optional conditioning embeddings.
             error_context: Optional error context from a failed attempt.
+            target_dimensions: Optional ``(w, h, d)`` to condition generation on
+                (shifts the latent via the trained dimension encoder).
 
         Returns:
             CommandSequenceProposal with ``log_probs`` and ``entropy`` set.
@@ -134,7 +131,7 @@ class NeuralVAEGenerator(BaseNeuralGenerator):
 
         temp = self._adjust_temperature_for_error(self.temperature, error_context)
         token_ids, total_log_prob, entropy_value, latent_vector, confidence = (
-            self._decode_and_sample(temp)
+            self._decode_and_sample(temp, target_dimensions=target_dimensions)
         )
 
         return CommandSequenceProposal(
@@ -153,7 +150,10 @@ class NeuralVAEGenerator(BaseNeuralGenerator):
         )
 
     def _decode_and_sample(
-        self, temp: float, z: Any | None = None
+        self,
+        temp: float,
+        z: Any | None = None,
+        target_dimensions: tuple[float, float, float] | None = None,
     ) -> tuple[list[int], Any, float, np.ndarray | None, float]:
         """Sample one command trajectory from a latent ``z`` (prior if None).
 
@@ -188,6 +188,14 @@ class NeuralVAEGenerator(BaseNeuralGenerator):
         device = torch.device(self.device)
         if z is None:
             z = torch.randn(1, self._model.latent_dim, device=device)
+        # Dimension conditioning: shift the latent by a learned offset of the
+        # requested (w, h, d). dim_encoder is zero-initialized, so this is a
+        # no-op until the conditioner is trained.
+        if target_dimensions is not None and hasattr(self._model, "dim_encoder"):
+            dim_t = torch.tensor(
+                [list(target_dimensions)], dtype=torch.float32, device=device
+            )
+            z = z + self._model.dim_encoder(dim_t)
         self._model.last_latent = z
 
         hidden = self._model.decode(z, seq_len=self.max_seq_len)
@@ -425,6 +433,19 @@ class NeuralVAEGenerator(BaseNeuralGenerator):
                     vae_kwargs[attr] = getattr(vc, attr)
 
         self._model = STEPVAE(encoder_config=encoder_config, **vae_kwargs)
+
+        # Dimension conditioner: maps a target (w, h, d) to a latent-space
+        # offset added to z before decode (M3 follow-up). Attached as a model
+        # submodule so its parameters are optimized + checkpointed alongside the
+        # VAE. Zero-initialized so it starts as a no-op — conditioning is learned
+        # as a perturbation of the working unconditional model, not a random
+        # shove off the learned latent manifold.
+        import torch.nn as nn
+
+        dim_encoder = nn.Linear(3, self._model.latent_dim)
+        nn.init.zeros_(dim_encoder.weight)
+        nn.init.zeros_(dim_encoder.bias)
+        self._model.dim_encoder = dim_encoder
 
         # Load checkpoint if provided
         if self.checkpoint_path:
