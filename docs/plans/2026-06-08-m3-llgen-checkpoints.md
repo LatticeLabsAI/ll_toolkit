@@ -151,10 +151,11 @@ random-init validity is 6% on the RL-optimized `generate_for_training` decode an
 | `generate` (deployment pipeline) | 21% | **0%** | 21 | 0 |
 
 Per-epoch training validity: 0.25 → 0.27 → 0.32 → 0.52 → 0.72 → **0.90**;
-mean reward 0.69 → **0.92**. **ACCEPTANCE GATE MET** on the RL-optimized path:
-trained 82% ≫ baseline 6% (+76 pts) with diversity *rising* (6 → 65 distinct valid
-shapes) — genuine learning, not mode collapse. The RLAlignmentTrainer's entropy
-bonus (`entropy_coeff=0.01`) plus this diversity check rule out reward-hacking.
+mean reward 0.69 → **0.92**. Trained 82% ≫ baseline 6% on BRepCheck-validity
+(+76 pts). The `num_distinct_valid` bbox metric rose 6 → 65, which at the time
+looked like diversity — but see the structural inspection below: that metric
+cannot distinguish different parts from the same primitive at different scale,
+and the gain is in fact reward-hacking to non-solid valid faces.
 
 **Decode-path divergence — found and FIXED.** The first run exposed a real
 defect: `NeuralVAEGenerator.generate` (deployment, via `CADGenerationPipeline`)
@@ -171,9 +172,34 @@ other:
 | `generate_for_training` (RL) | 6% | **98%** | 63 |
 | **`generate` (deployment / orchestrator)** | 4% | **98%** | 63 |
 
-Per-epoch validity 0.25 → 0.98; reward 0.69 → 0.95. The **deployed** generator
-now reaches 98% prior-sampling validity with 63 distinct valid shapes — a
-genuine, *usable* proof-of-life. Acceptance gate met on both paths.
+Per-epoch validity 0.25 → 0.98; reward 0.69 → 0.95. Both decode paths reach 98%
+BRepCheck-validity after RL.
+
+### Structural inspection (T3.5) — honest reading: reward-hacking, not solid CAD
+The `num_distinct_valid` bbox metric is too weak (it cannot tell 63 different
+parts from 63 cylinders of different radius). A structural tally of 100 trained
+samples (no retrain, on `checkpoints/vae_rl.pt`) shows:
+
+| | valid (BRepCheck) | **actual solids** (`solid_count ≥ 1`) |
+|---|---|---|
+| random-init | 6/100 | 3/100 |
+| RL-trained | 98/100 | **7/100** |
+
+90 of the 98 "valid" trained outputs are `solid_count=0, face_count=1` — single
+**planar faces** built from stacks of concentric CIRCLEs, almost no EXTRUDE. The
+heldout prompts carry no `target_dimensions`, so `compute_reward`'s semantic
+term never fires and the reward is **pure topological validity, which a single
+planar face passes**. The policy therefore reward-hacked to "emit valid circles",
+not "build solids" — the actual-solid rate moved only 3% → 7%.
+
+**Honest conclusion:** M3 proves the *training machinery* end-to-end — the
+executor fix, the decode unification, the dispose → reward → gradient loop, and
+FR-G5 all work, and RL provably optimizes its reward (6% → 98%). It does **not**
+demonstrate real solid CAD generation. That requires a reward that rewards a
+closed solid (e.g. gate `validity_reward` on `geometry_report.is_solid` /
+`solid_count ≥ 1`) and prompt/dimension conditioning so the prompt actually
+constrains the output. Recorded as the honest result rather than relabeling
+98% face-validity as success.
 
 Notes: random-init **VAE** emits multi-command sketches → 27% pass full BRep
 validation (close to DeepCAD's ~24% unconditional baseline — a good sanity
