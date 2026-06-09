@@ -345,9 +345,14 @@ class BaseNeuralGenerator(ABC):
         # missing/unexpected keys so a real mismatch is visible, not silent.
         incompatible = self._model.load_state_dict(state_dict, strict=False)
         if incompatible.missing_keys:
-            _log.info("Checkpoint missing keys (left at init): %s", incompatible.missing_keys)
+            _log.info(
+                "Checkpoint missing keys (left at init): %s", incompatible.missing_keys
+            )
         if incompatible.unexpected_keys:
-            _log.warning("Checkpoint has unexpected keys (ignored): %s", incompatible.unexpected_keys)
+            _log.warning(
+                "Checkpoint has unexpected keys (ignored): %s",
+                incompatible.unexpected_keys,
+            )
         self._model = self._model.to(self.device)
         _log.info("Checkpoint loaded successfully")
 
@@ -608,3 +613,169 @@ class BaseNeuralGenerator(ABC):
         else:
             # INVALID_PARAMS, TOLERANCE_VIOLATION
             return base_temperature
+
+    def decode_command_logits(
+        self,
+        temperature: float = 1.0,
+        latent: Any | None = None,
+    ) -> tuple[Any, list[Any]] | None:
+        """Decode one batch of per-position command/parameter logits.
+
+        Runs the model's decoder to produce the policy's distribution over a
+        command-token sequence, WITHOUT sampling it. Used by
+        :meth:`score_token_sequence` to teacher-force the log-probability of a
+        *given* sequence.
+
+        Args:
+            temperature: Accepted for interface parity (the scorer applies the
+                scaling); logits are returned unscaled.
+            latent: Optional generator-specific latent to decode from. When
+                provided (e.g. a proposal's own ``latent_vector``), the decode
+                is **deterministic**, yielding a stable reconstruction-
+                likelihood. When ``None``, command-sequence generators draw a
+                fresh prior sample, so the result is a single-sample,
+                **non-deterministic** estimate.
+
+        Returns:
+            ``(command_logits, param_logits_2d)`` where ``command_logits``
+            is a ``[S, C]`` tensor and ``param_logits_2d`` is a list of
+            ``[S, P]`` tensors (one per parameter slot), or ``None`` for
+            generators that do not emit command-token sequences (e.g.
+            diffusion, which models continuous B-rep latents). Command-
+            sequence generators (VAE, VQ-VAE) override this.
+        """
+        return None
+
+    def score_token_sequence(
+        self,
+        token_ids: Any,
+        temperature: float = 1.0,
+        latent: Any | None = None,
+    ) -> tuple[Any, float]:
+        """Teacher-forcing log-probability of ``token_ids`` under the policy.
+
+        Re-decodes policy logits (:meth:`decode_command_logits`) and gathers
+        the log-probability of the *provided* ``token_ids`` under those
+        distributions — the exact inverse of the sampling performed in
+        ``generate_for_training``.
+
+        This is an **evaluation / diagnostic** score (sequence perplexity,
+        reconstruction-likelihood logging): it runs a forward pass that is
+        *not* the trajectory used for the RL gradient, so it must **not** be
+        fed back as the REINFORCE signal. For the RL gradient use
+        ``proposal.log_probs`` from ``generate_for_training`` (the sampled
+        trajectory).
+
+        .. important::
+            **Determinism depends on ``latent``.** When ``latent`` is ``None``
+            (the default), command-sequence generators decode from a *fresh
+            random prior draw*, so repeated calls on the *same* ``token_ids``
+            return *different* values — a one-sample prior estimate, NOT a
+            stable likelihood. Pass the sequence's own latent (e.g.
+            ``proposal.latent_vector``) for a deterministic, meaningful
+            reconstruction-likelihood — this is how ``evaluate_validity`` calls
+            it.
+
+        Args:
+            token_ids: Sequence of token IDs (geotoken vocabulary), optionally
+                BOS-prefixed, as produced by the generator's decode.
+            temperature: Sampling temperature the logits are scaled by (match
+                the temperature used when the sequence was generated).
+            latent: Optional latent to decode from for a deterministic score
+                (see the determinism note above).
+
+        Returns:
+            ``(total_log_prob, mean_entropy)``. ``total_log_prob`` is a
+            differentiable scalar tensor (sum of per-token log-probs), or
+            ``None`` if no token could be scored / the generator does not
+            emit command-token sequences. ``mean_entropy`` is a float.
+        """
+        import torch
+        import torch.nn.functional as functional
+
+        # Decode in eval mode so dropout/other stochastic layers are disabled —
+        # an evaluation score must be deterministic given a fixed latent. The
+        # prior training/eval state is restored so a concurrent training loop is
+        # unaffected.
+        model = getattr(self, "_model", None)
+        was_training = bool(getattr(model, "training", False))
+        if model is not None and hasattr(model, "eval"):
+            model.eval()  # unconditional: also resets any submodule left in train
+        try:
+            decoded = self.decode_command_logits(temperature=temperature, latent=latent)
+        finally:
+            if was_training and model is not None:
+                model.train()
+        if decoded is None:
+            _log.info(
+                "%s does not emit command-token sequences; sequence scoring "
+                "is not applicable (use generate_for_training for its policy "
+                "log-prob).",
+                type(self).__name__,
+            )
+            return None, 0.0
+
+        command_logits, param_logits_2d = decoded
+        if isinstance(command_logits, np.ndarray):
+            command_logits = torch.from_numpy(command_logits).float()
+        if command_logits.ndim == 3:
+            command_logits = command_logits[0]  # strip batch dim → [S, C]
+
+        token_to_cmd = {tok: cmd for cmd, tok in CMD_TOKEN_MAP.items()}
+        ids = [int(t) for t in token_ids]
+        idx = 1 if ids and ids[0] == BOS_TOKEN_ID else 0
+
+        log_probs_accum: list[Any] = []
+        entropy_accum: list[Any] = []
+        temp = max(temperature, 1e-8)
+        seq_len = int(command_logits.shape[0])
+        pos = 0
+
+        while idx < len(ids) and pos < seq_len:
+            cmd_token = ids[idx]
+            idx += 1
+            if cmd_token not in token_to_cmd:
+                break
+            cmd_type = token_to_cmd[cmd_token]
+
+            cmd_log_probs = functional.log_softmax(command_logits[pos] / temp, dim=-1)
+            log_probs_accum.append(cmd_log_probs[cmd_type])
+            entropy_accum.append(-(cmd_log_probs.exp() * cmd_log_probs).sum())
+
+            if cmd_token in (EOS_CMD_TOKEN_ID, EOS_TOKEN_ID):
+                break
+
+            # Score the active parameter slots for this command, in the same
+            # order they were emitted (masked slots are skipped identically).
+            for param_idx in range(16):
+                if param_idx >= len(param_logits_2d):
+                    break
+                if not PARAMETER_MASKS[cmd_type][param_idx]:
+                    continue
+                if idx >= len(ids):
+                    break
+                param_val = ids[idx] - PARAM_OFFSET
+                idx += 1
+
+                param_tensor = param_logits_2d[param_idx]
+                if isinstance(param_tensor, np.ndarray):
+                    param_tensor = torch.from_numpy(param_tensor).float()
+                if param_tensor.ndim == 3:
+                    param_tensor = param_tensor[0]
+                if param_tensor.ndim > 1:
+                    param_tensor = param_tensor[pos]
+
+                param_log_probs = functional.log_softmax(param_tensor / temp, dim=-1)
+                if 0 <= param_val < param_log_probs.shape[-1]:
+                    log_probs_accum.append(param_log_probs[param_val])
+                    entropy_accum.append(
+                        -(param_log_probs.exp() * param_log_probs).sum()
+                    )
+            pos += 1
+
+        if not log_probs_accum:
+            return None, 0.0
+
+        total_log_prob = torch.stack(log_probs_accum).sum()
+        mean_entropy = float(torch.stack(entropy_accum).mean().detach().cpu())
+        return total_log_prob, mean_entropy

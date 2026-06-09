@@ -194,6 +194,33 @@ def load_generator_checkpoint(
     return checkpoint if isinstance(checkpoint, dict) else {}
 
 
+def _score_proposal_sequence(
+    generator: BaseNeuralGenerator, proposal: BaseProposal
+) -> float | None:
+    """Teacher-forcing log-prob of a proposal's token sequence under the policy.
+
+    Scores the proposal from its *own* latent (``proposal.latent_vector``) so
+    the result is a deterministic reconstruction-likelihood, not a noisy prior
+    sample (see :meth:`BaseNeuralGenerator.score_token_sequence`). Returns
+    ``None`` when the generator emits no command-token sequence (e.g. diffusion)
+    or scoring is unavailable — those samples are simply excluded from the mean.
+    """
+    scorer = getattr(generator, "score_token_sequence", None)
+    token_ids = getattr(proposal, "token_ids", None)
+    if scorer is None or not token_ids:
+        return None
+    try:
+        log_prob, _entropy = scorer(
+            token_ids, latent=getattr(proposal, "latent_vector", None)
+        )
+    except Exception as exc:  # diagnostic metric must never break evaluation
+        _log.debug("sequence scoring failed: %s", exc)
+        return None
+    if log_prob is None:
+        return None
+    return float(log_prob.detach().cpu())
+
+
 def _make_sampler(generator: BaseNeuralGenerator, decode_mode: str):
     """Return a ``prompt -> proposal`` callable for the requested decode path.
 
@@ -285,6 +312,7 @@ def evaluate_validity(
 
     model = getattr(generator, "_model", None)
     results: list[DisposalResult] = []
+    seq_log_probs: list[float] = []
     n_errors = 0
 
     with _maybe_no_grad(model):
@@ -297,6 +325,9 @@ def evaluate_validity(
             for _ in range(n_samples):
                 try:
                     proposal = sampler(prompt)
+                    seq_lp = _score_proposal_sequence(generator, proposal)
+                    if seq_lp is not None:
+                        seq_log_probs.append(seq_lp)
                     result = dispose_fn(proposal)
                     result.reward_signal = compute_reward(
                         result,
@@ -332,13 +363,18 @@ def evaluate_validity(
         )
 
     metrics = MetricsComputer().compute_all(results)
+    if seq_log_probs:
+        metrics.mean_sequence_log_prob = float(sum(seq_log_probs) / len(seq_log_probs))
     _log.info(
-        "validity_rate=%.4f compile_rate=%.4f mean_reward=%.4f (n=%d, errors=%d)",
+        "validity_rate=%.4f compile_rate=%.4f mean_reward=%.4f "
+        "mean_seq_log_prob=%.4f (n=%d, errors=%d, scored=%d)",
         metrics.validity_rate,
         metrics.compile_rate,
         metrics.mean_reward,
+        metrics.mean_sequence_log_prob,
         metrics.num_samples,
         n_errors,
+        len(seq_log_probs),
     )
     return metrics
 

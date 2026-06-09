@@ -101,6 +101,7 @@ class TestGenerationMetrics:
             "num_valid",
             "num_compiled",
             "num_distinct_valid",
+            "mean_sequence_log_prob",
         }
         assert set(summary.keys()) == expected_keys
 

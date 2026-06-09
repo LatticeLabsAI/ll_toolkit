@@ -131,7 +131,10 @@ def euclidean_cluster(
             continue
         visited[i] = True
         if len(neighbours[i]) < min_points:
-            continue  # leave as noise for now (may be absorbed by a cluster)
+            # Not a core point: stays labelled noise (-1) unless a later core
+            # point reaches it as a border point (absorbed at the labels[q]
+            # check below). This is standard DBSCAN border handling.
+            continue
 
         labels[i] = cluster_id
         seeds = list(neighbours[i])

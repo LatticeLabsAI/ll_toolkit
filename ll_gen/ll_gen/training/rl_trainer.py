@@ -355,29 +355,38 @@ class RLAlignmentTrainer:
         self,
         token_ids: np.ndarray,
     ) -> tuple[Any | None, float]:
-        """Get log probabilities for a token sequence via teacher-forcing.
+        """Teacher-forcing log-probability of a token sequence under the policy.
 
-        .. deprecated::
-            This method runs a separate forward pass that is disconnected
-            from the sampling trajectory, producing biased gradients for
-            stochastic models (VAE, diffusion).  Use
-            ``generator.generate_for_training()`` for RL training instead.
+        Delegates to ``generator.score_token_sequence`` (defined on
+        :class:`~ll_gen.generators.base.BaseNeuralGenerator`), which re-decodes
+        fresh policy logits and gathers the log-probability of the *given*
+        ``token_ids`` under those distributions.
+
+        This is an **evaluation / diagnostic** score (sequence perplexity,
+        off-policy logging) — it is computed from a forward pass that is *not*
+        the sampled trajectory, so it must **not** be used as the RL gradient.
+        The REINFORCE update in :meth:`train_step` instead uses
+        ``proposal.log_probs`` from ``generate_for_training`` (the actual
+        sampled trajectory). See that method for the on-policy signal.
 
         Args:
-            token_ids: Array of token IDs to compute log_probs for.
+            token_ids: Array of token IDs to score.
 
         Returns:
-            Tuple of (log_probs tensor or None, entropy value).
-            log_probs shape: (seq_len,) or (seq_len * num_params,)
-            entropy: scalar value
+            Tuple of (log_probs tensor or None, entropy value). ``log_probs``
+            is a differentiable scalar (sum of per-token log-probs), or None
+            when the generator does not emit command-token sequences (e.g.
+            diffusion) or no token could be scored.
         """
-        raise NotImplementedError(
-            "_get_log_probs() ran a forward pass disconnected from the "
-            "sampling trajectory, producing biased gradients for stochastic "
-            "models (VAE, diffusion). Use generator.generate_for_training() "
-            "which returns log_probs on the actual sampled trajectory via "
-            "proposal.log_probs."
-        )
+        scorer = getattr(self.generator, "score_token_sequence", None)
+        if scorer is None:
+            _log.warning(
+                "Generator %s has no score_token_sequence(); cannot compute "
+                "sequence log-probs.",
+                type(self.generator).__name__,
+            )
+            return None, 0.0
+        return scorer(token_ids)
 
     def train_epoch(
         self,

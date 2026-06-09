@@ -158,6 +158,75 @@ class NeuralVQVAEGenerator(BaseNeuralGenerator):
             error_context=error_context,
         )
 
+    def decode_command_logits(
+        self,
+        temperature: float = 1.0,
+        latent: Any | None = None,
+    ) -> tuple[Any, list[Any]]:
+        """Decode per-position command/parameter logits for sequence scoring.
+
+        Samples codes from the three autoregressive codebook decoders (no
+        gradient on the code draw), then deterministically decodes them to
+        features and projects to command/parameter logits *with* gradients —
+        so the log-probabilities teacher-forced in
+        :meth:`BaseNeuralGenerator.score_token_sequence` are differentiable
+        through the projection/decoder.
+
+        Args:
+            temperature: Accepted for interface parity (the scorer applies the
+                scaling); logits are returned unscaled.
+            latent: Accepted for interface parity with the VAE. The VQ-VAE
+                policy lives at the codebook level (discrete codes), not a
+                continuous latent, so a caller-supplied ``latent`` is **not**
+                applicable here — codes are always sampled fresh. The score is
+                therefore a single-sample estimate; see the determinism note on
+                :meth:`BaseNeuralGenerator.score_token_sequence`.
+
+        Returns:
+            ``(command_logits [S, C], param_logits_2d list of [S, P])``.
+        """
+        import torch
+        from stepnet.vqvae import DisentangledCodebooks
+
+        if self._model is None:
+            self._init_model()
+
+        device = torch.device(self.device)
+
+        def _sample_codes(decoder: Any, max_codes: int) -> torch.Tensor:
+            generated = torch.full(
+                (1, 1), decoder.bos_token_id, dtype=torch.long, device=device
+            )
+            with torch.no_grad():
+                for _step in range(max_codes):
+                    logits = decoder(generated)
+                    next_logits = logits[:, -1, :] / max(temperature, 1e-8)
+                    dist = torch.distributions.Categorical(logits=next_logits[0])
+                    next_token = dist.sample()
+                    generated = torch.cat([generated, next_token.view(1, 1)], dim=1)
+            return generated[:, 1:]
+
+        topo_codes = _sample_codes(
+            self._model.topology_ar_decoder, DisentangledCodebooks.TOPOLOGY_NUM_CODES
+        ).clamp(0, self._model.codebooks.topology_codebook.num_embeddings - 1)
+        geom_codes = _sample_codes(
+            self._model.geometry_ar_decoder, DisentangledCodebooks.GEOMETRY_NUM_CODES
+        ).clamp(0, self._model.codebooks.geometry_codebook.num_embeddings - 1)
+        extr_codes = _sample_codes(
+            self._model.extrusion_ar_decoder, DisentangledCodebooks.EXTRUSION_NUM_CODES
+        ).clamp(0, self._model.codebooks.extrusion_codebook.num_embeddings - 1)
+
+        reconstructed = self._model.decode_from_codes(
+            topo_codes, geom_codes, extr_codes
+        )
+        if reconstructed.dim() == 2:
+            reconstructed = reconstructed.unsqueeze(1)
+
+        command_logits = self._pipeline._project_to_command_logits(reconstructed)[0]
+        param_logits = self._pipeline._project_to_param_logits(reconstructed)
+        param_logits_2d = [pl[0] for pl in param_logits]
+        return command_logits, param_logits_2d
+
     def generate_for_training(
         self,
         prompt: str,

@@ -88,7 +88,11 @@ class NeuralDiffusionGenerator(BaseNeuralGenerator):
                     for k, v in output["stage_latents"].items()
                 }
         else:
-            face_grids = self._create_placeholder_face_grids(output)
+            # Bare-tensor output (no stage dict): the sampled latent IS the
+            # geometry representation this model produces — StructuredDiffusion
+            # has no separate latent→grid decoder — so surface it directly,
+            # exactly as the dict path does for its stage latents above.
+            face_grids = self._latent_to_face_grids(output)
 
         if not face_grids and not edge_points:
             _log.warning(
@@ -480,33 +484,28 @@ class NeuralDiffusionGenerator(BaseNeuralGenerator):
             _log.warning(f"Unexpected tensor shape: {tensor.shape}")
             return [tensor]
 
-    def _create_placeholder_face_grids(
+    def _latent_to_face_grids(
         self,
         latent_tensor: Any,
     ) -> list[np.ndarray]:
-        """Create placeholder face grids from latent tensor shape.
+        """Surface a bare-tensor diffusion output as face-grid arrays.
+
+        ``StructuredDiffusion.sample()`` normally returns a per-stage dict
+        whose ``face_positions`` / ``face_geometry`` latents are consumed by
+        :meth:`_extract_geometry_from_output`. When a caller hands this method
+        a bare tensor instead, that tensor *is* the model's geometry latent —
+        the model has no separate latent→grid decoder — so it is converted to
+        numpy and returned directly, identically to how the dict path handles
+        its stage latents (see :meth:`_tensor_to_numpy_list`). A leading batch
+        dimension is split into one array per sample.
 
         Args:
-            latent_tensor: Raw latent output tensor.
+            latent_tensor: Raw latent output tensor from the diffusion model.
 
         Returns:
-            List of face grid arrays (U×V×3).
+            List of latent arrays, one per face/sample.
         """
-        latent = self._tensor_to_numpy(latent_tensor)
-
-        # Try to infer number of faces from latent shape
-        if latent.ndim >= 2:
-            num_faces = max(1, latent.shape[0])
-        else:
-            num_faces = 1
-
-        _log.warning(
-            "Model produced no decodable face grids from latent "
-            "(shape=%s); returning zero-valued placeholder grids.",
-            latent.shape,
-        )
-        face_grids = [np.zeros((32, 32, 3), dtype=np.float32) for _ in range(num_faces)]
-        return face_grids
+        return self._tensor_to_numpy_list(latent_tensor)
 
     def _compute_confidence(
         self,

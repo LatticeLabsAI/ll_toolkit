@@ -35,6 +35,11 @@ class GenerationMetrics:
         num_distinct_valid: Number of distinct valid shapes (by rounded bounding-
             box dimensions). Guards against mode collapse inflating the validity
             rate with the same shape repeated.
+        mean_sequence_log_prob: Mean teacher-forcing log-probability of the
+            generated token sequences under the policy, scored from each
+            proposal's own latent (a deterministic reconstruction-likelihood
+            diagnostic). 0.0 when the generator emits no command-token sequence
+            (e.g. diffusion). Populated by ``evaluate_validity``.
     """
 
     validity_rate: float = 0.0
@@ -48,6 +53,7 @@ class GenerationMetrics:
     num_valid: int = 0
     num_compiled: int = 0
     num_distinct_valid: int = 0
+    mean_sequence_log_prob: float = 0.0
 
     def summary(self) -> dict[str, Any]:
         """Generate a summary dict suitable for logging or JSON export.
@@ -67,6 +73,7 @@ class GenerationMetrics:
             "num_valid": self.num_valid,
             "num_compiled": self.num_compiled,
             "num_distinct_valid": self.num_distinct_valid,
+            "mean_sequence_log_prob": self.mean_sequence_log_prob,
         }
 
 
