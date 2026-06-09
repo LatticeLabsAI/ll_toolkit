@@ -452,7 +452,6 @@ module = [
     "ll_gen.embeddings.*",
     "ll_gen.conditioning.*",
     "ll_gen.disposal.*",
-    "ll_gen.pipeline.*",
     "ll_gen.training.*",
     "ll_gen.datasets.*",
     "ll_gen.feedback.*",
@@ -462,11 +461,13 @@ module = [
     "ll_ocadr.vllm.run_ll_ocadr",
     "ll_ocadr.vllm.run_ll_ocadr_eval_batch",
 ]
-# union-attr/attr-defined/no-any-return: dynamic attribute access on Any-typed
-# nn.Modules and OCC handles. arg-type/call-arg/call-overload/operator/dict-item:
-# the OCC SWIG bindings and numpy struct returns ship no type stubs, so calls
-# into them are uncheckable. All structural codes (var-annotated, override,
-# return-value, assignment, valid-type) stay ON and are fixed in code.
+# These are the deep library-internal modules (model forward passes, OCC
+# tessellation, numpy struct parsing). union-attr/attr-defined/no-any-return:
+# dynamic attribute access on Any-typed nn.Modules and OCC handles. arg-type/
+# call-arg/call-overload/operator/dict-item: OCC SWIG bindings and numpy struct
+# returns ship no stubs. assignment/return-value/override/misc: heterogeneous
+# record building, lazy `x = None` init, covariant returns, and calling
+# lazily-initialised Optional callables — all at the untyped-library boundary.
 disable_error_code = [
     "union-attr",
     "attr-defined",
@@ -476,10 +477,27 @@ disable_error_code = [
     "call-overload",
     "operator",
     "dict-item",
-    "assignment",   # heterogeneous dict/record building + lazy `x = None` init
-    "return-value", # returning untyped torch/numpy/OCC results
-    "override",     # covariant list returns + parallel same-named helpers (safe)
-    "misc",         # calling lazily-initialised Optional callables
+    "assignment",
+    "return-value",
+    "override",
+    "misc",
+]
+
+# Orchestration layer — held to a TIGHTER standard than the library-internal
+# modules above: only the dynamic-attribute / untyped-library-call codes are
+# off. The structural codes (assignment, return-value, override, misc) stay ON
+# and are fixed in code (e.g. typed lazy-init attributes + non-None asserts).
+[[tool.mypy.overrides]]
+module = ["ll_gen.pipeline.*"]
+disable_error_code = [
+    "union-attr",
+    "attr-defined",
+    "no-any-return",
+    "arg-type",
+    "call-arg",
+    "call-overload",
+    "operator",
+    "dict-item",
 ]
 
 # ============================================================================

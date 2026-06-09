@@ -20,7 +20,10 @@ import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from transformers import CLIPModel, CLIPProcessor
 
 from ll_gen.proposals.disposal_result import GeometryReport
 
@@ -76,8 +79,8 @@ class VisualVerifier:
     ) -> None:
         self.dimension_tolerance = dimension_tolerance
         self.vlm_backend = vlm_backend
-        self._clip_model = None
-        self._clip_processor = None
+        self._clip_model: CLIPModel | None = None
+        self._clip_processor: CLIPProcessor | None = None
 
     def verify(
         self,
@@ -347,9 +350,10 @@ class VisualVerifier:
             )
         model = self._clip_model
         processor = self._clip_processor
+        assert model is not None and processor is not None  # just initialized above
 
         # Load images
-        images = []
+        images: list[Any] = []
         for rp in render_paths:
             if rp.exists():
                 try:
