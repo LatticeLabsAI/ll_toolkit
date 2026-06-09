@@ -137,14 +137,24 @@ trained 82% ≫ baseline 6% (+76 pts) with diversity *rising* (6 → 65 distinct
 shapes) — genuine learning, not mode collapse. The RLAlignmentTrainer's entropy
 bonus (`entropy_coeff=0.01`) plus this diversity check rule out reward-hacking.
 
-**KNOWN DEFECT (follow-up):** `NeuralVAEGenerator.generate` (deployment, via
-`CADGenerationPipeline`) and `generate_for_training` (RL) are *different* decoders.
-RL optimizes the latter; the former is only skewed through shared weights and
-*regresses* (21% → 0%). The checkpoint is therefore not yet usable through the
-`GenerationOrchestrator`. Fix = unify the two decode paths so `generate` samples
-the same trajectory `generate_for_training` does (under `no_grad`). Until then the
-proof-of-life is on the RL-optimized decode path, which is the path the reward
-actually trains.
+**Decode-path divergence — found and FIXED.** The first run exposed a real
+defect: `NeuralVAEGenerator.generate` (deployment, via `CADGenerationPipeline`)
+and `generate_for_training` (RL) were *different* decoders, so RL improved only
+the latter (82%) while the deployment path *regressed* (21% → 0%) through shared
+weights — the checkpoint was not orchestrator-usable. Fixed by extracting a
+shared `_decode_and_sample` so `generate` samples the same trajectory
+`generate_for_training` does (under `no_grad`); `generate_candidates` still uses
+the pipeline (same-pattern follow-up). After the fix, both paths track each
+other:
+
+| Decode path | Baseline valid | Trained valid | Trained distinct |
+|---|---|---|---|
+| `generate_for_training` (RL) | 6% | **98%** | 63 |
+| **`generate` (deployment / orchestrator)** | 4% | **98%** | 63 |
+
+Per-epoch validity 0.25 → 0.98; reward 0.69 → 0.95. The **deployed** generator
+now reaches 98% prior-sampling validity with 63 distinct valid shapes — a
+genuine, *usable* proof-of-life. Acceptance gate met on both paths.
 
 Notes: random-init **VAE** emits multi-command sketches → 27% pass full BRep
 validation (close to DeepCAD's ~24% unconditional baseline — a good sanity
