@@ -26,8 +26,39 @@ from __future__ import annotations
 
 __version__ = "0.1.0"
 
-# Public symbols are re-exported here as each subpackage is implemented so that
-# ``from ll_brepnet import <X>`` mirrors the documented API. They are imported
-# lazily inside the subpackages (which pull in torch / pythonocc) to keep
-# ``import ll_brepnet`` cheap and dependency-light.
-__all__ = ["__version__"]
+import importlib
+
+# Public API. Resolved lazily (PEP 562) so ``import ll_brepnet`` stays cheap and
+# does not eagerly pull in torch / pythonocc / cadling: the heavy module is only
+# imported the first time the attribute is accessed.
+_LAZY_EXPORTS = {
+    "LLBRepNet": "ll_brepnet.models.ll_brepnet",
+    "UVNetSurfaceEncoder": "ll_brepnet.models.uvnet_encoders",
+    "UVNetCurveEncoder": "ll_brepnet.models.uvnet_encoders",
+    "BRepDataset": "ll_brepnet.dataloaders.brep_dataset",
+    "BRepDataModule": "ll_brepnet.dataloaders.brep_dataset",
+    "BRepBatch": "ll_brepnet.dataloaders.brep_dataset",
+    "brep_collate_fn": "ll_brepnet.dataloaders.brep_dataset",
+    "MaxNumFacesSampler": "ll_brepnet.dataloaders.max_num_faces_loader",
+    "BRepDataExtractor": "ll_brepnet.pipelines.extract_brepnet_data_from_step",
+    "extract_brepnet_data_from_step": "ll_brepnet.pipelines.extract_brepnet_data_from_step",
+    "extract_step_files": "ll_brepnet.pipelines.extract_brepnet_data_from_step",
+    "extract_brepnet_data_from_json": "ll_brepnet.pipelines.extract_brepnet_data_from_json",
+    "build_dataset_file": "ll_brepnet.pipelines.build_dataset_file",
+    "prepare_fusion360": "ll_brepnet.pipelines.quickstart",
+    "evaluate_folder": "ll_brepnet.eval.evaluate",
+    "do_training": "ll_brepnet.train",
+}
+
+__all__ = ["__version__", *sorted(_LAZY_EXPORTS)]
+
+
+def __getattr__(name: str):
+    module_path = _LAZY_EXPORTS.get(name)
+    if module_path is None:
+        raise AttributeError(f"module 'll_brepnet' has no attribute {name!r}")
+    return getattr(importlib.import_module(module_path), name)
+
+
+def __dir__():
+    return sorted([*globals().keys(), *_LAZY_EXPORTS])

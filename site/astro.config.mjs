@@ -52,6 +52,7 @@ export default defineConfig({
 						{ label: 'll_ocadr', items: [{ autogenerate: { directory: 'll_ocadr' } }] },
 						{ label: 'll_gen', items: [{ autogenerate: { directory: 'll_gen' } }] },
 						{ label: 'll_clouds', items: [{ autogenerate: { directory: 'll_clouds' } }] },
+						{ label: 'll_brepnet', items: [{ autogenerate: { directory: 'll_brepnet' } }] },
 					],
 				},
 				{ label: 'Roadmap', items: [{ autogenerate: { directory: 'roadmap' } }] },

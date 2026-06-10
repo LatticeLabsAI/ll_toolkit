@@ -24,6 +24,9 @@ from __future__ import annotations
 
 import argparse
 import logging
+import multiprocessing
+import os
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -433,6 +436,74 @@ def _iter_step_files(path: Path) -> list[Path]:
     return files
 
 
+def _extract_one(task: tuple) -> str | None:
+    """Worker: extract one STEP file to ``.npz``; returns the path or ``None``.
+
+    Top-level (picklable) so it can run inside a ``ProcessPoolExecutor``.
+    """
+    step_file, output_path, scale_body, num_u, num_v, force_regeneration = task
+    out_npz = Path(output_path) / f"{Path(step_file).stem}.npz"
+    if out_npz.exists() and not force_regeneration:
+        return str(out_npz)
+    try:
+        extractor = BRepDataExtractor(
+            Path(step_file), scale_body=scale_body, num_u=num_u, num_v=num_v
+        )
+        return str(extractor.process(Path(output_path)))
+    except Exception as exc:
+        _log.error("Failed to extract %s: %s", Path(step_file).name, exc)
+        return None
+
+
+def extract_step_files(
+    step_files: list[Path],
+    output_path: Path,
+    scale_body: bool = True,
+    num_u: int = NUM_U,
+    num_v: int = NUM_V,
+    force_regeneration: bool = True,
+    num_workers: int = 1,
+) -> list[Path]:
+    """Extract ``.npz`` records for an explicit list of STEP files.
+
+    Args:
+        step_files: The STEP files to extract.
+        output_path: Directory to write ``.npz`` records into.
+        scale_body: Normalise each solid into the unit box.
+        num_u, num_v: UV-grid resolution.
+        force_regeneration: Re-extract even if the ``.npz`` already exists.
+        num_workers: Parallel worker processes (``>1`` uses a process pool).
+
+    Returns:
+        The list of written ``.npz`` paths.
+    """
+    # Keep each worker single-threaded for OpenMP safety on macOS; children of
+    # the process pool inherit this from the parent environment.
+    os.environ.setdefault("OMP_NUM_THREADS", "1")
+
+    output_path = Path(output_path)
+    output_path.mkdir(parents=True, exist_ok=True)
+    tasks = [
+        (str(f), str(output_path), scale_body, num_u, num_v, force_regeneration) for f in step_files
+    ]
+
+    written: list[Path] = []
+    if num_workers and num_workers > 1 and len(tasks) > 1:
+        ctx = multiprocessing.get_context("spawn")
+        with ProcessPoolExecutor(max_workers=num_workers, mp_context=ctx) as pool:
+            for res in pool.map(_extract_one, tasks, chunksize=4):
+                if res:
+                    written.append(Path(res))
+    else:
+        for task in tasks:
+            res = _extract_one(task)
+            if res:
+                written.append(Path(res))
+
+    _log.info("Extracted %d/%d STEP files", len(written), len(tasks))
+    return written
+
+
 def extract_brepnet_data_from_step(
     step_path: Path,
     output_path: Path,
@@ -440,6 +511,7 @@ def extract_brepnet_data_from_step(
     num_u: int = NUM_U,
     num_v: int = NUM_V,
     force_regeneration: bool = True,
+    num_workers: int = 1,
 ) -> list[Path]:
     """Extract ``.npz`` records for every STEP file under ``step_path``.
 
@@ -449,27 +521,20 @@ def extract_brepnet_data_from_step(
         scale_body: Normalise each solid into the unit box.
         num_u, num_v: UV-grid resolution.
         force_regeneration: Re-extract even if the ``.npz`` already exists.
+        num_workers: Parallel worker processes (``>1`` uses a process pool).
 
     Returns:
         The list of written ``.npz`` paths.
     """
-    output_path = Path(output_path)
-    output_path.mkdir(parents=True, exist_ok=True)
-    written: list[Path] = []
-    for step_file in _iter_step_files(step_path):
-        out_npz = output_path / f"{step_file.stem}.npz"
-        if out_npz.exists() and not force_regeneration:
-            written.append(out_npz)
-            continue
-        try:
-            extractor = BRepDataExtractor(
-                step_file, scale_body=scale_body, num_u=num_u, num_v=num_v
-            )
-            written.append(extractor.process(output_path))
-        except Exception as exc:
-            _log.error("Failed to extract %s: %s", step_file.name, exc)
-    _log.info("Extracted %d/%d STEP files", len(written), len(_iter_step_files(step_path)))
-    return written
+    return extract_step_files(
+        _iter_step_files(step_path),
+        output_path,
+        scale_body=scale_body,
+        num_u=num_u,
+        num_v=num_v,
+        force_regeneration=force_regeneration,
+        num_workers=num_workers,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -481,6 +546,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-scale", action="store_true", help="Do not scale to the unit box")
     parser.add_argument("--num-u", type=int, default=NUM_U)
     parser.add_argument("--num-v", type=int, default=NUM_V)
+    parser.add_argument("--num-workers", type=int, default=1, help="Parallel worker processes")
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -490,6 +556,7 @@ def main(argv: list[str] | None = None) -> int:
         scale_body=not args.no_scale,
         num_u=args.num_u,
         num_v=args.num_v,
+        num_workers=args.num_workers,
     )
     print(f"Wrote {len(written)} .npz record(s) to {args.output}")
     return 0

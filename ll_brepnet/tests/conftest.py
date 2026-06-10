@@ -134,6 +134,46 @@ def one_step_fixture(step_fixture_files) -> Path:
     return step_fixture_files[0]
 
 
+@pytest.fixture(scope="session")
+def prepared_dataset(tmp_path_factory):
+    """Extract a few real STEP fixtures + synthesize labels + a manifest once.
+
+    Returns ``(npz_dir, manifest_path)``. Labels are the per-face surface-type
+    argmax (a real, geometry-derived 7-class target) purely so the dataset /
+    model tests have something to train against. Skips without pythonocc/torch.
+    """
+    if not (_HAS_PYTHONOCC and _HAS_TORCH):
+        pytest.skip("pythonocc-core and torch are required")
+    import numpy as np
+
+    from ll_brepnet.pipelines.build_dataset_file import build_dataset_file
+    from ll_brepnet.pipelines.extract_brepnet_data_from_step import extract_step_files
+
+    files: list[Path] = []
+    for d in _STEP_FIXTURE_DIRS:
+        if d.is_dir():
+            files.extend(sorted(d.glob("*.stp")))
+            files.extend(sorted(d.glob("*.step")))
+    files = files[:4]
+    if len(files) < 2:
+        pytest.skip("need at least 2 bundled STEP fixtures")
+
+    out = tmp_path_factory.mktemp("ll_brepnet_ds")
+    written = extract_step_files(files, out, num_workers=1)
+    for npz in written:
+        with np.load(npz) as data:
+            labels = data["face_features"][:, :7].argmax(1)
+        np.savetxt(out / f"{npz.stem}.seg", labels, fmt="%d")
+    build_dataset_file(
+        out,
+        out / "dataset.json",
+        validation_split=0.34,
+        test_split=0.0,
+        class_names=[f"c{i}" for i in range(7)],
+    )
+    return out, out / "dataset.json"
+
+
 # =============================================================================
 # Pytest hooks
 # =============================================================================
