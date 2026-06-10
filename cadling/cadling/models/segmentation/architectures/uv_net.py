@@ -93,6 +93,14 @@ class UVGridSampler:
         if _has_pythonocc and self._is_topods_face(face):
             return self._sample_face_occ(face, gs)
 
+        # No real OCC face available: fall back to a synthetic placeholder grid.
+        # This is FABRICATED geometry fed to the SurfaceCNN, so warn loudly
+        # rather than letting it pass silently as if it were real.
+        _log.warning(
+            "UVGridSampler: no OCC geometry for face %r — using a SYNTHETIC "
+            "placeholder UV grid (fabricated, not real surface geometry).",
+            face,
+        )
         return self._sample_face_placeholder(face, gs)
 
     def sample_faces(

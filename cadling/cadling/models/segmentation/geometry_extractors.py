@@ -368,8 +368,9 @@ class HoleGeometryExtractor:
             return None
 
 
-# Placeholder classes for other feature extractors
-# These can be implemented following the same pattern as HoleGeometryExtractor
+# Additional feature extractors (Pocket, Boss, Fillet, Chamfer below) — each a
+# full three-strategy extractor (STEP text -> OCC geometry -> graph features),
+# following the same pattern as HoleGeometryExtractor.
 
 
 class PocketGeometryExtractor:

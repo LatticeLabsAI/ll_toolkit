@@ -214,9 +214,12 @@ def _compute_dihedral_angles(
     dot_products = np.clip(dot_products, -1.0, 1.0)  # Numerical stability
     angles = np.arccos(dot_products)  # [E]
 
-    # Determine concave vs convex
-    # If angle > π/2, edge is concave (negative angle)
-    # This requires checking edge direction, simplified here
+    # Returns the UNSIGNED dihedral angle in [0, π] — matching trimesh's
+    # ``mesh.face_adjacency_angles`` convention used by the primary path, so both
+    # branches produce consistent edge features. (Convex/concave sign is NOT
+    # encoded here; signing the angle would require the per-edge coedge
+    # orientation and would diverge from the trimesh path. Use
+    # ``mesh.face_adjacency_convex`` if a convexity flag is needed.)
     return angles
 
 

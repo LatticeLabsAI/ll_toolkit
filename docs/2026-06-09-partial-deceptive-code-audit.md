@@ -70,6 +70,16 @@ Diameter/location/orientation are computed from real OCC geometry (`cylinder.Rad
 
 ## LOW — honestly-labeled approximations, fallbacks, or cosmetic
 
+**LOW remediation 2026-06-09 (genuine bugs/deceptions among the LOWs — FIXED):**
+- `generation_metrics.py::_is_valid_shape` now **fails closed** (returns False + WARNING) when pythonocc can't validate a TopoDS_Shape, instead of "assume valid" (which inflated `validity_rate`).
+- Non-deterministic `hash()` → **deterministic** `stable_hash` (new `cadling/lib/hashing.py`, BLAKE2b) at every site that writes token ids / feature values into data: `stepnet_integration.py` (entity-type feature), `chunker/tokenizer/tokenizer.py`, `sdg/qa/sequence_annotator.py` (4 sites). Verified reproducible across `PYTHONHASHSEED`.
+- `brep_graph_builder._compute_edge_features` convexity is now a **real signed** centroid-plane test (1.0 convex / 0.0 concave / 0.5 tangent), not angle-magnitude (which cannot sign a 90° edge).
+- `ll_clouds/registration.py` `inlier_rmse` now computed over **inliers only** (matching its docstring), not all correspondences.
+- `uv_net._sample_face_placeholder` is now called with a loud WARNING (synthetic grid no longer enters the CNN silently).
+- Misleading comments corrected: `geometry_extractors.py` "Placeholder classes" (above real Pocket/Boss extractors) and `feature_recognition.py` "For now, classify as generic" (above a real hole/boss classifier); `graph_utils._compute_dihedral_angles` comment now states it returns unsigned angles by design (consistent with the trimesh path).
+
+Still open (DISCLOSED-honest — labeled approximations/fallbacks, NOT deceptions, so left as-is): `_encode_fallback` (tagged `hash_fallback`), `constraint_predictor` empty-when-untrained, `gan_trainer.fid_approx` (named `*_approx`), `text_cad_annotator` placeholder renders (labeled+logged), `ll_ocadr` vLLM `EXPERIMENTAL / NOT WIRED` block + inert `get_num_mesh_tokens` divergence, BOM grouping-by-name (`assembly_hierarchy_pipeline.py`, whose tests pre-existingly hang).
+
 Disclosed/contained (logged warnings, error tags, or last-resort fallbacks):
 - `ll_gen` conditioning `_encode_fallback` returns hash-seeded random vectors when `ll_stepnet` absent — tagged `source_model="hash_fallback"` (`text_encoder.py:205`, `image_encoder.py:190`).
 - `ll_gen/conditioning/constraint_predictor.py:272` — `predict_from_embeddings` returns `[]` when the (never-trained) learned MLP is unset; rule-based path is the real default.

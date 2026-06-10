@@ -108,16 +108,22 @@ class SimpleTokenizer(CADTokenizer):
         return self.pattern.findall(text)
 
     def encode(self, text: str) -> List[int]:
-        """Encode text (simple hash-based encoding).
+        """Encode text (deterministic hash-based encoding).
+
+        Uses a stable cross-process hash so the same text always maps to the
+        same token ids (the builtin ``hash()`` is salted per process via
+        PYTHONHASHSEED, which would make serialized token ids non-reproducible).
 
         Args:
             text: Input text
 
         Returns:
-            List of token hashes
+            List of token ids
         """
+        from cadling.lib.hashing import stable_hash
+
         tokens = self.tokenize(text)
-        return [hash(token) % 50000 for token in tokens]
+        return [stable_hash(token, 50000) for token in tokens]
 
     def decode(self, token_ids: List[int]) -> str:
         """Decode not supported for simple tokenizer.

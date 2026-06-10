@@ -113,12 +113,17 @@ class GenerationMetrics:
                 from OCC.Core.BRepCheck import BRepCheck_Analyzer
 
                 analyzer = BRepCheck_Analyzer(shape)
-                return analyzer.IsValid()
+                return bool(analyzer.IsValid())
             except ImportError:
-                _log.debug(
-                    "pythonocc not available for shape validation"
+                # A TopoDS_Shape we cannot verify must NOT be counted as valid:
+                # for a validity metric, "unverifiable" is not "valid" (assuming
+                # valid here silently inflates validity_rate). Fail closed and
+                # surface the gap loudly.
+                _log.warning(
+                    "pythonocc unavailable to validate a TopoDS_Shape; counting "
+                    "it as INVALID (cannot confirm validity)."
                 )
-                return True  # Assume valid if we can't check
+                return False
 
         # Handle dict with metadata
         if isinstance(shape, dict):
