@@ -754,21 +754,41 @@ class TestParseSingleParam:
         assert isinstance(result, list)
         assert len(result) == 3
 
-    def test_parse_single_param_number_string(self):
-        """Test parsing numbers (kept as strings)."""
+    def test_parse_single_param_number_coerced(self):
+        """Numeric tokens are coerced to int/float (the canonical contract).
+
+        Every downstream consumer treats numeric params as numbers on its
+        primary path: ``feature_extractor._extract_numeric_features`` /
+        ``_extract_coordinates`` and ``stepnet_integration._tokenize_param``
+        all branch on ``isinstance(param, (int, float))`` first (the str
+        branch is only a defensive fallback that re-parses via
+        ``_extract_float``). ``stepnet_integration._parse_step_param`` performs
+        the identical int/float coercion, and ``_parse_single_param``'s own
+        docstring documents a numeric return type. A number left as a string
+        would be mis-tokenized as an unknown enum, so strings are NOT the
+        contract here.
+        """
         tokenizer = STEPTokenizer()
 
-        # Integer
+        # Integer -> int
         result = tokenizer._parse_single_param("123")
-        assert result == "123"
+        assert result == 123
+        assert isinstance(result, int)
 
-        # Float
+        # Float -> float
         result = tokenizer._parse_single_param("123.456")
-        assert result == "123.456"
+        assert result == 123.456
+        assert isinstance(result, float)
 
-        # Scientific notation
+        # Scientific notation -> float
         result = tokenizer._parse_single_param("1.23E-10")
-        assert result == "1.23E-10"
+        assert result == 1.23e-10
+        assert isinstance(result, float)
+
+        # Boundary: a genuinely non-numeric token is returned unchanged as str
+        result = tokenizer._parse_single_param("ABC")
+        assert result == "ABC"
+        assert isinstance(result, str)
 
 
 class TestTokenizerIntegration:

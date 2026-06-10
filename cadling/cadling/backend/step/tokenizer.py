@@ -372,19 +372,26 @@ class STEPTokenizer:
             # Remove comments
             line = self._remove_comments(line)
 
-            # Process character by character to find semicolon outside strings
-            prev_char = ''
-            for char in line:
-                if char == "'" and prev_char == "'":
-                    # Doubled quote '' is an escape in STEP, not a string boundary toggle
-                    prev_char = ''
-                    continue
-                elif char == "'":
+            # Process character by character to find semicolon outside strings.
+            # A doubled quote ('') is an escaped literal quote ONLY when already
+            # inside a string; an opening quote immediately followed by a closing
+            # quote is an EMPTY string literal, not an escape. Distinguishing the
+            # two requires lookahead, not a prev-char check (which would treat the
+            # empty-string '' as an escape and leave in_string stuck open).
+            j = 0
+            line_len = len(line)
+            while j < line_len:
+                char = line[j]
+                if char == "'":
+                    if in_string and j + 1 < line_len and line[j + 1] == "'":
+                        # Escaped quote inside a string: consume both, stay in.
+                        j += 2
+                        continue
                     in_string = not in_string
                 elif char == ';' and not in_string:
                     found_semicolon = True
                     break
-                prev_char = char
+                j += 1
 
             entity_parts.append(line)
             current_idx += 1
@@ -411,27 +418,37 @@ class STEPTokenizer:
             "entities": {}
         }
 
-        # Normalize whitespace before processing
+        # Normalize whitespace before processing (STEP is whitespace-insensitive
+        # outside string literals, so newlines/tabs collapse to single spaces).
         content = self._normalize_whitespace(content)
 
-        # Split into sections
-        lines = content.split('\n')
-        current_section = None
-        header_content = []
-        data_content = []
+        # Split into STEP STATEMENTS (terminated by ';'), not by newline — after
+        # normalization there are no newlines, and STEP statements may also share
+        # a line. The split is string-literal-aware so a ';' inside a quoted
+        # value (e.g. FILE_DESCRIPTION(...,'2;1')) does not terminate a statement.
+        statements = self._split_statements(content)
 
-        for line in lines:
-            line = line.strip()
-            if line.startswith('HEADER;'):
+        current_section = None
+        header_content: List[str] = []
+        data_content: List[str] = []
+
+        for stmt in statements:
+            stmt = stmt.strip()
+            if not stmt:
+                continue
+            keyword = stmt.upper()
+            if keyword == 'HEADER':
                 current_section = 'header'
-            elif line.startswith('DATA;'):
+            elif keyword == 'DATA':
                 current_section = 'data'
-            elif line.startswith('ENDSEC;') or line.startswith('END-ISO'):
+            elif keyword == 'ENDSEC':
+                current_section = None
+            elif keyword.startswith('ISO-10303') or keyword.startswith('END-ISO'):
                 current_section = None
             elif current_section == 'header':
-                header_content.append(line)
+                header_content.append(stmt + ';')
             elif current_section == 'data':
-                data_content.append(line)
+                data_content.append(stmt + ';')
 
         # Parse header
         result["header"] = self._parse_header(header_content)
@@ -440,6 +457,48 @@ class STEPTokenizer:
         result["entities"] = self._parse_entities(data_content)
 
         return result
+
+    def _split_statements(self, text: str) -> List[str]:
+        """Split STEP text into statements terminated by ';'.
+
+        The split respects string literals: a ';' inside a quoted value does not
+        terminate a statement. STEP escapes a quote inside a string by doubling
+        it (``''``), which is handled here. Returns the statements WITHOUT their
+        trailing ';'.
+
+        Args:
+            text: STEP content (typically whitespace-normalized).
+
+        Returns:
+            List of statement strings (no trailing ';').
+        """
+        statements: List[str] = []
+        current: List[str] = []
+        in_string = False
+        i = 0
+        n = len(text)
+        while i < n:
+            ch = text[i]
+            if ch == "'":
+                # An escaped quote inside a string is a doubled '' — keep both
+                # and stay in the string.
+                if in_string and i + 1 < n and text[i + 1] == "'":
+                    current.append("''")
+                    i += 2
+                    continue
+                in_string = not in_string
+                current.append(ch)
+            elif ch == ';' and not in_string:
+                statements.append(''.join(current))
+                current = []
+            else:
+                current.append(ch)
+            i += 1
+
+        tail = ''.join(current)
+        if tail.strip():
+            statements.append(tail)
+        return statements
 
     def _parse_header(self, header_lines: List[str]) -> Dict[str, Any]:
         """Parse STEP header section.
@@ -593,13 +652,24 @@ class STEPTokenizer:
         return params
 
     def _parse_single_param(self, param: str) -> Any:
-        """Parse a single parameter value.
+        """Parse a single STEP parameter token into its Python type.
+
+        Numeric tokens are coerced to ``int``/``float`` — this is the canonical
+        contract every downstream consumer relies on: feature extraction,
+        coordinate/geometry parsing, and ll_stepnet tokenization all treat
+        numeric params as numbers on their primary path (the string branches are
+        defensive fallbacks). Other tokens map as: ``$``/empty -> ``None``;
+        ``'…'`` -> the unquoted ``str``; ``#N`` -> the reference ``str`` (kept
+        verbatim); ``.X.`` -> the enum ``str``; ``(…)`` -> a parsed ``list``;
+        anything else -> the original ``str``.
 
         Args:
-            param: Parameter string
+            param: A single parameter token (re-stripped here defensively).
 
         Returns:
-            Parsed parameter (can be string, number, reference, list, etc.)
+            ``int``/``float`` for numbers, ``str`` for strings/references/enums/
+            unparseable tokens, ``list`` for nested parentheses, or ``None`` for
+            ``$``/empty.
         """
         param = param.strip()
 
