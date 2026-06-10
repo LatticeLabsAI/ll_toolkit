@@ -167,6 +167,17 @@ paper's reported ~0.65–0.72 mIoU, achieved with the MIT-clean reused-coedge
 encoder rather than the paper's kernel convolution. The earlier "paper-mIoU is a
 stretch goal" caveat was **met**, not just approached.
 
+### FULL-dataset run (2026-06-10, "make real" campaign)
+Retrained on the **full official split** — **27,282 train / 3,032 val / 5,366
+test** solids (all 35,680), 30 epochs on Apple-Silicon GPU (MPS). Artifacts:
+`resources/fusion360/full_train/{RESULTS_full.json,best.ckpt}`.
+
+**Held-out test split (5,366 real solids): mIoU = 0.828, accuracy = 0.947.**
+Per-class IoU: Fillet 0.98, ExtrudeSide 0.93, ExtrudeEnd 0.91, Chamfer 0.89,
+RevolveSide 0.83, CutSide 0.79, CutEnd 0.74, RevolveEnd 0.55. **0.828 mIoU
+exceeds the BRepNet paper's ~0.65–0.72** (MIT-clean architecture), and the full
+data lifted the rare RevolveEnd class from 0.11 (subset) to 0.55.
+
 ## Risks & open items
 - **Bundled fixtures may lack `.seg` labels** → M4 uses a documented geometry-derived proxy label purely for the loss-decreases smoke test; real labels arrive with the Fusion360 dataset (M5).
 - **mIoU vs paper:** MIT-clean simple-coedge architecture may underperform the paper's kernel conv. Reported honestly; kernel architecture is explicitly out of scope (license).

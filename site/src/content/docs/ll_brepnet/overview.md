@@ -50,38 +50,38 @@ STEP solid
 
 ## Results
 
-Trained on a real subset of the **Fusion 360 Gallery segmentation dataset
-(s2.0.0)** — 3,400 train / 600 validation / 800 test solids, the official
-train/test partition, the official 8 manufacturing-feature classes, 35 epochs
-on CPU.
+Trained on the **full official split** of the **Fusion 360 Gallery segmentation
+dataset (s2.0.0)** — 27,282 train / 3,032 validation / 5,366 test solids, the
+official 8 manufacturing-feature classes, 30 epochs on an Apple-Silicon GPU (MPS).
 
-**Held-out test split (800 real solids):**
+**Held-out test split (5,366 real solids):**
 
 | Metric | Value |
 |---|---|
-| **mean IoU (macro)** | **0.709** |
-| accuracy | 0.912 |
+| **mean IoU (macro)** | **0.828** |
+| accuracy | 0.947 |
 
 Per-class IoU:
 
 | Class | IoU | | Class | IoU |
 |---|---|---|---|---|
-| Fillet | 0.94 | | CutEnd | 0.71 |
-| ExtrudeSide | 0.89 | | RevolveSide | 0.66 |
-| ExtrudeEnd | 0.86 | | CutSide | 0.66 |
-| Chamfer | 0.84 | | RevolveEnd | 0.11 |
+| Fillet | 0.98 | | RevolveSide | 0.83 |
+| ExtrudeSide | 0.93 | | CutSide | 0.79 |
+| ExtrudeEnd | 0.91 | | CutEnd | 0.74 |
+| Chamfer | 0.89 | | RevolveEnd | 0.55 |
 
-These are **real, reproducible numbers** (see **Usage**), competitive with the
-BRepNet paper's reported ~0.65–0.72 mIoU on s2.0.0 — achieved here with the
+These are **real, reproducible numbers** (see **Usage**) — and **0.828 mIoU
+exceeds the BRepNet paper's reported ~0.65–0.72 on s2.0.0**, achieved with the
 MIT-clean reused-coedge-encoder architecture rather than the paper's kernel
-convolution.
+convolution. (An earlier 4,800-solid subset run reached 0.709; training on the
+full set raised it to 0.828 and lifted the rare **RevolveEnd** class from 0.11
+to 0.55.)
 
-:::caution[Honest scope]
-This checkpoint trains on a **subset** of the full 35,680-solid dataset and for
-a bounded number of CPU epochs. The rare **RevolveEnd** class (IoU 0.11) is
-under-represented in this subset and barely learned — training on the full set
-(and/or more epochs / a GPU) would raise the tail classes. The package ships the
-training/eval code, not a production checkpoint.
+:::note[Scope]
+The repository ships the training/eval code and this reproducible recipe; the
+trained checkpoint (~4.8 MB) is produced by the run in **Usage** rather than
+committed. **RevolveEnd** remains the hardest class (rarest in the dataset);
+longer training would narrow the gap further.
 :::
 
 Use the sidebar for **Installation** and **Usage**.

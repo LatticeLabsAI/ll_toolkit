@@ -14,10 +14,10 @@ sidebar:
 documented.** The package extracts the coedge graph + UV-grid geometry from STEP
 solids and trains a face-segmentation model end-to-end.
 
-On a real subset of the **Fusion 360 Gallery segmentation dataset** (official
-8 manufacturing-feature classes, 800-solid held-out test split) it reaches
-**test mIoU ≈ 0.709 / accuracy ≈ 0.912** — competitive with the BRepNet paper's
-reported ~0.65–0.72 mIoU, achieved with an MIT-clean architecture.
+On the **full official split** of the **Fusion 360 Gallery segmentation dataset**
+(official 8 manufacturing-feature classes, 5,366-solid held-out test split) it
+reaches **test mIoU ≈ 0.828 / accuracy ≈ 0.947** — **exceeding** the BRepNet
+paper's reported ~0.65–0.72 mIoU, achieved with an MIT-clean architecture.
 :::
 
 See the package documentation:

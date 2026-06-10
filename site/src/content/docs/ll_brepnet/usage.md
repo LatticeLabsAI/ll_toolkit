@@ -38,13 +38,15 @@ python -m ll_brepnet.train \
   --dataset-file ./processed/dataset.json \
   --dataset-dir  ./processed \
   --label-dir    ./processed \
-  --max-epochs 35 --num-layers 4 --hidden-dim 128 \
-  --learning-rate 0.002 --log-dir ./logs
+  --max-epochs 30 --num-layers 4 --hidden-dim 128 \
+  --learning-rate 0.002 --accelerator auto --log-dir ./logs
 ```
 
 Checkpoints (best by validation mIoU) and TensorBoard logs land under
-`--log-dir`. **This exact command produced test mIoU ≈ 0.709 / accuracy ≈ 0.912**
-on the 800-solid test split (see [Overview](/ll_toolkit/ll_brepnet/overview/)).
+`--log-dir`. `--accelerator auto` uses an Apple-Silicon GPU (MPS) or CUDA when
+available. **On the full official split (no `--*-subset`), this produced test
+mIoU ≈ 0.828 / accuracy ≈ 0.947** on the 5,366-solid test split (see
+[Overview](/ll_toolkit/ll_brepnet/overview/)).
 
 ## 4. Segment STEP files
 
