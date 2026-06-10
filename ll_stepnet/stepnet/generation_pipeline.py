@@ -863,8 +863,16 @@ class CADGenerationPipeline(nn.Module):
         command_tokens = []
         for s in range(seq_len):
             cmd_idx = int(cmd_indices[s].item())
-            cmd_idx = min(cmd_idx, len(CommandType) - 1)
-            geo_cmd = CommandType(cmd_idx)
+            # The model's command head emits indices in stepnet's IntEnum
+            # CommandType space (SOL=0, LINE=1, ARC=2, ... EOS=5). geotoken's
+            # CommandType is a *str* Enum (ARC="ARC"), so an integer index is
+            # NOT a valid geotoken value -- `geotoken.CommandType(2)` raises
+            # "2 is not a valid CommandType" and breaks the whole decode. Map
+            # int -> stepnet member (by value) -> geotoken member (by name);
+            # the two enums share member names and order.
+            cmd_idx = min(cmd_idx, len(StepCommandType) - 1)
+            step_cmd = StepCommandType(cmd_idx)
+            geo_cmd = CommandType[step_cmd.name]
 
             # Argmax each parameter
             params = []
@@ -876,7 +884,6 @@ class CADGenerationPipeline(nn.Module):
                 params.append(val)
 
             # Get parameter mask for this command type
-            step_cmd = StepCommandType(cmd_idx)
             active = PARAMETER_MASKS.get(step_cmd, [])
             mask = [i in active for i in range(NUM_PARAM_SLOTS)]
 
