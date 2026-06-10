@@ -1,0 +1,68 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ll-brepnet"
+version = "0.1.0"
+description = "LL-BRepNet: B-Rep face-graph neural network for CAD solid-model segmentation"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [
+    {name = "Lattice Labs"},
+]
+# NOTE: pythonocc-core and occwl are NOT pip-installable and MUST be provided by
+# conda (see environment.yaml). They are intentionally excluded from
+# [project.dependencies] so `pip install -e .` does not try (and fail) to
+# resolve them. torch is also expected from conda-forge on macOS to avoid the
+# OpenMP/libomp conflict documented in the repo CLAUDE.md.
+dependencies = [
+    "torch>=2.0.0",
+    "numpy>=1.24.0",
+    "pytorch-lightning>=2.0.0",
+    "scikit-learn>=1.0.0",
+    "tqdm>=4.64.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+    "mypy>=1.0.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["ll_brepnet*"]
+
+[tool.black]
+line-length = 100
+target-version = ['py39', 'py310', 'py311', 'py312']
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "N", "UP", "B", "C4"]
+# E501 (line length) is handled by black; N812 allows the universal PyTorch
+# convention `import torch.nn.functional as F`.
+ignore = ["E501", "N812"]
+
+[tool.mypy]
+python_version = "3.9"
+ignore_missing_imports = true
+disallow_untyped_defs = false
+warn_unused_ignores = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "requires_torch: marks tests that require torch",
+    "requires_pythonocc: marks tests that require pythonocc-core / occwl",
+    "requires_lightning: marks tests that require pytorch-lightning",
+]

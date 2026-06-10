@@ -1,0 +1,14 @@
+# ll_brepnet pip requirements (pure-Python / pip-installable deps only).
+#
+# torch is intentionally EXCLUDED: on macOS it must be installed via conda-forge
+# to avoid the OpenMP/libomp conflict (see repo CLAUDE.md and environment.yaml).
+# pythonocc-core and occwl are conda-only and are also excluded here; install
+# them via `conda env create -f environment.yaml` (or reuse the `cadling` env).
+#
+# Use this file for a pip-on-top-of-conda workflow:
+#   conda install -c conda-forge pytorch pythonocc-core occwl
+#   pip install -r requirements.txt
+numpy>=1.24.0
+pytorch-lightning>=2.0.0
+scikit-learn>=1.0.0
+tqdm>=4.64.0
