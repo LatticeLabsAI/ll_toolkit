@@ -598,11 +598,31 @@ class RLAlignmentTrainer:
             _log.warning("No history file found at %s; starting fresh", history_path)
             self._train_history = checkpoint.get("train_history", [])
 
-        # Load model and optimizer state
+        # Load model and optimizer state. Load the model resiliently: a
+        # checkpoint saved under an older architecture (e.g. before the optional
+        # dim_encoder dimension-conditioning layer was added to STEPVAE) must
+        # still load, or a genuinely-trained checkpoint becomes unusable. Any
+        # missing/unexpected keys are surfaced as a warning, not silently
+        # dropped, so a true mismatch stays visible.
         if "model_state_dict" in checkpoint and self.generator._model is not None:
-            self.generator._model.load_state_dict(checkpoint["model_state_dict"])
+            incompatible = self.generator._model.load_state_dict(
+                checkpoint["model_state_dict"], strict=False
+            )
+            if incompatible.missing_keys or incompatible.unexpected_keys:
+                _log.warning(
+                    "Checkpoint %s loaded non-strictly: missing=%s unexpected=%s",
+                    path,
+                    list(incompatible.missing_keys),
+                    list(incompatible.unexpected_keys),
+                )
         if "optimizer_state_dict" in checkpoint:
-            self._optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+            # The optimizer state may not line up if the parameter set changed
+            # (e.g. new conditioning layer); resuming the optimizer is
+            # best-effort, never fatal.
+            try:
+                self._optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+            except (ValueError, KeyError) as exc:
+                _log.warning("Could not restore optimizer state from %s: %s", path, exc)
 
         _log.info("Checkpoint loaded from %s (step %d)", path, self._step_count)
 
