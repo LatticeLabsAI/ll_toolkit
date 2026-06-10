@@ -5,6 +5,7 @@ step count) is saved and loaded into a *fresh* trainer/generator; the restored
 model must match the saved one bit-for-bit, and the bookkeeping must round-trip.
 Guards against the "load always restarts from scratch" class of bug.
 """
+
 from __future__ import annotations
 
 import types
@@ -25,7 +26,8 @@ def _stub_reward(trainer: RLAlignmentTrainer, monkeypatch) -> None:
         lambda proposal, export=False: types.SimpleNamespace(is_valid=False),
     )
     monkeypatch.setattr(
-        rl_mod, "compute_reward",
+        rl_mod,
+        "compute_reward",
         lambda result, config=None, target_dimensions=None: 1.0,
     )
 

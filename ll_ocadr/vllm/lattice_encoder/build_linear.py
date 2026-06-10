@@ -66,7 +66,10 @@ class MlpProjector(nn.Module):
             fwd = 2 * cfg.input_dim * cfg.n_embed
         elif cfg.projector_type == "mlp_gelu":
             mlp_depth = cfg.get("depth", 1)
-            fwd = 2 * cfg.input_dim * cfg.n_embed + (mlp_depth - 1) * 2 * cfg.n_embed * cfg.n_embed
+            fwd = (
+                2 * cfg.input_dim * cfg.n_embed
+                + (mlp_depth - 1) * 2 * cfg.n_embed * cfg.n_embed
+            )
         else:
             fwd = 0
         return fwd * 3

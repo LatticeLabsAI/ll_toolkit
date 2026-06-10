@@ -280,22 +280,31 @@ class GeometryAnalysisModel(EnrichmentModel):
             results["volume_estimate"] = results["bounding_box_volume"] * fill_factor
             results["volume_estimation_method"] = "bounding_box_fill_factor"
 
-        # Surface area estimation (rough)
+        # Surface area estimation (rough). This is a bounding-box-derived
+        # ESTIMATE (no real geometry on the STEP-text path), so it is stored
+        # under `surface_area_estimate` — NOT the canonical `surface_area` key,
+        # which must denote a measured area — mirroring `volume_estimate` above.
         if "bounding_box" in results:
             bbox = results["bounding_box"]
             # Surface area of bounding box
             bbox_sa = 2 * (bbox["dx"] * bbox["dy"] + bbox["dy"] * bbox["dz"] + bbox["dx"] * bbox["dz"])
             # Apply factor for typical solid
-            results["surface_area"] = bbox_sa * 0.8
+            results["surface_area_estimate"] = bbox_sa * 0.8
             results["surface_area_estimation_method"] = "bounding_box_factor"
 
         # Compactness
         if "volume" in results and "bounding_box_volume" in results and results["bounding_box_volume"] > 0:
             results["compactness"] = results["volume"] / results["bounding_box_volume"]
 
-        # Surface to volume ratio
-        if "volume" in results and "surface_area" in results and results["volume"] > 0:
-            results["surface_to_volume_ratio"] = results["surface_area"] / results["volume"]
+        # Surface-to-volume ratio from the estimates (both are bbox-derived
+        # estimates on this path, so the ratio is flagged as an estimate too).
+        if (
+            results.get("volume_estimate", 0) > 0
+            and "surface_area_estimate" in results
+        ):
+            results["surface_to_volume_ratio_estimate"] = (
+                results["surface_area_estimate"] / results["volume_estimate"]
+            )
 
         return results if len(results) > 1 else None
 

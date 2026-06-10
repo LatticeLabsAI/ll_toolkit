@@ -37,6 +37,7 @@ Tests cover:
 All tests work WITHOUT optional heavy dependencies (torch, ll_stepnet, pythonocc).
 Uses unittest.mock.patch extensively for lazy initialization testing.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -114,7 +115,9 @@ class TestOrchestratorConditioningIntegration:
         assert orchestrator._conditioner is None
 
         # Mock the MultiModalConditioner import (imported inside the method)
-        with patch("ll_gen.conditioning.multimodal.MultiModalConditioner") as mock_cond_cls:
+        with patch(
+            "ll_gen.conditioning.multimodal.MultiModalConditioner"
+        ) as mock_cond_cls:
             mock_cond = MagicMock()
             mock_cond.encode.return_value = MagicMock()
             mock_cond_cls.return_value = mock_cond
@@ -129,7 +132,9 @@ class TestOrchestratorConditioningIntegration:
         """Test that _get_conditioning() reuses the conditioner on second call."""
         orchestrator = GenerationOrchestrator()
 
-        with patch("ll_gen.conditioning.multimodal.MultiModalConditioner") as mock_cond_cls:
+        with patch(
+            "ll_gen.conditioning.multimodal.MultiModalConditioner"
+        ) as mock_cond_cls:
             mock_cond = MagicMock()
             mock_cond.encode.return_value = MagicMock()
             mock_cond_cls.return_value = mock_cond
@@ -150,12 +155,12 @@ class TestOrchestratorConditioningIntegration:
     @pytest.mark.unit
     def test_get_conditioning_uses_config_text_model(self) -> None:
         """Test that _get_conditioning() respects config.conditioning.text_model."""
-        config = LLGenConfig(
-            conditioning=ConditioningConfig(text_model="roberta-base")
-        )
+        config = LLGenConfig(conditioning=ConditioningConfig(text_model="roberta-base"))
         orchestrator = GenerationOrchestrator(config)
 
-        with patch("ll_gen.conditioning.multimodal.MultiModalConditioner") as mock_cond_cls:
+        with patch(
+            "ll_gen.conditioning.multimodal.MultiModalConditioner"
+        ) as mock_cond_cls:
             mock_cond = MagicMock()
             mock_cond.encode.return_value = MagicMock()
             mock_cond_cls.return_value = mock_cond
@@ -170,12 +175,12 @@ class TestOrchestratorConditioningIntegration:
     @pytest.mark.unit
     def test_get_conditioning_uses_config_image_model(self) -> None:
         """Test that _get_conditioning() respects config.conditioning.image_model."""
-        config = LLGenConfig(
-            conditioning=ConditioningConfig(image_model="dino_vitb16")
-        )
+        config = LLGenConfig(conditioning=ConditioningConfig(image_model="dino_vitb16"))
         orchestrator = GenerationOrchestrator(config)
 
-        with patch("ll_gen.conditioning.multimodal.MultiModalConditioner") as mock_cond_cls:
+        with patch(
+            "ll_gen.conditioning.multimodal.MultiModalConditioner"
+        ) as mock_cond_cls:
             mock_cond = MagicMock()
             mock_cond.encode.return_value = MagicMock()
             mock_cond_cls.return_value = mock_cond
@@ -188,12 +193,12 @@ class TestOrchestratorConditioningIntegration:
     @pytest.mark.unit
     def test_get_conditioning_uses_config_fusion_method(self) -> None:
         """Test that _get_conditioning() respects fusion_method config."""
-        config = LLGenConfig(
-            conditioning=ConditioningConfig(fusion_method="average")
-        )
+        config = LLGenConfig(conditioning=ConditioningConfig(fusion_method="average"))
         orchestrator = GenerationOrchestrator(config)
 
-        with patch("ll_gen.conditioning.multimodal.MultiModalConditioner") as mock_cond_cls:
+        with patch(
+            "ll_gen.conditioning.multimodal.MultiModalConditioner"
+        ) as mock_cond_cls:
             mock_cond = MagicMock()
             mock_cond.encode.return_value = MagicMock()
             mock_cond_cls.return_value = mock_cond
@@ -208,7 +213,9 @@ class TestOrchestratorConditioningIntegration:
         """Test that _get_conditioning() returns the conditioning embeddings."""
         orchestrator = GenerationOrchestrator()
 
-        with patch("ll_gen.conditioning.multimodal.MultiModalConditioner") as mock_cond_cls:
+        with patch(
+            "ll_gen.conditioning.multimodal.MultiModalConditioner"
+        ) as mock_cond_cls:
             mock_embeddings = MagicMock()
             mock_cond = MagicMock()
             mock_cond.encode.return_value = mock_embeddings
@@ -225,7 +232,9 @@ class TestOrchestratorConditioningIntegration:
         orchestrator = GenerationOrchestrator()
         image_path = Path("/tmp/test.png")
 
-        with patch("ll_gen.conditioning.multimodal.MultiModalConditioner") as mock_cond_cls:
+        with patch(
+            "ll_gen.conditioning.multimodal.MultiModalConditioner"
+        ) as mock_cond_cls:
             mock_embeddings = MagicMock()
             mock_cond = MagicMock()
             mock_cond.encode.return_value = mock_embeddings
@@ -241,7 +250,9 @@ class TestOrchestratorConditioningIntegration:
         """Test that _get_conditioning() returns None on import error."""
         orchestrator = GenerationOrchestrator()
 
-        with patch("ll_gen.conditioning.multimodal.MultiModalConditioner") as mock_cond_cls:
+        with patch(
+            "ll_gen.conditioning.multimodal.MultiModalConditioner"
+        ) as mock_cond_cls:
             mock_cond_cls.side_effect = ImportError("Missing dependency")
 
             result = orchestrator._get_conditioning("test prompt")
@@ -300,9 +311,7 @@ class TestProposalGenerationVAE:
     def test_vae_uses_config_checkpoint(self) -> None:
         """Test that _propose_neural_vae() uses checkpoint from GeneratorConfig."""
         checkpoint_path = "/path/to/vae_checkpoint.pt"
-        config = LLGenConfig(
-            generators=GeneratorConfig(vae_checkpoint=checkpoint_path)
-        )
+        config = LLGenConfig(generators=GeneratorConfig(vae_checkpoint=checkpoint_path))
         orchestrator = GenerationOrchestrator(config)
 
         with patch("ll_gen.generators.neural_vae.NeuralVAEGenerator") as mock_gen_cls:
@@ -319,9 +328,7 @@ class TestProposalGenerationVAE:
     @pytest.mark.unit
     def test_vae_uses_config_temperature(self) -> None:
         """Test that _propose_neural_vae() uses temperature from GeneratorConfig."""
-        config = LLGenConfig(
-            generators=GeneratorConfig(default_temperature=0.5)
-        )
+        config = LLGenConfig(generators=GeneratorConfig(default_temperature=0.5))
         orchestrator = GenerationOrchestrator(config)
 
         with patch("ll_gen.generators.neural_vae.NeuralVAEGenerator") as mock_gen_cls:
@@ -348,7 +355,9 @@ class TestProposalGenerationVAE:
 
             mock_conditioning = MagicMock()
 
-            with patch.object(orchestrator, "_get_conditioning", return_value=mock_conditioning):
+            with patch.object(
+                orchestrator, "_get_conditioning", return_value=mock_conditioning
+            ):
                 orchestrator._propose_neural_vae("test prompt", None)
 
                 mock_gen.generate.assert_called_once()
@@ -399,7 +408,9 @@ class TestProposalGenerationDiffusion:
 
         assert orchestrator._diffusion_generator is None
 
-        with patch("ll_gen.generators.neural_diffusion.NeuralDiffusionGenerator") as mock_gen_cls:
+        with patch(
+            "ll_gen.generators.neural_diffusion.NeuralDiffusionGenerator"
+        ) as mock_gen_cls:
             mock_gen = MagicMock()
             mock_gen.generate.return_value = MagicMock()
             mock_gen_cls.return_value = mock_gen
@@ -412,12 +423,12 @@ class TestProposalGenerationDiffusion:
     @pytest.mark.unit
     def test_diffusion_uses_config_inference_steps(self) -> None:
         """Test that diffusion uses inference_steps from config."""
-        config = LLGenConfig(
-            generators=GeneratorConfig(diffusion_inference_steps=100)
-        )
+        config = LLGenConfig(generators=GeneratorConfig(diffusion_inference_steps=100))
         orchestrator = GenerationOrchestrator(config)
 
-        with patch("ll_gen.generators.neural_diffusion.NeuralDiffusionGenerator") as mock_gen_cls:
+        with patch(
+            "ll_gen.generators.neural_diffusion.NeuralDiffusionGenerator"
+        ) as mock_gen_cls:
             mock_gen = MagicMock()
             mock_gen.generate.return_value = MagicMock()
             mock_gen_cls.return_value = mock_gen
@@ -431,12 +442,12 @@ class TestProposalGenerationDiffusion:
     @pytest.mark.unit
     def test_diffusion_uses_config_eta(self) -> None:
         """Test that diffusion uses eta from config."""
-        config = LLGenConfig(
-            generators=GeneratorConfig(diffusion_eta=0.5)
-        )
+        config = LLGenConfig(generators=GeneratorConfig(diffusion_eta=0.5))
         orchestrator = GenerationOrchestrator(config)
 
-        with patch("ll_gen.generators.neural_diffusion.NeuralDiffusionGenerator") as mock_gen_cls:
+        with patch(
+            "ll_gen.generators.neural_diffusion.NeuralDiffusionGenerator"
+        ) as mock_gen_cls:
             mock_gen = MagicMock()
             mock_gen.generate.return_value = MagicMock()
             mock_gen_cls.return_value = mock_gen
@@ -452,7 +463,9 @@ class TestProposalGenerationDiffusion:
         """Test that _propose_neural_diffusion() returns LatentProposal."""
         orchestrator = GenerationOrchestrator()
 
-        with patch("ll_gen.generators.neural_diffusion.NeuralDiffusionGenerator") as mock_gen_cls:
+        with patch(
+            "ll_gen.generators.neural_diffusion.NeuralDiffusionGenerator"
+        ) as mock_gen_cls:
             mock_gen = MagicMock()
             mock_proposal = MagicMock(spec=LatentProposal)
             mock_gen.generate.return_value = mock_proposal
@@ -474,7 +487,9 @@ class TestProposalGenerationVQVAE:
 
         assert orchestrator._vqvae_generator is None
 
-        with patch("ll_gen.generators.neural_vqvae.NeuralVQVAEGenerator") as mock_gen_cls:
+        with patch(
+            "ll_gen.generators.neural_vqvae.NeuralVQVAEGenerator"
+        ) as mock_gen_cls:
             mock_gen = MagicMock()
             mock_gen.generate.return_value = MagicMock()
             mock_gen_cls.return_value = mock_gen
@@ -487,12 +502,12 @@ class TestProposalGenerationVQVAE:
     @pytest.mark.unit
     def test_vqvae_uses_config_codebook_dim(self) -> None:
         """Test that VQVAE uses codebook_dim from config."""
-        config = LLGenConfig(
-            generators=GeneratorConfig(vqvae_codebook_dim=1024)
-        )
+        config = LLGenConfig(generators=GeneratorConfig(vqvae_codebook_dim=1024))
         orchestrator = GenerationOrchestrator(config)
 
-        with patch("ll_gen.generators.neural_vqvae.NeuralVQVAEGenerator") as mock_gen_cls:
+        with patch(
+            "ll_gen.generators.neural_vqvae.NeuralVQVAEGenerator"
+        ) as mock_gen_cls:
             mock_gen = MagicMock()
             mock_gen.generate.return_value = MagicMock()
             mock_gen_cls.return_value = mock_gen
@@ -508,7 +523,9 @@ class TestProposalGenerationVQVAE:
         """Test that _propose_neural_vqvae() returns CommandSequenceProposal."""
         orchestrator = GenerationOrchestrator()
 
-        with patch("ll_gen.generators.neural_vqvae.NeuralVQVAEGenerator") as mock_gen_cls:
+        with patch(
+            "ll_gen.generators.neural_vqvae.NeuralVQVAEGenerator"
+        ) as mock_gen_cls:
             mock_gen = MagicMock()
             mock_proposal = MagicMock(spec=CommandSequenceProposal)
             mock_gen.generate.return_value = mock_proposal
@@ -751,7 +768,9 @@ class TestErrorContextFeedback:
             "error_category": ErrorCategory.SELF_INTERSECTION.value,
         }
 
-        with patch("ll_gen.generators.neural_diffusion.NeuralDiffusionGenerator") as mock_gen_cls:
+        with patch(
+            "ll_gen.generators.neural_diffusion.NeuralDiffusionGenerator"
+        ) as mock_gen_cls:
             mock_gen = MagicMock()
             mock_gen.generate.return_value = MagicMock()
             mock_gen_cls.return_value = mock_gen
@@ -771,7 +790,9 @@ class TestErrorContextFeedback:
             "error_category": ErrorCategory.BOOLEAN_FAILURE.value,
         }
 
-        with patch("ll_gen.generators.neural_vqvae.NeuralVQVAEGenerator") as mock_gen_cls:
+        with patch(
+            "ll_gen.generators.neural_vqvae.NeuralVQVAEGenerator"
+        ) as mock_gen_cls:
             mock_gen = MagicMock()
             mock_gen.generate.return_value = MagicMock()
             mock_gen_cls.return_value = mock_gen
@@ -833,60 +854,70 @@ class TestModuleExports:
     def test_import_conditioning_embeddings(self) -> None:
         """Test that ConditioningEmbeddings can be imported."""
         from ll_gen.conditioning import ConditioningEmbeddings
+
         assert ConditioningEmbeddings is not None
 
     @pytest.mark.unit
     def test_import_text_conditioning_encoder(self) -> None:
         """Test that TextConditioningEncoder can be imported."""
         from ll_gen.conditioning import TextConditioningEncoder
+
         assert TextConditioningEncoder is not None
 
     @pytest.mark.unit
     def test_import_image_conditioning_encoder(self) -> None:
         """Test that ImageConditioningEncoder can be imported."""
         from ll_gen.conditioning import ImageConditioningEncoder
+
         assert ImageConditioningEncoder is not None
 
     @pytest.mark.unit
     def test_import_multimodal_conditioner(self) -> None:
         """Test that MultiModalConditioner can be imported."""
         from ll_gen.conditioning import MultiModalConditioner
+
         assert MultiModalConditioner is not None
 
     @pytest.mark.unit
     def test_import_constraint_predictor(self) -> None:
         """Test that ConstraintPredictor can be imported."""
         from ll_gen.conditioning import ConstraintPredictor
+
         assert ConstraintPredictor is not None
 
     @pytest.mark.unit
     def test_import_neural_vae_generator(self) -> None:
         """Test that NeuralVAEGenerator can be imported."""
         from ll_gen.generators import NeuralVAEGenerator
+
         assert NeuralVAEGenerator is not None
 
     @pytest.mark.unit
     def test_import_neural_diffusion_generator(self) -> None:
         """Test that NeuralDiffusionGenerator can be imported."""
         from ll_gen.generators import NeuralDiffusionGenerator
+
         assert NeuralDiffusionGenerator is not None
 
     @pytest.mark.unit
     def test_import_neural_vqvae_generator(self) -> None:
         """Test that NeuralVQVAEGenerator can be imported."""
         from ll_gen.generators import NeuralVQVAEGenerator
+
         assert NeuralVQVAEGenerator is not None
 
     @pytest.mark.unit
     def test_import_base_neural_generator(self) -> None:
         """Test that BaseNeuralGenerator can be imported."""
         from ll_gen.generators import BaseNeuralGenerator
+
         assert BaseNeuralGenerator is not None
 
     @pytest.mark.unit
     def test_import_latent_sampler(self) -> None:
         """Test that LatentSampler can be imported."""
         from ll_gen.generators import LatentSampler
+
         assert LatentSampler is not None
 
 
@@ -904,9 +935,11 @@ class TestOrchestratorFullFlow:
         config = LLGenConfig(max_retries=1)
         orchestrator = GenerationOrchestrator(config)
 
-        with patch.object(orchestrator, "router") as mock_router, \
-             patch("ll_gen.generators.neural_vae.NeuralVAEGenerator") as mock_gen_cls, \
-             patch.object(orchestrator, "disposal_engine") as mock_disposal:
+        with (
+            patch.object(orchestrator, "router") as mock_router,
+            patch("ll_gen.generators.neural_vae.NeuralVAEGenerator") as mock_gen_cls,
+            patch.object(orchestrator, "disposal_engine") as mock_disposal,
+        ):
 
             # Setup router
             mock_decision = MagicMock()
@@ -941,10 +974,14 @@ class TestOrchestratorFullFlow:
         config = LLGenConfig(max_retries=2)
         orchestrator = GenerationOrchestrator(config)
 
-        with patch.object(orchestrator, "router") as mock_router, \
-             patch("ll_gen.generators.neural_vae.NeuralVAEGenerator") as mock_gen_cls, \
-             patch.object(orchestrator, "disposal_engine") as mock_disposal, \
-             patch.object(orchestrator, "_build_feedback", return_value={"error": "test"}):
+        with (
+            patch.object(orchestrator, "router") as mock_router,
+            patch("ll_gen.generators.neural_vae.NeuralVAEGenerator") as mock_gen_cls,
+            patch.object(orchestrator, "disposal_engine") as mock_disposal,
+            patch.object(
+                orchestrator, "_build_feedback", return_value={"error": "test"}
+            ),
+        ):
 
             # Setup router
             mock_decision = MagicMock()
@@ -983,8 +1020,12 @@ class TestOrchestratorFullFlow:
         """Test that conditioning embeddings flow through to proposal generation."""
         orchestrator = GenerationOrchestrator()
 
-        with patch("ll_gen.conditioning.multimodal.MultiModalConditioner") as mock_cond_cls, \
-             patch("ll_gen.generators.neural_vae.NeuralVAEGenerator") as mock_gen_cls:
+        with (
+            patch(
+                "ll_gen.conditioning.multimodal.MultiModalConditioner"
+            ) as mock_cond_cls,
+            patch("ll_gen.generators.neural_vae.NeuralVAEGenerator") as mock_gen_cls,
+        ):
 
             # Setup conditioner
             mock_embeddings = MagicMock()
@@ -1019,8 +1060,12 @@ class TestMultipleProposalRoutes:
         """Test that orchestrator can switch between VAE and diffusion routes."""
         orchestrator = GenerationOrchestrator()
 
-        with patch("ll_gen.generators.neural_vae.NeuralVAEGenerator") as mock_vae_cls, \
-             patch("ll_gen.generators.neural_diffusion.NeuralDiffusionGenerator") as mock_diff_cls:
+        with (
+            patch("ll_gen.generators.neural_vae.NeuralVAEGenerator") as mock_vae_cls,
+            patch(
+                "ll_gen.generators.neural_diffusion.NeuralDiffusionGenerator"
+            ) as mock_diff_cls,
+        ):
 
             mock_vae = MagicMock()
             mock_vae.generate.return_value = MagicMock()
@@ -1059,7 +1104,9 @@ class TestOrchestratorErrorHandling:
 
         # Patch the generators.neural_vae module to raise ImportError on access
         with patch.dict("sys.modules", {"ll_gen.generators.neural_vae": None}):
-            with pytest.raises(RuntimeError, match="ll_gen.generators requires ll_stepnet"):
+            with pytest.raises(
+                RuntimeError, match="ll_gen.generators requires ll_stepnet"
+            ):
                 orchestrator._propose_neural_vae("test prompt", None)
 
     @pytest.mark.unit
@@ -1090,7 +1137,9 @@ class TestOrchestratorErrorHandling:
         """Test that _get_conditioning() gracefully returns None on any error."""
         orchestrator = GenerationOrchestrator()
 
-        with patch("ll_gen.conditioning.multimodal.MultiModalConditioner") as mock_cond_cls:
+        with patch(
+            "ll_gen.conditioning.multimodal.MultiModalConditioner"
+        ) as mock_cond_cls:
             mock_cond_cls.side_effect = Exception("Unexpected error")
 
             result = orchestrator._get_conditioning("test prompt")

@@ -16,6 +16,7 @@ Key Components Tested:
 - Input dimension validation
 - Edge cases (single batch, long sequences)
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -35,9 +36,7 @@ from ll_gen.embeddings import HybridShapeEncoder
 # Pytest Markers and Fixtures
 # ============================================================================
 
-requires_torch = pytest.mark.skipif(
-    not _TORCH_AVAILABLE, reason="torch not installed"
-)
+requires_torch = pytest.mark.skipif(not _TORCH_AVAILABLE, reason="torch not installed")
 
 
 @pytest.fixture
@@ -111,12 +110,8 @@ def sample_graph_data(torch_module):
     edge_feat_dim = 8
 
     return {
-        "node_features": np.random.randn(num_nodes, node_feat_dim).astype(
-            np.float32
-        ),
-        "edge_index": np.random.randint(0, num_nodes, (2, num_edges)).astype(
-            np.int64
-        ),
+        "node_features": np.random.randn(num_nodes, node_feat_dim).astype(np.float32),
+        "edge_index": np.random.randint(0, num_nodes, (2, num_edges)).astype(np.int64),
         "edge_attr": np.random.randn(num_edges, edge_feat_dim).astype(np.float32),
     }
 
@@ -227,9 +222,7 @@ class TestHybridShapeEncoderForward:
         assert not np.isnan(output).any()
 
     @pytest.mark.unit
-    def test_forward_numpy_input_1d(
-        self, default_encoder, sample_conditioning_single
-    ):
+    def test_forward_numpy_input_1d(self, default_encoder, sample_conditioning_single):
         """Test forward pass with 1D numpy array (input_dim,)."""
         output = default_encoder.forward(sample_conditioning_single)
         assert isinstance(output, np.ndarray)
@@ -263,14 +256,14 @@ class TestHybridShapeEncoderForward:
     @pytest.mark.unit
     def test_forward_without_graph_data(self, default_encoder, sample_conditioning):
         """Test forward pass without graph data uses transformer only."""
-        output = default_encoder.forward(
-            sample_conditioning, graph_data=None
-        )
+        output = default_encoder.forward(sample_conditioning, graph_data=None)
         assert isinstance(output, np.ndarray)
         assert output.shape == (default_encoder.output_dim,)
 
     @pytest.mark.unit
-    def test_forward_output_values_reasonable(self, default_encoder, sample_conditioning):
+    def test_forward_output_values_reasonable(
+        self, default_encoder, sample_conditioning
+    ):
         """Test that output values are in reasonable range (not exploding)."""
         output = default_encoder.forward(sample_conditioning)
         # Check that values don't explode (rough check)
@@ -331,9 +324,7 @@ class TestEncodeConditioningOnly:
     """Test encode_conditioning_only method."""
 
     @pytest.mark.unit
-    def test_encode_conditioning_only_numpy(
-        self, default_encoder, sample_conditioning
-    ):
+    def test_encode_conditioning_only_numpy(self, default_encoder, sample_conditioning):
         """Test conditioning-only encoding with numpy input."""
         output = default_encoder.encode_conditioning_only(sample_conditioning)
         assert isinstance(output, np.ndarray)
@@ -428,7 +419,9 @@ class TestForwardWithGraphData:
         """Test forward pass with graph data when GNN available."""
         if not default_encoder._has_gnn:
             pytest.skip("GNN encoder not available")
-        output = default_encoder.forward(sample_conditioning, graph_data=sample_graph_data)
+        output = default_encoder.forward(
+            sample_conditioning, graph_data=sample_graph_data
+        )
         assert isinstance(output, np.ndarray)
         assert output.shape == (default_encoder.output_dim,)
 
@@ -440,7 +433,9 @@ class TestForwardWithGraphData:
         if default_encoder._has_gnn:
             pytest.skip("GNN is available, test requires unavailable GNN")
         # Should not raise, graph should be ignored
-        output = default_encoder.forward(sample_conditioning, graph_data=sample_graph_data)
+        output = default_encoder.forward(
+            sample_conditioning, graph_data=sample_graph_data
+        )
         assert isinstance(output, np.ndarray)
 
     @pytest.mark.unit
@@ -550,6 +545,7 @@ class TestStateDictManagement:
     def test_state_dict_values_are_tensors(self, default_encoder):
         """Test that state_dict values are tensors (standard nn.Module format)."""
         import torch
+
         state = default_encoder.state_dict()
         for _key, value in state.items():
             assert isinstance(value, torch.Tensor)
@@ -589,8 +585,7 @@ class TestStateDictManagement:
         state = default_encoder.state_dict()
         # Create dict with only _input_projection keys
         partial_state = {
-            k: v for k, v in state.items()
-            if k.startswith("_input_projection")
+            k: v for k, v in state.items() if k.startswith("_input_projection")
         }
         # Should not raise with strict=False
         default_encoder.load_state_dict(partial_state, strict=False)
@@ -875,7 +870,9 @@ class TestEdgeCases:
         assert output.shape == (1024,)
 
     @pytest.mark.unit
-    def test_repeated_forward_no_memory_leak(self, default_encoder, sample_conditioning):
+    def test_repeated_forward_no_memory_leak(
+        self, default_encoder, sample_conditioning
+    ):
         """Test repeated forward passes for memory leaks."""
         default_encoder.eval()
         with torch.no_grad():
@@ -927,7 +924,10 @@ class TestTransformerComponent:
         """Test structure of transformer encoder."""
         assert default_encoder._transformer_encoder is not None
         # Check num_layers
-        assert len(default_encoder._transformer_encoder.layers) == default_encoder.num_transformer_layers
+        assert (
+            len(default_encoder._transformer_encoder.layers)
+            == default_encoder.num_transformer_layers
+        )
 
     @pytest.mark.unit
     def test_attention_heads_configuration(self, default_encoder):

@@ -156,6 +156,54 @@ class NeuralVAEGenerator(BaseNeuralGenerator):
             entropy=entropy_value,
         )
 
+    def decode_command_logits(
+        self,
+        temperature: float = 1.0,
+        latent: Any | None = None,
+    ) -> tuple[Any, list[Any]]:
+        """Decode per-position command/parameter logits for sequence scoring.
+
+        Mirrors the decode in :meth:`_decode_and_sample` (``z`` → ``decode`` →
+        ``command_head`` / ``param_heads``) but stops at the logits, returning
+        them for teacher-forcing in
+        :meth:`BaseNeuralGenerator.score_token_sequence`. Gradients are live,
+        so the gathered log-probabilities are differentiable.
+
+        Args:
+            temperature: Accepted for interface parity (the scorer applies the
+                scaling); the logits themselves are returned unscaled.
+            latent: Optional latent ``z`` (``[1, latent_dim]`` tensor or numpy
+                array, e.g. a proposal's ``latent_vector``). When provided the
+                decode is **deterministic** (reconstruction-likelihood); when
+                ``None`` a fresh ``N(0, I)`` prior is drawn, giving a single,
+                non-deterministic sample.
+
+        Returns:
+            ``(command_logits [S, C], param_logits_2d list of [S, P])``.
+        """
+        import numpy as np
+        import torch
+
+        if self._model is None:
+            self._init_model()
+
+        device = torch.device(self.device)
+        if latent is None:
+            z = torch.randn(1, self._model.latent_dim, device=device)
+        else:
+            if isinstance(latent, np.ndarray):
+                z = torch.from_numpy(latent).float().to(device)
+            elif isinstance(latent, torch.Tensor):
+                z = latent.float().to(device)
+            else:
+                z = torch.tensor(latent, dtype=torch.float32, device=device)
+            z = z.reshape(1, self._model.latent_dim)
+        self._model.last_latent = z
+        hidden = self._model.decode(z, seq_len=self.max_seq_len)
+        command_logits = self._model.command_head(hidden)[0]  # [S, C]
+        param_logits_2d = [head(hidden)[0] for head in self._model.param_heads]
+        return command_logits, param_logits_2d
+
     def _decode_and_sample(
         self,
         temp: float,
@@ -299,9 +347,7 @@ class NeuralVAEGenerator(BaseNeuralGenerator):
                     token_ids=token_ids,
                     source_prompt=prompt,
                     conditioning_source=(
-                        conditioning.source_type
-                        if conditioning
-                        else "unconditional"
+                        conditioning.source_type if conditioning else "unconditional"
                     ),
                     confidence=confidence,
                     generation_metadata=self._build_metadata(

@@ -9,6 +9,7 @@ Tests all proposal types and related classes:
 - GeometryReport: dimension matching, bounding box introspection
 - ValidationFinding and RepairAction: construction and serialization
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -30,6 +31,7 @@ from ll_gen.proposals.latent_proposal import LatentProposal
 # =============================================================================
 # BaseProposal Tests
 # =============================================================================
+
 
 class TestBaseProposalConstruction:
     """Test BaseProposal initialization and defaults."""
@@ -159,6 +161,7 @@ class TestBaseProposalErrorContext:
     def test_with_error_context_updates_timestamp(self, base_proposal):
         """with_error_context() creates new timestamp."""
         import time
+
         error = {"error_code": "TEST_ERROR"}
         time.sleep(0.01)  # Ensure time difference
         new_prop = base_proposal.with_error_context(error)
@@ -241,14 +244,13 @@ class TestBaseProposalSummary:
 # CodeProposal Tests
 # =============================================================================
 
+
 class TestCodeProposalPostInit:
     """Test __post_init__ behavior for hash and imports."""
 
     def test_code_hash_computed_on_init(self, code_proposal_cadquery):
         """__post_init__ computes code_hash from code."""
-        expected_hash = hashlib.sha256(
-            code_proposal_cadquery.code.encode()
-        ).hexdigest()
+        expected_hash = hashlib.sha256(code_proposal_cadquery.code.encode()).hexdigest()
         assert code_proposal_cadquery.code_hash == expected_hash
 
     def test_imports_extracted_on_init(self):
@@ -497,6 +499,7 @@ class TestCodeProposalSummary:
 # CommandSequenceProposal Tests
 # =============================================================================
 
+
 class TestCommandSequenceProposalConstruction:
     """Test CommandSequenceProposal initialization."""
 
@@ -565,7 +568,11 @@ class TestCommandSequenceProposalCommandDictsFromTokens:
         prop = CommandSequenceProposal(
             proposal_id="t",
             command_dicts=[
-                {"command_type": "SOL", "parameters": [0] * 16, "parameter_mask": [False] * 16}
+                {
+                    "command_type": "SOL",
+                    "parameters": [0] * 16,
+                    "parameter_mask": [False] * 16,
+                }
             ],
         )
         assert prop.command_dicts_from_token_ids() == []
@@ -754,6 +761,7 @@ class TestCommandSequenceProposalSummary:
 # LatentProposal Tests
 # =============================================================================
 
+
 class TestLatentProposalProperties:
     """Test latent proposal properties."""
 
@@ -895,7 +903,9 @@ class TestLatentProposalComputeBoundingBox:
     def test_compute_bounding_box_multiple_grids(self):
         """compute_bounding_box() combines all geometry."""
         grid1 = np.array([[[0, 0, 0], [10, 10, 10]]], dtype=np.float32).reshape(1, 2, 3)
-        grid2 = np.array([[[20, 20, 20], [30, 30, 30]]], dtype=np.float32).reshape(1, 2, 3)
+        grid2 = np.array([[[20, 20, 20], [30, 30, 30]]], dtype=np.float32).reshape(
+            1, 2, 3
+        )
         prop = LatentProposal(proposal_id="test", face_grids=[grid1, grid2])
         bbox = prop.compute_bounding_box()
 
@@ -1009,6 +1019,7 @@ class TestLatentProposalSummary:
 # GeometryReport Tests
 # =============================================================================
 
+
 class TestGeometryReportBboxDimensions:
     """Test bbox_dimensions property."""
 
@@ -1036,7 +1047,7 @@ class TestGeometryReportBboxDiagonal:
         """bbox_diagonal computes correct diagonal."""
         diag = geometry_report_box.bbox_diagonal
         # diagonal = sqrt(100^2 + 50^2 + 20^2) = sqrt(12900) ≈ 113.58
-        expected = (100.0 ** 2 + 50.0 ** 2 + 20.0 ** 2) ** 0.5
+        expected = (100.0**2 + 50.0**2 + 20.0**2) ** 0.5
         assert abs(diag - expected) < 0.01
 
     def test_bbox_diagonal_none_when_no_bbox(self, geometry_report_no_bbox):
@@ -1096,6 +1107,7 @@ class TestGeometryReportMatchesDimensions:
 # ValidationFinding Tests
 # =============================================================================
 
+
 class TestValidationFinding:
     """Test ValidationFinding construction and defaults."""
 
@@ -1131,6 +1143,7 @@ class TestValidationFinding:
 # RepairAction Tests
 # =============================================================================
 
+
 class TestRepairAction:
     """Test RepairAction construction and defaults."""
 
@@ -1161,6 +1174,7 @@ class TestRepairAction:
 # =============================================================================
 # DisposalResult Tests
 # =============================================================================
+
 
 class TestDisposalResultHasShape:
     """Test has_shape property."""
@@ -1226,7 +1240,9 @@ class TestDisposalResultErrorsByCategory:
         grouped = disposal_result_valid.errors_by_category
         assert grouped == {}
 
-    def test_errors_by_category_self_intersection(self, disposal_result_self_intersection):
+    def test_errors_by_category_self_intersection(
+        self, disposal_result_self_intersection
+    ):
         """errors_by_category groups self-intersection errors."""
         grouped = disposal_result_self_intersection.errors_by_category
         assert ErrorCategory.SELF_INTERSECTION in grouped
@@ -1347,6 +1363,7 @@ class TestDisposalResultSummary:
 # =============================================================================
 # Integration Tests
 # =============================================================================
+
 
 class TestProposalTypeInheritance:
     """Test that subclasses properly inherit BaseProposal behavior."""

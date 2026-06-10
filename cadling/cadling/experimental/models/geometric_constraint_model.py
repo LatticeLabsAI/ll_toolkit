@@ -391,24 +391,70 @@ class GeometricConstraintModel(EnrichmentModel):
                 )
             )
 
-        # Check for symmetry in feature placement
+        # Check for symmetry in feature placement. A set of holes forms a
+        # symmetric pattern when their centers are (approximately) invariant
+        # under reflection through their centroid — i.e. every hole has a mirror
+        # partner. We verify this from the actual hole locations instead of
+        # asserting symmetry for any multi-hole part.
         features = item.properties.get("machining_features", [])
         holes = [f for f in features if f.get("feature_type") == "hole"]
 
-        # If there are multiple holes, check for symmetric patterns
-        if len(holes) >= 2:
-            # Simple check: see if holes come in pairs at similar distances from center
-            # This is a simplified heuristic
-            constraints.append(
-                GeometricConstraint(
-                    constraint_type=ConstraintType.SYMMETRIC,
-                    entities=[f"hole_{i}" for i in range(len(holes))],
-                    parameters={"num_features": len(holes)},
-                    confidence=0.6,
-                    description=f"Potential symmetric pattern of {len(holes)} holes",
-                    is_explicit=False,
+        hole_positions: List[List[float]] = []
+        for h in holes:
+            pos = h.get("location") or h.get("center") or h.get("position")
+            if pos is None:
+                params = h.get("parameters", {})
+                pos = params.get("location") or params.get("center")
+            if pos is not None and len(pos) >= 3:
+                hole_positions.append([float(pos[0]), float(pos[1]), float(pos[2])])
+
+        if len(hole_positions) >= 2:
+            n = len(hole_positions)
+            cx = sum(p[0] for p in hole_positions) / n
+            cy = sum(p[1] for p in hole_positions) / n
+            cz = sum(p[2] for p in hole_positions) / n
+
+            def _dist(a: List[float], b: tuple) -> float:
+                return (
+                    (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2
+                ) ** 0.5
+
+            # Tolerance scaled to the pattern size (max distance from centroid).
+            char = max(_dist(p, (cx, cy, cz)) for p in hole_positions)
+            tol = max(char * 0.05, 1e-6)
+
+            # A hole is symmetric if its reflection through the centroid lands on
+            # (close to) another hole.
+            matched = 0
+            for p in hole_positions:
+                reflected = (2 * cx - p[0], 2 * cy - p[1], 2 * cz - p[2])
+                nearest = min(_dist(q, reflected) for q in hole_positions)
+                if nearest <= tol:
+                    matched += 1
+            match_fraction = matched / n
+
+            # Only emit the constraint when the holes actually mirror-match
+            # (at least half have a partner); confidence scales with the fit.
+            if match_fraction >= 0.5:
+                constraints.append(
+                    GeometricConstraint(
+                        constraint_type=ConstraintType.SYMMETRIC,
+                        entities=[f"hole_{i}" for i in range(len(holes))],
+                        parameters={
+                            "num_features": float(len(holes)),
+                            "symmetric_fraction": round(match_fraction, 3),
+                            "center_x": cx,
+                            "center_y": cy,
+                            "center_z": cz,
+                        },
+                        confidence=round(0.5 + 0.4 * match_fraction, 3),
+                        description=(
+                            f"Symmetric pattern of {len(holes)} holes "
+                            f"({matched}/{n} mirror-matched about centroid)"
+                        ),
+                        is_explicit=False,
+                    )
                 )
-            )
 
         _log.debug(f"Found {len(constraints)} symmetry constraints")
         return constraints

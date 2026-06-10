@@ -6,6 +6,7 @@ Tests all configuration dataclasses, enums, and the get_ll_gen_config helper:
 - Nested configuration with dotted key overrides
 - Type validation and field factories
 """
+
 from __future__ import annotations
 
 from dataclasses import fields
@@ -27,7 +28,6 @@ from ll_gen.config import (
     StepSchema,
     get_ll_gen_config,
 )
-
 
 # ============================================================================
 # SECTION 1: Enum Tests
@@ -547,7 +547,7 @@ class TestGetLLGenConfigHelper:
             **{
                 "codegen.temperature": 0.3,
                 "export.render_resolution": 1024,
-            }
+            },
         )
         assert config.max_retries == 10
         assert config.device == "cuda"
@@ -598,9 +598,7 @@ class TestGetLLGenConfigWithEnums:
 
     def test_override_default_backend(self) -> None:
         """Test overriding codegen.default_backend with enum value."""
-        config = get_ll_gen_config(
-            **{"codegen.default_backend": CodeLanguage.OPENSCAD}
-        )
+        config = get_ll_gen_config(**{"codegen.default_backend": CodeLanguage.OPENSCAD})
         assert config.codegen.default_backend == CodeLanguage.OPENSCAD
 
 

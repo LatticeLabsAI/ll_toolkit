@@ -1,0 +1,26 @@
+{
+  "name": "latticelabs-toolkit-docs",
+  "type": "module",
+  "version": "0.1.0",
+  "description": "Documentation site for the LatticeLabs Toolkit monorepo (Astro + Starlight).",
+  "scripts": {
+    "dev": "astro dev",
+    "start": "astro dev",
+    "gen:api": "python3 scripts/gen_api.py",
+    "prebuild": "python3 scripts/gen_api.py",
+    "build": "astro build",
+    "preview": "astro preview",
+    "check": "astro check",
+    "astro": "astro"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "^0.40.0",
+    "astro": "^6.4.5",
+    "sharp": "^0.34.5"
+  },
+  "devDependencies": {
+    "@astrojs/check": "^0.9.9",
+    "starlight-links-validator": "^0.24.0",
+    "typescript": "^6.0.3"
+  }
+}

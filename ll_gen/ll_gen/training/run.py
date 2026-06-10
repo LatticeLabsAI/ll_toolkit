@@ -17,6 +17,7 @@ Examples:
         --dataset deepcad --data-path latticelabs/deepcad \
         --max-samples 256 --epochs 1 --save checkpoints/vqvae.pt
 """
+
 from __future__ import annotations
 
 import argparse
@@ -77,7 +78,7 @@ def load_dataset_records(
 ) -> list[dict[str, Any]]:
     """Build the list of training records from a prompts file or a CAD dataset."""
     if prompts_file:
-        records = []
+        records: list[dict[str, Any]] = []
         with open(prompts_file) as fh:
             for line in fh:
                 line = line.strip()
@@ -94,7 +95,9 @@ def load_dataset_records(
     if dataset == "deepcad":
         from ll_gen.datasets.deepcad_loader import load_deepcad
 
-        data = load_deepcad(path=data_path or "latticelabs/deepcad", max_samples=max_samples)
+        data = load_deepcad(
+            path=data_path or "latticelabs/deepcad", max_samples=max_samples
+        )
     elif dataset == "abc":
         from ll_gen.datasets.abc_loader import load_abc
 
@@ -146,8 +149,12 @@ def train(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="ll_gen RL alignment training.")
-    parser.add_argument("--generator", required=True, choices=["vae", "vqvae", "diffusion"])
-    parser.add_argument("--prompts-file", default=None, help="JSONL file of {prompt,...} records.")
+    parser.add_argument(
+        "--generator", required=True, choices=["vae", "vqvae", "diffusion"]
+    )
+    parser.add_argument(
+        "--prompts-file", default=None, help="JSONL file of {prompt,...} records."
+    )
     parser.add_argument("--dataset", default=None, choices=["deepcad", "abc"])
     parser.add_argument("--data-path", default=None, help="Dataset path/HF id.")
     parser.add_argument("--max-samples", type=int, default=None)

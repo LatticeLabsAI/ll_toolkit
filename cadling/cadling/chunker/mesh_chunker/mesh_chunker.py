@@ -460,11 +460,14 @@ class MeshChunker(BaseCADChunker):
         return labels
 
     def _segment_by_graph(self, mesh: MeshData) -> List[List[int]]:
-        """Segment mesh using graph-based methods.
+        """Segment the mesh into connected face regions via graph traversal.
 
-        Uses normalized cuts approximation. Ensures no faces are dropped:
-        faces that remain in the BFS queue when a segment reaches
-        max_faces_per_chunk are revisited as seeds for subsequent segments.
+        Partitions faces into spatially-connected components by breadth-first
+        region growing over the face-adjacency graph, capped at
+        ``max_faces_per_chunk`` faces per segment. This is connected-components
+        segmentation with a size limit — NOT a spectral normalized-cuts
+        partition. No faces are dropped: faces still queued when a segment
+        reaches the cap are unmarked and become seeds for subsequent segments.
 
         Args:
             mesh: Mesh data
@@ -475,7 +478,7 @@ class MeshChunker(BaseCADChunker):
         # Build adjacency graph
         adjacency = self._build_face_adjacency(mesh)
 
-        # Simple connected components with size limit
+        # Connected components via BFS region growing, with a per-segment cap.
         visited = set()
         segments = []
 

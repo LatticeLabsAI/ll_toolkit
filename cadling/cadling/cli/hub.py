@@ -289,12 +289,24 @@ def preview(
     default="zstd",
     help="Parquet compression codec",
 )
+@click.option(
+    "--type",
+    "dataset_type",
+    type=click.Choice(["command_sequences", "brep_graphs"]),
+    default="command_sequences",
+    help=(
+        "Dataset type to build: 'command_sequences' (DeepCAD-style command "
+        "tokens) or 'brep_graphs' (B-Rep face-adjacency graphs from STEP). "
+        "Default: command_sequences"
+    ),
+)
 def build(
     source_dir: str,
     output: str,
     config: str,
     splits: str,
     compression: str,
+    dataset_type: str,
 ):
     """Build Parquet dataset from source files.
 
@@ -304,41 +316,69 @@ def build(
     Examples:
 
         \b
-        # Build from DeepCAD JSON files
+        # Build command-sequence dataset from DeepCAD JSON files
         cadling hub build ./deepcad_json -o ./output
 
         \b
         # Build with text descriptions
         cadling hub build ./text2cad -o ./output --config with_text
+
+        \b
+        # Build B-Rep face-adjacency graphs from STEP files
+        cadling hub build ./step_files -o ./output --type brep_graphs
     """
     try:
-        from cadling.data.hf_builders import CADCommandSequenceBuilder
-        from cadling.data.hf_builders.cad_dataset_builder import (
-            DEFAULT_CONFIG,
-            WITH_TEXT_CONFIG,
-            WITH_RENDERS_CONFIG,
-            FULL_CONFIG,
-        )
-
-        click.echo(f"Building dataset from {source_dir}...", err=True)
-
-        # Select configuration
-        config_map = {
-            "default": DEFAULT_CONFIG,
-            "with_text": WITH_TEXT_CONFIG,
-            "with_renders": WITH_RENDERS_CONFIG,
-            "full": FULL_CONFIG,
-        }
-        builder_config = config_map[config]
-
-        # Parse splits
+        # Parse splits (shared by both builders)
         split_list = [s.strip() for s in splits.split(",")]
 
-        builder = CADCommandSequenceBuilder(
-            source_dir=source_dir,
-            config=builder_config,
-            splits=split_list,
+        click.echo(
+            f"Building {dataset_type} dataset from {source_dir}...", err=True
         )
+
+        if dataset_type == "brep_graphs":
+            from cadling.data.hf_builders.brep_graph_builder import (
+                BRepGraphBuilder,
+                DEFAULT_CONFIG as BREP_DEFAULT_CONFIG,
+                FULL_CONFIG as BREP_FULL_CONFIG,
+            )
+
+            # The command-sequence configs (with_text/with_renders) do not apply
+            # to B-Rep graphs; map the ones that do and fall back to default.
+            brep_config_map = {
+                "default": BREP_DEFAULT_CONFIG,
+                "full": BREP_FULL_CONFIG,
+            }
+            if config not in brep_config_map:
+                click.echo(
+                    f"Note: --config '{config}' is not applicable to brep_graphs; "
+                    f"using 'default'.",
+                    err=True,
+                )
+            builder = BRepGraphBuilder(
+                source_dir=source_dir,
+                config=brep_config_map.get(config, BREP_DEFAULT_CONFIG),
+                splits=split_list,
+            )
+        else:
+            from cadling.data.hf_builders import CADCommandSequenceBuilder
+            from cadling.data.hf_builders.cad_dataset_builder import (
+                DEFAULT_CONFIG,
+                WITH_TEXT_CONFIG,
+                WITH_RENDERS_CONFIG,
+                FULL_CONFIG,
+            )
+
+            config_map = {
+                "default": DEFAULT_CONFIG,
+                "with_text": WITH_TEXT_CONFIG,
+                "with_renders": WITH_RENDERS_CONFIG,
+                "full": FULL_CONFIG,
+            }
+            builder = CADCommandSequenceBuilder(
+                source_dir=source_dir,
+                config=config_map[config],
+                splits=split_list,
+            )
 
         output_files = builder.build(output, compression=compression)
 

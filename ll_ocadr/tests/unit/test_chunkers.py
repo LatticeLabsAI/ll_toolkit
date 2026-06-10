@@ -6,6 +6,7 @@ Covers the parts that run without conda-only deps (pythonocc/open3d):
 - CADLoader / MeshData on a real trimesh STL.
 STEP topology extraction is gated behind pythonocc and skips when it's absent.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -145,7 +146,9 @@ class TestCADLoaderMesh:
 
 
 @pytest.mark.requires_pythonocc
-@pytest.mark.skipif(not _occ_available(), reason="pythonocc-core not installed (conda-only)")
+@pytest.mark.skipif(
+    not _occ_available(), reason="pythonocc-core not installed (conda-only)"
+)
 @pytest.mark.skipif(not _PART_STEP.exists(), reason="part.step fixture not found")
 class TestSTEPProcessor:
     def test_step_topology_extraction(self) -> None:

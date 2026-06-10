@@ -23,8 +23,8 @@ def square_distance(src, dst):
     B, N, _ = src.shape
     _, M, _ = dst.shape
     dist = -2 * torch.matmul(src, dst.permute(0, 2, 1))
-    dist += torch.sum(src ** 2, -1).view(B, N, 1)
-    dist += torch.sum(dst ** 2, -1).view(B, 1, M)
+    dist += torch.sum(src**2, -1).view(B, N, 1)
+    dist += torch.sum(dst**2, -1).view(B, 1, M)
     return dist
 
 
@@ -59,6 +59,7 @@ def _farthest_point_sample_python(xyz, npoint):
 
 try:
     from torch_cluster import fps as _torch_cluster_fps
+
     _has_torch_cluster = True
 except ImportError:
     _has_torch_cluster = False
@@ -92,7 +93,7 @@ def farthest_point_sample(xyz, npoint):
     flat_idx = _torch_cluster_fps(flat_xyz, batch_vec, ratio=ratio, random_start=True)
 
     # Convert flat indices back to per-batch indices
-    centroids = (flat_idx.reshape(B, npoint) % N)
+    centroids = flat_idx.reshape(B, npoint) % N
     return centroids
 
 
@@ -113,7 +114,12 @@ def index_points(points, idx):
     view_shape[1:] = [1] * (len(view_shape) - 1)
     repeat_shape = list(idx.shape)
     repeat_shape[0] = 1
-    batch_indices = torch.arange(B, dtype=torch.long).to(device).view(view_shape).repeat(repeat_shape)
+    batch_indices = (
+        torch.arange(B, dtype=torch.long)
+        .to(device)
+        .view(view_shape)
+        .repeat(repeat_shape)
+    )
     new_points = points[batch_indices, idx, :]
     return new_points
 
@@ -134,9 +140,11 @@ def query_ball_point(radius, nsample, xyz, new_xyz):
     device = xyz.device
     B, N, C = xyz.shape
     _, S, _ = new_xyz.shape
-    group_idx = torch.arange(N, dtype=torch.long).to(device).view(1, 1, N).repeat([B, S, 1])
+    group_idx = (
+        torch.arange(N, dtype=torch.long).to(device).view(1, 1, N).repeat([B, S, 1])
+    )
     sqrdists = square_distance(new_xyz, xyz)
-    group_idx[sqrdists > radius ** 2] = N
+    group_idx[sqrdists > radius**2] = N
     group_idx = group_idx.sort(dim=-1)[0][:, :, :nsample]
     # When the input cloud has fewer than `nsample` points, the slice above
     # yields min(N, nsample) columns — repeat `group_first` to that actual width
@@ -212,7 +220,9 @@ class PointNetSetAbstraction(nn.Module):
             new_xyz: [B, npoint, 3]
             new_points: [B, npoint, mlp[-1]]
         """
-        new_xyz, new_points = sample_and_group(self.npoint, self.radius, self.nsample, xyz, points)
+        new_xyz, new_points = sample_and_group(
+            self.npoint, self.radius, self.nsample, xyz, points
+        )
 
         # new_points: [B, npoint, nsample, in_channel]
         new_points = new_points.permute(0, 3, 2, 1)  # [B, in_channel, nsample, npoint]
@@ -252,7 +262,7 @@ class GeometryNet(nn.Module):
             radius=0.2,
             nsample=32,
             in_channel=6,  # xyz (3) + normals (3)
-            mlp=[64, 64, 128]
+            mlp=[64, 64, 128],
         )
 
         # SA2: 512 -> 128 points, local region radius 0.4
@@ -261,14 +271,12 @@ class GeometryNet(nn.Module):
             radius=0.4,
             nsample=64,
             in_channel=128 + 3,  # previous features + xyz
-            mlp=[128, 128, 256]
+            mlp=[128, 128, 256],
         )
 
         # Attention module for local context
         self.local_attn = nn.MultiheadAttention(
-            embed_dim=256,
-            num_heads=8,
-            batch_first=True
+            embed_dim=256, num_heads=8, batch_first=True
         )
 
         # Layer norm
@@ -283,16 +291,13 @@ class GeometryNet(nn.Module):
         Returns:
             features: [B, 128, 256] - 128 sampled points with 256-dim features
         """
-        # Concatenate coords + normals as input
-        points = torch.cat([coords, normals], dim=-1)  # [B, N, 6]
-
-        # Separate xyz from features
+        # Set abstraction consumes xyz and per-point features separately.
         xyz = coords  # [B, N, 3]
         features = normals  # [B, N, 3]
 
         # Hierarchical feature extraction
         xyz1, feat1 = self.sa1(xyz, features)  # [B, 512, 3], [B, 512, 128]
-        xyz2, feat2 = self.sa2(xyz1, feat1)    # [B, 128, 3], [B, 128, 256]
+        xyz2, feat2 = self.sa2(xyz1, feat1)  # [B, 128, 3], [B, 128, 256]
 
         # Apply attention over local features
         feat2_attn, _ = self.local_attn(feat2, feat2, feat2)  # [B, 128, 256]

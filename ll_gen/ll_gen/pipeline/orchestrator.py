@@ -24,7 +24,13 @@ import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from ll_gen.conditioning.multimodal import MultiModalConditioner
+    from ll_gen.generators.neural_diffusion import NeuralDiffusionGenerator
+    from ll_gen.generators.neural_vae import NeuralVAEGenerator
+    from ll_gen.generators.neural_vqvae import NeuralVQVAEGenerator
 
 from ll_gen.codegen.cadquery_proposer import CadQueryProposer
 from ll_gen.codegen.openscad_proposer import OpenSCADProposer
@@ -96,10 +102,10 @@ class GenerationOrchestrator:
         self._openscad_proposer: OpenSCADProposer | None = None
 
         # Lazy-initialized neural generators (created on first use)
-        self._vae_generator = None
-        self._diffusion_generator = None
-        self._vqvae_generator = None
-        self._conditioner = None
+        self._vae_generator: NeuralVAEGenerator | None = None
+        self._diffusion_generator: NeuralDiffusionGenerator | None = None
+        self._vqvae_generator: NeuralVQVAEGenerator | None = None
+        self._conditioner: MultiModalConditioner | None = None
 
     # ------------------------------------------------------------------
     # Main entry point

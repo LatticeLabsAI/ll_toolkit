@@ -1,0 +1,101 @@
+name: Docs
+
+# Builds the LatticeLabs Toolkit documentation site (site/, Astro + Starlight).
+#  - Pull requests: build + type-check + internal-link validation (gate, no deploy).
+#  - Push to main:  same checks, then deploy to GitHub Pages.
+# See docs/specs/SPEC-2-documentation-site.md.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'site/**'
+      - 'cadling/**'
+      - 'll_stepnet/**'
+      - 'geotoken/**'
+      - 'll_ocadr/**'
+      - 'll_gen/**'
+      - 'll_clouds/**'
+      - '.github/workflows/docs.yml'
+  pull_request:
+    paths:
+      - 'site/**'
+      - 'cadling/**'
+      - 'll_stepnet/**'
+      - 'geotoken/**'
+      - 'll_ocadr/**'
+      - 'll_gen/**'
+      - 'll_clouds/**'
+      - '.github/workflows/docs.yml'
+  workflow_dispatch:
+
+# Least-privilege defaults; the deploy job needs pages + id-token.
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build & validate
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: site
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22' # Astro 6 requires Node >= 22.12
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install API-generator dependency (griffe — static parse, no package import)
+        run: pip install "griffe>=2,<3"
+
+      - name: Install site dependencies
+        run: npm ci
+
+      - name: Generate API reference from docstrings
+        # Defined in M5 (scripts/gen-api.py). --if-present keeps the pipeline valid
+        # before that script lands; once present it regenerates <pkg>/reference/*.
+        run: npm run gen:api --if-present
+
+      - name: Type-check content (astro check)
+        run: npm run check
+
+      - name: Build site (validates internal links, builds Pagefind search index)
+        run: npm run build
+
+      - name: Upload Pages artifact
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site/dist
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4

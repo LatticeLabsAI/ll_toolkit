@@ -13,6 +13,7 @@ trajectory and connected to the model parameters.
   the model parameters (see ``neural_diffusion.generate_for_training``). M2's
   RL loop is therefore proven on VAE + VQ-VAE; diffusion RL is future work.
 """
+
 from __future__ import annotations
 
 import pytest

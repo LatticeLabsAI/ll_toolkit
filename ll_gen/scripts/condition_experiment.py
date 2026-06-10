@@ -109,7 +109,11 @@ def run_experiment(
                 # reflects deployment behavior.
                 prop = generator.generate(f"a {name} part", target_dimensions=dims)
                 r = eng.dispose(prop, export=False)
-                if r.is_valid and r.geometry_report and r.geometry_report.solid_count >= 1:
+                if (
+                    r.is_valid
+                    and r.geometry_report
+                    and r.geometry_report.solid_count >= 1
+                ):
                     bd = r.geometry_report.bbox_dimensions
                     if bd:
                         achieved.append(sorted(bd))
@@ -118,7 +122,9 @@ def run_experiment(
                 "requested_dims": dims,
                 "requested_sum": round(float(sum(dims)), 3),
                 "n_valid_solids": len(sums),
-                "mean_achieved_bbox_sum": round(float(np.mean(sums)), 3) if sums else None,
+                "mean_achieved_bbox_sum": (
+                    round(float(np.mean(sums)), 3) if sums else None
+                ),
                 "mean_achieved_dims": (
                     [round(float(x), 3) for x in np.mean(achieved, axis=0)]
                     if achieved
@@ -127,8 +133,12 @@ def run_experiment(
             }
 
     # Does achieved size track requested size across the 3 targets?
-    ordered = [results[n]["mean_achieved_bbox_sum"] for n in ("small", "medium", "large")]
-    tracks = all(v is not None for v in ordered) and ordered[0] < ordered[1] < ordered[2]
+    ordered = [
+        results[n]["mean_achieved_bbox_sum"] for n in ("small", "medium", "large")
+    ]
+    tracks = (
+        all(v is not None for v in ordered) and ordered[0] < ordered[1] < ordered[2]
+    )
 
     return {
         "warm_start": warm_start,

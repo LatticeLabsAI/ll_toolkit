@@ -93,18 +93,21 @@ class DDPMScheduler:
         q(x_t | x_0) = sqrt(alpha_bar_t) * x_0 + sqrt(1 - alpha_bar_t) * eps
 
         Args:
-            x_start: Clean data [B, D].
-            noise: Gaussian noise [B, D].
+            x_start: Clean data [B, ...] (e.g. [B, D] or [B, S, D]).
+            noise: Gaussian noise, same shape as ``x_start``.
             timesteps: Integer timestep indices [B].
 
         Returns:
-            Noisy data [B, D] at the given timesteps.
+            Noisy data, same shape as ``x_start``, at the given timesteps.
         """
         device = x_start.device
-        sqrt_ab = self.sqrt_alpha_bar.to(device)[timesteps].unsqueeze(-1)
+        # Reshape the per-batch coefficients to [B, 1, ..., 1] so they broadcast
+        # over every feature dim (works for [B, D] and [B, S, D] alike).
+        coeff_shape = [x_start.shape[0]] + [1] * (x_start.ndim - 1)
+        sqrt_ab = self.sqrt_alpha_bar.to(device)[timesteps].reshape(coeff_shape)
         sqrt_one_minus_ab = self.sqrt_one_minus_alpha_bar.to(device)[
             timesteps
-        ].unsqueeze(-1)
+        ].reshape(coeff_shape)
 
         return sqrt_ab * x_start + sqrt_one_minus_ab * noise
 
@@ -148,6 +151,107 @@ class DDPMScheduler:
             variance = self.posterior_variance[timestep].to(device)
             return mean + torch.sqrt(variance) * noise
         return mean
+
+    def ddim_step_with_log_prob(
+        self,
+        model_output: torch.Tensor,
+        timestep: int,
+        timestep_prev: int,
+        sample: torch.Tensor,
+        eta: float = 1.0,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Stochastic DDIM reverse step returning its Gaussian log-probability.
+
+        Implements the per-step transition used by diffusion policy-gradient
+        training (DDPO; Black et al., 2023). The math is the DDIM ``eta``
+        sampler shared verbatim by the reference implementations
+        (Make-a-Shape ``gaussian_diffusion.ddim_sample`` and the identical
+        ``brepdiff``/``diff3d`` variants)::
+
+            x0    = (x_t - sqrt(1 - ab_t) * eps) / sqrt(ab_t)
+            sigma = eta * sqrt((1 - ab_prev)/(1 - ab_t)) * sqrt(1 - ab_t/ab_prev)
+            mean  = sqrt(ab_prev) * x0 + sqrt(max(1 - ab_prev - sigma^2, 0)) * eps
+            x_prev = mean + sigma * noise            # noise ~ N(0, I)
+
+        where ``eps`` is the model's predicted noise. The returned log-prob is
+        ``log N(x_prev; mean, sigma^2 I)`` summed over the feature dimension
+        (one scalar per batch element). Because ``mean`` is a function of
+        ``model_output`` (the denoiser's epsilon prediction), gradients flow
+        into the model parameters — this is what makes the RL signal real
+        rather than a detached stand-in.
+
+        Args:
+            model_output: Predicted noise eps_theta(x_t, t), shape [B, D].
+            timestep: Current integer timestep ``t``.
+            timestep_prev: Next (smaller) timestep ``t'``; pass ``-1`` for the
+                final step landing on x_0 (``ab_prev = 1.0``).
+            sample: Current noisy sample x_t, shape [B, D].
+            eta: DDIM stochasticity. Must be > 0 for a non-degenerate policy
+                gradient; ``1.0`` recovers ancestral-DDPM-like noise.
+
+        Returns:
+            Tuple ``(x_prev, log_prob, entropy)`` where ``log_prob`` and
+            ``entropy`` are shape ``[B]`` tensors. ``log_prob`` carries the
+            gradient to ``model_output`` (and thus the model parameters).
+        """
+        device = sample.device
+        alpha_bar = self.alpha_bar.to(device)
+        ab_t = alpha_bar[timestep]
+        if timestep_prev < 0:
+            ab_prev = torch.ones((), device=device, dtype=ab_t.dtype)
+        else:
+            ab_prev = alpha_bar[timestep_prev]
+
+        # Reconstruct x0 from the epsilon prediction (model_output).
+        x0 = (sample - torch.sqrt(1.0 - ab_t) * model_output) / torch.sqrt(ab_t)
+
+        # DDIM stochasticity. At the final step ab_prev == 1, so the second
+        # factor is sqrt(1 - ab_t) * 0 == 0 -> sigma == 0 (deterministic).
+        sigma = (
+            eta
+            * torch.sqrt((1.0 - ab_prev) / (1.0 - ab_t))
+            * torch.sqrt(torch.clamp(1.0 - ab_t / ab_prev, min=0.0))
+        )
+
+        # Deterministic direction term (radicand clamped >= 0 for safety).
+        dir_coeff = torch.sqrt(torch.clamp(1.0 - ab_prev - sigma**2, min=0.0))
+        mean = torch.sqrt(ab_prev) * x0 + dir_coeff * model_output
+
+        batch_size = sample.shape[0]
+        # Reduce log-prob/entropy over every non-batch dimension, so this works
+        # for both a single latent [B, D] and a primitive-set latent [B, N, D].
+        reduce_dims = tuple(range(1, sample.ndim))
+        per_sample_dim = 1
+        for d in sample.shape[1:]:
+            per_sample_dim *= d
+
+        if float(sigma) > 0.0:
+            noise = torch.randn_like(sample)
+            x_prev = mean + sigma * noise
+            var = torch.clamp(sigma**2, min=1e-12)
+            # DDPO/REINFORCE score function: the sampled action must be treated
+            # as FIXED so that grad log N(a; mean, var) flows through `mean`
+            # (the policy) only. Using the live x_prev would make
+            # (x_prev - mean) == sigma*noise a constant w.r.t. mean -> zero
+            # gradient. Detach the action before scoring it.
+            action = x_prev.detach()
+            # log N(action; mean, var * I) summed over all feature dims -> [B].
+            log_prob = (
+                -0.5 * ((action - mean) ** 2) / var
+                - 0.5 * torch.log(2.0 * math.pi * var)
+            ).sum(dim=reduce_dims)
+            # Differential entropy of the isotropic Gaussian (per sample) -> [B].
+            entropy = (
+                0.5 * per_sample_dim * (1.0 + math.log(2.0 * math.pi))
+                + 0.5 * per_sample_dim * torch.log(var)
+            ).expand(batch_size)
+        else:
+            # Deterministic final step: no stochastic action, no log-prob term.
+            x_prev = mean
+            log_prob = torch.zeros(batch_size, device=device, dtype=mean.dtype)
+            entropy = torch.zeros(batch_size, device=device, dtype=mean.dtype)
+
+        return x_prev, log_prob, entropy
 
     @property
     def pndm_timesteps(self) -> torch.Tensor:
@@ -347,6 +451,150 @@ class CADDenoiser(nn.Module):
         return noise_pred
 
 
+class GeometryCodec(nn.Module):
+    """Autoencoder between per-primitive diffusion latents and B-Rep geometry.
+
+    A face is a ``U x V`` grid of 3D points; an edge is an ``M``-point polyline
+    (the BrepGen / BrepDiff representation — ``brepdiff`` ``uvgrid.py``). Each
+    primitive (face or edge) has its **own** latent token, so encode/decode is a
+    clean per-primitive mapping with no set-bottleneck:
+
+        encode_faces: [B, N_faces, U, V, 3] -> [B, N_faces, latent_dim]
+        decode_faces: [B, N_faces, latent_dim] -> [B, N_faces, U, V, 3]
+        encode_edges: [B, N_edges, M, 3]     -> [B, N_edges, latent_dim]
+        decode_edges: [B, N_edges, latent_dim] -> [B, N_edges, M, 3]
+
+    The encoders are UV-Net-style convolutional encoders (Conv2d over the face
+    grid, Conv1d over the edge polyline; cad-feature-detection ``encoders.py``).
+    No learned UV-grid decoder exists in the references (BrepDiff's detokenizer
+    is an identity reshape), so the decoders mirror the encoders as MLP heads
+    back to the grid/polyline. Trained with a masked MSE reconstruction loss
+    (``brepdiff.py`` loss). This gives the diffusion latent space a real,
+    differentiable mapping to geometry that the surface executor can fit and
+    sew into solids.
+    """
+
+    def __init__(
+        self,
+        latent_dim: int,
+        uv_grid_size: int,
+        edge_num_points: int,
+        hidden_dim: int = 256,
+    ) -> None:
+        super().__init__()
+        self.latent_dim = latent_dim
+        self.uv = uv_grid_size
+        self.edge_pts = edge_num_points
+
+        # Face encoder (UV-Net surface style): [B, 3, U, V] -> [B, latent_dim].
+        self.face_encoder = nn.Sequential(
+            nn.Conv2d(3, 64, 3, padding=1),
+            nn.BatchNorm2d(64),
+            nn.LeakyReLU(0.2),
+            nn.Conv2d(64, 128, 3, padding=1),
+            nn.BatchNorm2d(128),
+            nn.LeakyReLU(0.2),
+            nn.Conv2d(128, 256, 3, padding=1),
+            nn.BatchNorm2d(256),
+            nn.LeakyReLU(0.2),
+            nn.AdaptiveAvgPool2d(1),
+            nn.Flatten(),
+            nn.Linear(256, latent_dim),
+        )
+        # Edge encoder (UV-Net curve style): [B, 3, M] -> [B, latent_dim].
+        self.edge_encoder = nn.Sequential(
+            nn.Conv1d(3, 64, 3, padding=1),
+            nn.BatchNorm1d(64),
+            nn.LeakyReLU(0.2),
+            nn.Conv1d(64, 128, 3, padding=1),
+            nn.BatchNorm1d(128),
+            nn.LeakyReLU(0.2),
+            nn.Conv1d(128, 256, 3, padding=1),
+            nn.BatchNorm1d(256),
+            nn.LeakyReLU(0.2),
+            nn.AdaptiveAvgPool1d(1),
+            nn.Flatten(),
+            nn.Linear(256, latent_dim),
+        )
+        # Decoders mirror the encoders (per-primitive MLP heads).
+        self.face_decoder = nn.Sequential(
+            nn.Linear(latent_dim, hidden_dim),
+            nn.LeakyReLU(0.2),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.LeakyReLU(0.2),
+            nn.Linear(hidden_dim, uv_grid_size * uv_grid_size * 3),
+        )
+        self.edge_decoder = nn.Sequential(
+            nn.Linear(latent_dim, hidden_dim),
+            nn.LeakyReLU(0.2),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.LeakyReLU(0.2),
+            nn.Linear(hidden_dim, edge_num_points * 3),
+        )
+
+    def encode_faces(self, face_grids: torch.Tensor) -> torch.Tensor:
+        """[B, N, U, V, 3] -> [B, N, latent_dim]."""
+        b, n = face_grids.shape[0], face_grids.shape[1]
+        x = face_grids.reshape(b * n, self.uv, self.uv, 3).permute(0, 3, 1, 2)
+        z = self.face_encoder(x)
+        return z.reshape(b, n, self.latent_dim)
+
+    def decode_faces(self, latent: torch.Tensor) -> torch.Tensor:
+        """[B, N, latent_dim] -> [B, N, U, V, 3]."""
+        b, n = latent.shape[0], latent.shape[1]
+        out = self.face_decoder(latent.reshape(b * n, self.latent_dim))
+        return out.reshape(b, n, self.uv, self.uv, 3)
+
+    def encode_edges(self, edge_points: torch.Tensor) -> torch.Tensor:
+        """[B, N, M, 3] -> [B, N, latent_dim]."""
+        b, n = edge_points.shape[0], edge_points.shape[1]
+        x = edge_points.reshape(b * n, self.edge_pts, 3).permute(0, 2, 1)
+        z = self.edge_encoder(x)
+        return z.reshape(b, n, self.latent_dim)
+
+    def decode_edges(self, latent: torch.Tensor) -> torch.Tensor:
+        """[B, N, latent_dim] -> [B, N, M, 3]."""
+        b, n = latent.shape[0], latent.shape[1]
+        out = self.edge_decoder(latent.reshape(b * n, self.latent_dim))
+        return out.reshape(b, n, self.edge_pts, 3)
+
+    @staticmethod
+    def _masked_mse(
+        pred: torch.Tensor,
+        target: torch.Tensor,
+        empty_mask: Optional[torch.Tensor],
+    ) -> torch.Tensor:
+        """Mean squared error per primitive, averaged over non-empty primitives.
+
+        ``empty_mask`` is ``[B, N]`` with True marking padded/empty primitives
+        (BrepDiff ``empty_mask``); those are excluded from the loss.
+        """
+        per_primitive = (pred - target).pow(2).flatten(2).mean(dim=2)  # [B, N]
+        if empty_mask is None:
+            return per_primitive.mean()
+        valid = (~empty_mask).to(per_primitive.dtype)
+        denom = valid.sum().clamp(min=1.0)
+        return (per_primitive * valid).sum() / denom
+
+    def reconstruction_loss(
+        self,
+        face_grids: torch.Tensor,
+        edge_points: torch.Tensor,
+        face_mask: Optional[torch.Tensor] = None,
+        edge_mask: Optional[torch.Tensor] = None,
+    ) -> Dict[str, torch.Tensor]:
+        """Encode then decode the geometry and return masked-MSE recon losses."""
+        face_rec = self.decode_faces(self.encode_faces(face_grids))
+        edge_rec = self.decode_edges(self.encode_edges(edge_points))
+        face_loss = self._masked_mse(face_rec, face_grids, face_mask)
+        edge_loss = self._masked_mse(edge_rec, edge_points, edge_mask)
+        return {
+            "face_recon_loss": face_loss,
+            "edge_recon_loss": edge_loss,
+            "total_recon_loss": face_loss + edge_loss,
+        }
+
+
 class StructuredDiffusion(nn.Module):
     """Four-stage sequential diffusion following BrepGen.
 
@@ -417,41 +665,130 @@ class StructuredDiffusion(nn.Module):
             inference_steps=inference_steps,
         )
 
+        # Per-primitive set sizes: face stages produce `num_faces` tokens and
+        # edge stages produce `num_edges` tokens (each token is one face/edge).
+        num_faces = getattr(config, "num_faces", 8)
+        num_edges = getattr(config, "num_edges", 12)
+        uv_grid_size = getattr(config, "uv_grid_size", 8)
+        edge_num_points = getattr(config, "edge_num_points", 12)
+        codec_hidden_dim = getattr(config, "codec_hidden_dim", 256)
+
+        self._stage_tokens: Dict[str, int] = {
+            "face_positions": num_faces,
+            "face_geometry": num_faces,
+            "edge_positions": num_edges,
+            "edge_vertex_geometry": num_edges,
+        }
+        self._num_faces = num_faces
+        self._num_edges = num_edges
+
+        # Latent <-> geometry autoencoder. The final face-geometry tokens decode
+        # to U×V×3 face grids; the final edge tokens decode to M×3 polylines.
+        self.geometry_codec = GeometryCodec(
+            latent_dim=latent_dim,
+            uv_grid_size=uv_grid_size,
+            edge_num_points=edge_num_points,
+            hidden_dim=codec_hidden_dim,
+        )
+
         self._latent_dim = latent_dim
         self._num_timesteps = num_timesteps
 
         _log.info(
-            "StructuredDiffusion initialised: stages=%s, T=%d",
-            self.STAGE_NAMES, num_timesteps,
+            "StructuredDiffusion initialised: stages=%s, T=%d, "
+            "num_faces=%d, num_edges=%d, uv_grid=%d, edge_pts=%d",
+            self.STAGE_NAMES, num_timesteps, num_faces, num_edges,
+            uv_grid_size, edge_num_points,
         )
+
+    def _decode_geometry(
+        self, stage_latents: Dict[str, torch.Tensor]
+    ) -> Dict[str, torch.Tensor]:
+        """Decode the final face/edge stage tokens into B-Rep geometry tensors.
+
+        Returns ``face_grids`` [B, N_faces, U, V, 3] and ``edge_points``
+        [B, N_edges, M, 3] via the geometry codec.
+        """
+        face_tokens = stage_latents["face_geometry"]
+        edge_tokens = stage_latents["edge_vertex_geometry"]
+        return {
+            "face_grids": self.geometry_codec.decode_faces(face_tokens),
+            "edge_points": self.geometry_codec.decode_edges(edge_tokens),
+        }
+
+    def _condition_on_prev(
+        self,
+        stage_name: str,
+        x: torch.Tensor,
+        prev_denoised: Optional[torch.Tensor],
+    ) -> torch.Tensor:
+        """Condition the current stage's tokens on a pooled summary of the
+        previous stage. Pooling makes conditioning robust to differing token
+        counts across stages (e.g. faces -> edges)."""
+        if prev_denoised is None or stage_name not in self.cond_projections:
+            return x
+        prev_summary = prev_denoised.mean(dim=1, keepdim=True)  # [B, 1, D]
+        prev_broadcast = prev_summary.expand(-1, x.shape[1], -1)  # [B, S, D]
+        combined = torch.cat([x, prev_broadcast], dim=-1)  # [B, S, 2D]
+        return self.cond_projections[stage_name](combined)
 
     def forward_train(
         self,
-        stage_data: Dict[str, torch.Tensor],
+        stage_data: Optional[Dict[str, torch.Tensor]] = None,
+        geometry: Optional[Dict[str, torch.Tensor]] = None,
     ) -> Dict[str, torch.Tensor]:
-        """Training forward: compute denoising loss for each stage.
+        """Training forward: denoising loss per stage + codec reconstruction.
 
-        Each stage independently samples a random timestep, adds noise,
-        and predicts the noise. Later stages receive the clean
-        ground-truth of previous stages as conditioning (teacher forcing).
+        Each stage independently samples a random timestep, adds noise, and
+        predicts the noise (teacher-forced on a pooled summary of the previous
+        stage's clean tokens). When ``geometry`` is supplied, the clean
+        per-stage token latents are the codec's *encoding* of the real geometry,
+        so the diffusion learns to denoise in the codec's latent space, and a
+        masked-MSE reconstruction term trains the codec itself — making the
+        latent<->geometry mapping coherent end to end.
 
         Args:
-            stage_data: Mapping from stage name to clean latent tensors [B, D].
+            stage_data: Optional explicit clean stage latents, each [B, S, D]
+                (or [B, D], which is promoted to a single token). Overrides the
+                geometry-derived targets per stage when both are given.
+            geometry: Optional dict with ``face_grids`` [B, N_faces, U, V, 3],
+                ``edge_points`` [B, N_edges, M, 3] and optional ``face_mask`` /
+                ``edge_mask`` [B, N] (True = padded/empty primitive).
 
         Returns:
-            Dictionary with {stage_name}_loss scalar tensors and a total_loss.
+            Dictionary with ``{stage_name}_loss`` denoising terms, optional
+            ``face_recon_loss`` / ``edge_recon_loss``, and ``total_loss``.
         """
+        if not stage_data and not geometry:
+            raise ValueError(
+                "forward_train requires stage_data and/or geometry."
+            )
+
+        # Build clean per-stage token targets.
+        stage_targets: Dict[str, torch.Tensor] = {}
+        if geometry is not None:
+            face_z = self.geometry_codec.encode_faces(geometry["face_grids"])
+            edge_z = self.geometry_codec.encode_edges(geometry["edge_points"])
+            stage_targets["face_positions"] = face_z
+            stage_targets["face_geometry"] = face_z
+            stage_targets["edge_positions"] = edge_z
+            stage_targets["edge_vertex_geometry"] = edge_z
+        if stage_data:
+            stage_targets.update(stage_data)
+
         losses: Dict[str, torch.Tensor] = {}
-        device = next(iter(stage_data.values())).device
-        batch_size = next(iter(stage_data.values())).shape[0]
+        device = next(iter(stage_targets.values())).device
+        batch_size = next(iter(stage_targets.values())).shape[0]
 
         prev_clean: Optional[torch.Tensor] = None
 
         for stage_name in self.STAGE_NAMES:
-            if stage_name not in stage_data:
+            if stage_name not in stage_targets:
                 continue
 
-            clean = stage_data[stage_name]
+            clean = stage_targets[stage_name]
+            if clean.dim() == 2:  # promote [B, D] -> [B, 1, D]
+                clean = clean.unsqueeze(1)
 
             # Random timesteps for this stage
             t = torch.randint(
@@ -460,10 +797,8 @@ class StructuredDiffusion(nn.Module):
             noise = torch.randn_like(clean)
             noisy = self.scheduler.add_noise(clean, noise, t)
 
-            # Condition on previous stage (teacher forcing with clean data)
-            if prev_clean is not None and stage_name in self.cond_projections:
-                combined = torch.cat([noisy, prev_clean], dim=-1)
-                noisy = self.cond_projections[stage_name](combined)
+            # Condition on previous stage (teacher forcing with clean tokens).
+            noisy = self._condition_on_prev(stage_name, noisy, prev_clean)
 
             # Predict noise
             noise_pred = self.denoisers[stage_name](noisy, t)
@@ -473,6 +808,19 @@ class StructuredDiffusion(nn.Module):
             prev_clean = clean
 
         total_loss = sum(losses.values())
+
+        # Codec reconstruction loss (trains the latent<->geometry autoencoder).
+        if geometry is not None:
+            recon = self.geometry_codec.reconstruction_loss(
+                geometry["face_grids"],
+                geometry["edge_points"],
+                geometry.get("face_mask"),
+                geometry.get("edge_mask"),
+            )
+            losses["face_recon_loss"] = recon["face_recon_loss"]
+            losses["edge_recon_loss"] = recon["edge_recon_loss"]
+            total_loss = total_loss + recon["total_recon_loss"]
+
         losses["total_loss"] = total_loss
 
         return losses
@@ -492,7 +840,10 @@ class StructuredDiffusion(nn.Module):
             use_pndm: Whether to use PNDM accelerated sampling.
 
         Returns:
-            Dictionary mapping stage names to denoised latents [B, D].
+            Dictionary mapping each stage name to its denoised token latents
+            ([B, N_faces or N_edges, D]) plus decoded geometry tensors
+            ``face_grids`` [B, N_faces, U, V, 3] and ``edge_points``
+            [B, N_edges, M, 3].
         """
         if device is None:
             device = next(self.parameters()).device
@@ -508,9 +859,10 @@ class StructuredDiffusion(nn.Module):
             # noise predictions from prior stages leaking through
             self.scheduler.reset_pndm()
 
-            # Start from pure noise
+            # Start from pure noise — one token per primitive (face or edge).
+            n_tokens = self._stage_tokens[stage_name]
             x = torch.randn(
-                batch_size, self._latent_dim, device=device
+                batch_size, n_tokens, self._latent_dim, device=device
             )
 
             if use_pndm:
@@ -524,14 +876,10 @@ class StructuredDiffusion(nn.Module):
                 t = t_val.long()
                 t_batch = t.expand(batch_size)
 
-                # Condition on previous stage result
-                denoiser_input = x
-                if (
-                    prev_denoised is not None
-                    and stage_name in self.cond_projections
-                ):
-                    combined = torch.cat([x, prev_denoised], dim=-1)
-                    denoiser_input = self.cond_projections[stage_name](combined)
+                # Condition on a pooled summary of the previous stage result.
+                denoiser_input = self._condition_on_prev(
+                    stage_name, x, prev_denoised
+                )
 
                 noise_pred = denoiser(denoiser_input, t_batch)
 
@@ -543,4 +891,111 @@ class StructuredDiffusion(nn.Module):
             results[stage_name] = x
             prev_denoised = x
 
+        # Decode the final stage tokens into B-Rep geometry.
+        results.update(self._decode_geometry(results))
         return results
+
+    def sample_with_log_prob(
+        self,
+        batch_size: int = 1,
+        device: Optional[torch.device] = None,
+        num_inference_steps: Optional[int] = None,
+        eta: float = 1.0,
+    ) -> Tuple[Dict[str, torch.Tensor], torch.Tensor, torch.Tensor]:
+        """DDPO sampling: geometry plus a *differentiable* trajectory log-prob.
+
+        Runs stochastic DDIM reverse diffusion (``eta > 0``) over all four
+        stages **without** ``torch.no_grad`` and accumulates the per-step
+        Gaussian log-probabilities from
+        :meth:`DDPMScheduler.ddim_step_with_log_prob`. Each step's transition
+        mean depends on its denoiser's epsilon prediction, so the summed
+        log-prob backpropagates into every denoiser (and the stage conditioning
+        projections) — enabling real diffusion policy-gradient (REINFORCE /
+        DDPO) reinforcement learning. This is the path that makes the RL signal
+        train the actual model parameters, replacing the previously decoupled
+        noise-prior stand-in.
+
+        Trajectory states are detached between steps (each ``x_t`` is treated as
+        a fixed state in the action history, as in DDPO), which bounds memory
+        while preserving the gradient inside each transition's log-prob.
+
+        Args:
+            batch_size: Number of samples to draw.
+            device: Target device (defaults to the model's device).
+            num_inference_steps: Reverse steps per stage (defaults to the
+                scheduler's ``inference_steps``).
+            eta: DDIM stochasticity. Coerced to ``1.0`` if ``<= 0`` because a
+                deterministic trajectory has a degenerate (delta) policy that
+                cannot provide a usable policy gradient.
+
+        Returns:
+            Tuple ``(results, total_log_prob, total_entropy)``:
+                * ``results``: ``{stage_name: token latent [B, N, D]}`` plus
+                  decoded ``face_grids`` / ``edge_points`` (all detached).
+                * ``total_log_prob``: ``[B]`` sum of per-step log-probs across all
+                  stages, connected to the model parameters.
+                * ``total_entropy``: ``[B]`` sum of per-step Gaussian entropies.
+        """
+        if device is None:
+            device = next(self.parameters()).device
+        if num_inference_steps is None:
+            num_inference_steps = self.scheduler.inference_steps
+        if eta <= 0.0:
+            eta = 1.0
+
+        # Evenly-spaced decreasing timestep schedule ending at 0.
+        timesteps = (
+            torch.linspace(
+                self._num_timesteps - 1, 0, num_inference_steps, dtype=torch.long
+            )
+            .tolist()
+        )
+
+        results: Dict[str, torch.Tensor] = {}
+        prev_denoised: Optional[torch.Tensor] = None
+        total_log_prob = torch.zeros(batch_size, device=device)
+        total_entropy = torch.zeros(batch_size, device=device)
+
+        for stage_name in self.STAGE_NAMES:
+            denoiser = self.denoisers[stage_name]
+
+            # One token per primitive (face or edge) for this stage.
+            n_tokens = self._stage_tokens[stage_name]
+            x = torch.randn(
+                batch_size, n_tokens, self._latent_dim, device=device
+            )
+
+            for i, t_val in enumerate(timesteps):
+                t = int(t_val)
+                t_prev = int(timesteps[i + 1]) if i + 1 < len(timesteps) else -1
+                t_batch = torch.full(
+                    (batch_size,), t, device=device, dtype=torch.long
+                )
+
+                # Condition on a pooled summary of the previous stage (detached).
+                denoiser_input = self._condition_on_prev(
+                    stage_name, x, prev_denoised
+                )
+
+                noise_pred = denoiser(denoiser_input, t_batch)
+
+                x_prev, log_prob, entropy = (
+                    self.scheduler.ddim_step_with_log_prob(
+                        noise_pred, t, t_prev, x, eta=eta
+                    )
+                )
+                total_log_prob = total_log_prob + log_prob
+                total_entropy = total_entropy + entropy
+
+                # Detach the trajectory state for the next step (DDPO treats
+                # states as fixed); the gradient lives inside each log_prob.
+                x = x_prev.detach()
+
+            results[stage_name] = x
+            prev_denoised = x  # already detached
+
+        # Decode geometry from the final (detached) tokens. The geometry decode
+        # is not part of the policy gradient — the RL signal trains the denoisers
+        # via total_log_prob; the codec is trained separately via forward_train.
+        results.update(self._decode_geometry(results))
+        return results, total_log_prob, total_entropy

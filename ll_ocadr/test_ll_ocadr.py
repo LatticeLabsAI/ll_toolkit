@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 # Add vllm directory to path
-sys.path.insert(0, str(Path(__file__).parent / 'vllm' / 'process'))
+sys.path.insert(0, str(Path(__file__).parent / "vllm" / "process"))
 
 from file_content_chunker import UnifiedCADContentChunker
 
@@ -15,14 +15,14 @@ from file_content_chunker import UnifiedCADContentChunker
 def test_file_chunker(file_path: str):
     """Test the file content chunker."""
     print(f"\n{'='*60}")
-    print(f"Testing LL-OCADR File Content Chunker")
+    print("Testing LL-OCADR File Content Chunker")
     print(f"{'='*60}\n")
 
     # Check if file exists
     path = Path(file_path)
     if not path.exists():
         print(f"❌ File not found: {file_path}")
-        print(f"\nPlease provide a CAD/Mesh file (STEP, STL, or OBJ)")
+        print("\nPlease provide a CAD/Mesh file (STEP, STL, or OBJ)")
         return False
 
     print(f"📁 File: {path.name}")
@@ -36,10 +36,12 @@ def test_file_chunker(file_path: str):
         print("⚙️  Analyzing file...")
         analysis = chunker.analyze_file(file_path)
 
-        print(f"\n📊 File Analysis:")
+        print("\n📊 File Analysis:")
         print(f"   Total {analysis['entity_type']}s: {analysis['total_entities']}")
         print(f"   Complexity: {analysis['complexity']}")
-        print(f"   Optimal chunk size: {analysis['chunk_size']} {analysis['entity_type']}s")
+        print(
+            f"   Optimal chunk size: {analysis['chunk_size']} {analysis['entity_type']}s"
+        )
         print(f"   Estimated chunks: {analysis['num_chunks']}")
         print(f"   Est. tokens/chunk: ~{analysis['tokens_per_chunk_est']}")
 
@@ -49,20 +51,20 @@ def test_file_chunker(file_path: str):
         # Get statistics
         stats = chunker.get_chunk_statistics(chunks)
 
-        print(f"\n✅ Chunking complete!\n")
+        print("\n✅ Chunking complete!\n")
         print(f"{'='*60}")
-        print(f"CHUNK STATISTICS")
+        print("CHUNK STATISTICS")
         print(f"{'='*60}")
         print(f"Number of chunks:     {stats['num_chunks']}")
         print(f"Format:               {stats['format']}")
         print(f"Total content size:   {stats['total_content_size']:,} bytes")
         print(f"Avg chunk size:       {stats['avg_chunk_size']:.2f} bytes")
 
-        if 'total_facets' in stats:
+        if "total_facets" in stats:
             print(f"Total facets:         {stats['total_facets']:,}")
-        elif 'total_entities' in stats:
+        elif "total_entities" in stats:
             print(f"Total entities:       {stats['total_entities']:,}")
-        elif 'total_faces' in stats:
+        elif "total_faces" in stats:
             print(f"Total faces:          {stats['total_faces']:,}")
 
         print(f"{'='*60}\n")
@@ -71,22 +73,28 @@ def test_file_chunker(file_path: str):
         if chunks:
             first_chunk = chunks[0]
             print(f"{'='*60}")
-            print(f"FIRST CHUNK PREVIEW")
+            print("FIRST CHUNK PREVIEW")
             print(f"{'='*60}")
             print(f"Format:               {first_chunk['format']}")
 
-            if 'start_facet' in first_chunk:
-                print(f"Facet range:          {first_chunk['start_facet']} - {first_chunk['end_facet']}")
+            if "start_facet" in first_chunk:
+                print(
+                    f"Facet range:          {first_chunk['start_facet']} - {first_chunk['end_facet']}"
+                )
                 print(f"Number of facets:     {len(first_chunk['facets'])}")
-            elif 'start_entity' in first_chunk:
-                print(f"Entity range:         {first_chunk['start_entity']} - {first_chunk['end_entity']}")
+            elif "start_entity" in first_chunk:
+                print(
+                    f"Entity range:         {first_chunk['start_entity']} - {first_chunk['end_entity']}"
+                )
                 print(f"Number of entities:   {len(first_chunk['entities'])}")
-            elif 'num_faces' in first_chunk:
-                print(f"Face range:           {first_chunk['start_face']} - {first_chunk['end_face']}")
+            elif "num_faces" in first_chunk:
+                print(
+                    f"Face range:           {first_chunk['start_face']} - {first_chunk['end_face']}"
+                )
                 print(f"Number of faces:      {first_chunk['num_faces']}")
 
             # Show raw content preview
-            raw_content = first_chunk['raw_content']
+            raw_content = first_chunk["raw_content"]
             if isinstance(raw_content, bytes):
                 print(f"\nRaw content:          Binary data ({len(raw_content)} bytes)")
             else:
@@ -102,6 +110,7 @@ def test_file_chunker(file_path: str):
     except Exception as e:
         print(f"\n❌ Error: {e}")
         import traceback
+
         traceback.print_exc()
         return False
 
@@ -109,12 +118,13 @@ def test_file_chunker(file_path: str):
 def test_full_pipeline(file_path: str):
     """Test the full LL-OCADR preprocessing pipeline."""
     print(f"\n{'='*60}")
-    print(f"Testing Full LL-OCADR Pipeline")
+    print("Testing Full LL-OCADR Pipeline")
     print(f"{'='*60}\n")
 
     try:
         from transformers import AutoTokenizer
-        sys.path.insert(0, str(Path(__file__).parent / 'vllm'))
+
+        sys.path.insert(0, str(Path(__file__).parent / "vllm"))
         from config import LLOCADRConfig
         from process.mesh_process import LLOCADRProcessor
 
@@ -126,8 +136,7 @@ def test_full_pipeline(file_path: str):
         # Initialize tokenizer
         print(f"📝 Loading tokenizer: {config.language_model_name}")
         tokenizer = AutoTokenizer.from_pretrained(
-            config.language_model_name,
-            trust_remote_code=True
+            config.language_model_name, trust_remote_code=True
         )
 
         # Add mesh token
@@ -139,25 +148,23 @@ def test_full_pipeline(file_path: str):
         # Initialize processor with dynamic chunking
         processor = LLOCADRProcessor(
             tokenizer=tokenizer,
-            mesh_token_id=mesh_token_id
+            mesh_token_id=mesh_token_id,
             # chunk_size=None by default - uses dynamic analysis
         )
 
-        print(f"✅ Components initialized\n")
+        print("✅ Components initialized\n")
 
         # Process mesh
         print(f"🔄 Processing mesh file: {Path(file_path).name}")
         conversation = f"{config.mesh_token}\nDescribe this CAD model."
 
         result = processor.tokenize_with_meshes(
-            mesh_files=[file_path],
-            conversation=conversation,
-            cropping=True
+            mesh_files=[file_path], conversation=conversation, cropping=True
         )
 
-        print(f"\n✅ Processing complete!\n")
+        print("\n✅ Processing complete!\n")
         print(f"{'='*60}")
-        print(f"PIPELINE OUTPUT")
+        print("PIPELINE OUTPUT")
         print(f"{'='*60}")
         print(f"Input IDs shape:         {result['input_ids'].shape}")
         print(f"Vertex coords shape:     {result['vertex_coords'].shape}")
@@ -173,6 +180,7 @@ def test_full_pipeline(file_path: str):
     except Exception as e:
         print(f"\n❌ Error: {e}")
         import traceback
+
         traceback.print_exc()
         return False
 
@@ -183,16 +191,14 @@ def main():
 
     parser = argparse.ArgumentParser(description="Test LL-OCADR pipeline")
     parser.add_argument(
-        "--file",
-        type=str,
-        help="Path to CAD/Mesh file (STEP, STL, OBJ)"
+        "--file", type=str, help="Path to CAD/Mesh file (STEP, STL, OBJ)"
     )
     parser.add_argument(
         "--test",
         type=str,
         choices=["chunker", "pipeline", "all"],
         default="all",
-        help="Which test to run"
+        help="Which test to run",
     )
 
     args = parser.parse_args()
@@ -204,9 +210,9 @@ def main():
         print("  python test_ll_ocadr.py --file model.step --test chunker")
         return
 
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("LL-OCADR TEST SUITE")
-    print("="*60)
+    print("=" * 60)
 
     results = []
 
@@ -217,13 +223,13 @@ def main():
         results.append(("Full Pipeline", test_full_pipeline(args.file)))
 
     # Summary
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("TEST SUMMARY")
-    print("="*60)
+    print("=" * 60)
     for name, success in results:
         status = "✅ PASS" if success else "❌ FAIL"
         print(f"{name:.<40} {status}")
-    print("="*60 + "\n")
+    print("=" * 60 + "\n")
 
 
 if __name__ == "__main__":

@@ -1,4 +1,5 @@
 """Unit tests for GeometryNet (PointNet++ local encoder) — SPEC-1 M4, T4.2."""
+
 from __future__ import annotations
 
 import pytest

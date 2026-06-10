@@ -6,6 +6,7 @@ Tests cover:
 - GenerationHistory: initialization with defaults
 - GenerationOrchestrator: initialization, routing, feedback construction
 """
+
 from __future__ import annotations
 
 import re
@@ -25,10 +26,10 @@ from tests.conftest import (
     requires_torch,
 )
 
-
 # ============================================================================
 # VerificationResult Tests
 # ============================================================================
+
 
 class TestVerificationResult:
     """Test suite for VerificationResult dataclass."""
@@ -45,9 +46,7 @@ class TestVerificationResult:
 
     def test_verification_result_custom_values(self) -> None:
         """Test VerificationResult construction with custom values."""
-        dim_checks = [
-            {"name": "width", "expected": 100, "actual": 98, "passed": True}
-        ]
+        dim_checks = [{"name": "width", "expected": 100, "actual": 98, "passed": True}]
         issues = ["Dimension slightly off"]
         vlm_response = "The shape looks correct"
 
@@ -71,6 +70,7 @@ class TestVerificationResult:
 # ============================================================================
 # VisualVerifier Tests
 # ============================================================================
+
 
 class TestVisualVerifierInit:
     """Test suite for VisualVerifier initialization."""
@@ -458,7 +458,9 @@ class TestVisualVerifierConfidence:
         if result.matches_intent:
             assert result.confidence >= 0.5
 
-    def test_confidence_failure_with_issues(self, geometry_report_box: GeometryReport) -> None:
+    def test_confidence_failure_with_issues(
+        self, geometry_report_box: GeometryReport
+    ) -> None:
         """Test confidence with failing checks.
 
         With failures, confidence = 0.8 - 0.1 * num_issues, min 0.1
@@ -482,6 +484,7 @@ class TestVisualVerifierConfidence:
 # GenerationHistory Tests
 # ============================================================================
 
+
 class TestGenerationHistory:
     """Test suite for GenerationHistory dataclass."""
 
@@ -499,11 +502,13 @@ class TestGenerationHistory:
     ) -> None:
         """Test GenerationHistory with populated attempts."""
         history = GenerationHistory()
-        history.attempts.append({
-            "attempt": 1,
-            "proposal_id": "test_001",
-            "is_valid": True,
-        })
+        history.attempts.append(
+            {
+                "attempt": 1,
+                "proposal_id": "test_001",
+                "is_valid": True,
+            }
+        )
         history.final_result = disposal_result_valid
         history.total_time_ms = 500.0
 
@@ -515,6 +520,7 @@ class TestGenerationHistory:
 # ============================================================================
 # GenerationOrchestrator Tests
 # ============================================================================
+
 
 class TestGenerationOrchestratorInit:
     """Test suite for GenerationOrchestrator initialization."""
@@ -596,7 +602,9 @@ class TestGenerationOrchestratorBuildFeedback:
 
         assert isinstance(feedback, dict)
         # Neural feedback should have different keys than code feedback
-        assert "error_message" not in feedback or feedback.get("type") != "code_feedback"
+        assert (
+            "error_message" not in feedback or feedback.get("type") != "code_feedback"
+        )
 
 
 class TestGenerationOrchestratorProposeDispatch:
@@ -616,6 +624,7 @@ class TestGenerationOrchestratorProposeDispatch:
 # ============================================================================
 # Integration Tests
 # ============================================================================
+
 
 class TestVerificationIntegration:
     """Integration tests for the verification pipeline."""
@@ -674,9 +683,9 @@ class TestGenerationOrchestratorStructure:
         ]
 
         for method_name in required_methods:
-            assert hasattr(orchestrator, method_name), (
-                f"Orchestrator missing method: {method_name}"
-            )
+            assert hasattr(
+                orchestrator, method_name
+            ), f"Orchestrator missing method: {method_name}"
             assert callable(getattr(orchestrator, method_name))
 
     def test_orchestrator_has_required_private_methods(self) -> None:
@@ -689,15 +698,16 @@ class TestGenerationOrchestratorStructure:
         ]
 
         for method_name in required_methods:
-            assert hasattr(orchestrator, method_name), (
-                f"Orchestrator missing method: {method_name}"
-            )
+            assert hasattr(
+                orchestrator, method_name
+            ), f"Orchestrator missing method: {method_name}"
             assert callable(getattr(orchestrator, method_name))
 
 
 # ============================================================================
 # Edge Cases and Error Handling
 # ============================================================================
+
 
 class TestVisualVerifierEdgeCases:
     """Test edge cases and error conditions."""
@@ -776,6 +786,7 @@ class TestVerificationResultEdgeCases:
 # Type and Contract Tests
 # ============================================================================
 
+
 class TestVerifierTypeContracts:
     """Test that verifier methods maintain proper type contracts."""
 
@@ -851,12 +862,11 @@ class TestOrchestratorTypeContracts:
 # Pattern Matching Tests
 # ============================================================================
 
+
 class TestDimensionPatternMatching:
     """Test dimension extraction patterns in detail."""
 
-    def test_extract_width_pattern(
-        self, geometry_report_box: GeometryReport
-    ) -> None:
+    def test_extract_width_pattern(self, geometry_report_box: GeometryReport) -> None:
         """Test extraction of 'Nmm wide' pattern."""
         verifier = VisualVerifier()
 
@@ -878,7 +888,9 @@ class TestDimensionPatternMatching:
         ]
         for prompt in multi_dim_patterns:
             result = verifier._verify_dimensions(prompt, geometry_report_box)
-            assert len(result["checks"]) > 0, f"Failed to extract multi-dim from: {prompt}"
+            assert (
+                len(result["checks"]) > 0
+            ), f"Failed to extract multi-dim from: {prompt}"
 
     def test_extract_thickness_pattern(
         self, geometry_report_box: GeometryReport
@@ -919,6 +931,7 @@ class TestDimensionPatternMatching:
 # ============================================================================
 # Configuration and Settings Tests
 # ============================================================================
+
 
 class TestVerifierConfiguration:
     """Test verifier configuration options."""
@@ -967,6 +980,7 @@ class TestVerifierConfiguration:
 # Data Integrity Tests
 # ============================================================================
 
+
 class TestVerificationResultDataIntegrity:
     """Test that VerificationResult preserves data correctly."""
 
@@ -993,6 +1007,7 @@ class TestVerificationResultDataIntegrity:
 # ============================================================================
 # Boundary Conditions
 # ============================================================================
+
 
 class TestVisualVerifierBoundaryConditions:
     """Test boundary conditions and limits."""
@@ -1055,6 +1070,7 @@ class TestVisualVerifierBoundaryConditions:
 # ============================================================================
 # Helper Method Tests
 # ============================================================================
+
 
 class TestToleranceHelper:
     """Test the _within_tolerance helper method thoroughly."""

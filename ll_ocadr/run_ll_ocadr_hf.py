@@ -16,10 +16,11 @@ Usage:
 The prompt may contain one ``<mesh>`` placeholder per mesh; it is expanded to
 the appropriate number of mesh tokens automatically.
 """
+
 from __future__ import annotations
 
 import argparse
-from typing import Optional, Sequence, Tuple, Union
+from collections.abc import Sequence
 
 import torch
 from transformers import AutoConfig, AutoTokenizer
@@ -50,8 +51,8 @@ def _derive_hidden_size(lm_config) -> int:
 def build_model_and_tokenizer(
     model_name: str,
     device: str = "cpu",
-    shape_depth: Optional[int] = None,
-) -> Tuple[LatticelabsOCADRForCausalLM, "AutoTokenizer", LLOCADRConfig, LLOCADRProcessor]:
+    shape_depth: int | None = None,
+) -> tuple[LatticelabsOCADRForCausalLM, AutoTokenizer, LLOCADRConfig, LLOCADRProcessor]:
     """Build the OCADR model, tokenizer, config, and preprocessor for HF inference.
 
     ``n_embed`` is derived from the chosen language model so the mesh embeddings
@@ -94,7 +95,7 @@ def run_inference(
     model: LatticelabsOCADRForCausalLM,
     processor: LLOCADRProcessor,
     tokenizer,
-    mesh_file: Union[str, Sequence[str]],
+    mesh_file: str | Sequence[str],
     prompt: str,
     max_new_tokens: int = 64,
     cropping: bool = True,
@@ -152,7 +153,9 @@ def main() -> None:
         description="HF-native LatticeLabs OCADR inference (no vLLM)."
     )
     parser.add_argument("--model", required=True, help="HF model name or local path.")
-    parser.add_argument("--mesh", required=True, help="Path to a STEP/STL/OBJ/PLY file.")
+    parser.add_argument(
+        "--mesh", required=True, help="Path to a STEP/STL/OBJ/PLY file."
+    )
     parser.add_argument(
         "--prompt",
         default="Describe this CAD part: <mesh>",

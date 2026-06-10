@@ -5,6 +5,7 @@ Tests cover three sub-modules:
 2. feedback_builder.py — Building structured feedback for neural retry
 3. reward_signal.py — Computing scalar rewards for RL training
 """
+
 from __future__ import annotations
 
 import pytest
@@ -29,10 +30,10 @@ from ll_gen.feedback.reward_signal import (
 from ll_gen.proposals.code_proposal import CodeProposal
 from ll_gen.proposals.disposal_result import DisposalResult
 
-
 # ---------------------------------------------------------------------------
 # error_mapper.py tests
 # ---------------------------------------------------------------------------
+
 
 class TestOCCErrorMap:
     """Test the OCC_ERROR_MAP dictionary structure."""
@@ -62,21 +63,23 @@ class TestOCCErrorMap:
         """
         for code_name, value in OCC_ERROR_MAP.items():
             assert isinstance(value, tuple), f"{code_name}: value is not tuple"
-            assert len(value) == 4, f"{code_name}: tuple length is {len(value)}, expected 4"
+            assert (
+                len(value) == 4
+            ), f"{code_name}: tuple length is {len(value)}, expected 4"
 
             category, severity, description, suggestion = value
-            assert isinstance(category, ErrorCategory), (
-                f"{code_name}: category is {type(category)}, expected ErrorCategory"
-            )
-            assert isinstance(severity, ErrorSeverity), (
-                f"{code_name}: severity is {type(severity)}, expected ErrorSeverity"
-            )
-            assert isinstance(description, str), (
-                f"{code_name}: description is {type(description)}, expected str"
-            )
-            assert isinstance(suggestion, str), (
-                f"{code_name}: suggestion is {type(suggestion)}, expected str"
-            )
+            assert isinstance(
+                category, ErrorCategory
+            ), f"{code_name}: category is {type(category)}, expected ErrorCategory"
+            assert isinstance(
+                severity, ErrorSeverity
+            ), f"{code_name}: severity is {type(severity)}, expected ErrorSeverity"
+            assert isinstance(
+                description, str
+            ), f"{code_name}: description is {type(description)}, expected str"
+            assert isinstance(
+                suggestion, str
+            ), f"{code_name}: suggestion is {type(suggestion)}, expected str"
 
     def test_occ_error_map_nonempty_descriptions(self) -> None:
         """All error codes should have non-empty description and suggestion strings."""
@@ -146,7 +149,12 @@ class TestMapSingleError:
 
     def test_map_single_error_different_entity_types(self) -> None:
         """Entity type and index are preserved for different TopAbs types."""
-        for entity_type, idx in [("SOLID", 0), ("FACE", 5), ("EDGE", 10), ("VERTEX", 3)]:
+        for entity_type, idx in [
+            ("SOLID", 0),
+            ("FACE", 5),
+            ("EDGE", 10),
+            ("VERTEX", 3),
+        ]:
             result = map_single_error("BRepCheck_NotClosed", entity_type, idx)
             assert result.entity_type == entity_type
             assert result.entity_index == idx
@@ -173,8 +181,12 @@ class TestCategorizeErrors:
     def test_categorize_errors_sorts_by_severity(self) -> None:
         """Within each category, CRITICAL errors come before WARNING."""
         errors = [
-            map_single_error("BRepCheck_OrientationOfExternalWire", "FACE", 0),  # TOPOLOGY_ERROR, WARNING
-            map_single_error("BRepCheck_NotClosed", "SHELL", 0),                  # TOPOLOGY_ERROR, CRITICAL
+            map_single_error(
+                "BRepCheck_OrientationOfExternalWire", "FACE", 0
+            ),  # TOPOLOGY_ERROR, WARNING
+            map_single_error(
+                "BRepCheck_NotClosed", "SHELL", 0
+            ),  # TOPOLOGY_ERROR, CRITICAL
         ]
 
         categorized = categorize_errors(errors)
@@ -241,6 +253,7 @@ class TestMappedError:
 # ---------------------------------------------------------------------------
 # feedback_builder.py tests
 # ---------------------------------------------------------------------------
+
 
 class TestBuildCodeFeedback:
     """Test the build_code_feedback function."""
@@ -419,7 +432,7 @@ class TestBuildNeuralFeedback:
         assert "warning" in counts
         assert "info" in counts
         assert counts["critical"] == 1  # One CRITICAL: NotClosed
-        assert counts["warning"] == 1   # One WARNING: FreeEdge
+        assert counts["warning"] == 1  # One WARNING: FreeEdge
 
     def test_build_neural_feedback_parameter_hints(
         self,
@@ -560,6 +573,7 @@ class TestBuildTrainingFeedback:
 # reward_signal.py tests
 # ---------------------------------------------------------------------------
 
+
 class TestComputeReward:
     """Test the compute_reward function."""
 
@@ -584,9 +598,7 @@ class TestComputeReward:
         face = DisposalResult(
             shape=object(),
             is_valid=True,
-            geometry_report=GeometryReport(
-                solid_count=0, face_count=1, is_solid=False
-            ),
+            geometry_report=GeometryReport(solid_count=0, face_count=1, is_solid=False),
         )
         reward = compute_reward(face)
         # validity_reward * nonsolid_valid_fraction (0.8 * 0.1 = 0.08) +
@@ -807,7 +819,9 @@ class TestComputeBatchRewards:
         disposal_result_invalid: DisposalResult,
     ) -> None:
         """compute_batch_rewards returns a list."""
-        rewards = compute_batch_rewards([disposal_result_valid, disposal_result_invalid])
+        rewards = compute_batch_rewards(
+            [disposal_result_valid, disposal_result_invalid]
+        )
 
         assert isinstance(rewards, list)
 
@@ -818,7 +832,11 @@ class TestComputeBatchRewards:
         disposal_result_no_shape: DisposalResult,
     ) -> None:
         """Batch rewards list has same length as input."""
-        results = [disposal_result_valid, disposal_result_invalid, disposal_result_no_shape]
+        results = [
+            disposal_result_valid,
+            disposal_result_invalid,
+            disposal_result_no_shape,
+        ]
         rewards = compute_batch_rewards(results)
 
         assert len(rewards) == 3
@@ -898,6 +916,7 @@ class TestCountPassingTiers:
 # Integration tests
 # ---------------------------------------------------------------------------
 
+
 class TestFeedbackIntegration:
     """Integration tests combining multiple feedback components."""
 
@@ -945,7 +964,10 @@ class TestFeedbackIntegration:
 
         # Both should refer to the same error category
         if disposal_result_invalid.error_category:
-            assert neural_fb["error_category"] == disposal_result_invalid.error_category.value
+            assert (
+                neural_fb["error_category"]
+                == disposal_result_invalid.error_category.value
+            )
 
     def test_batch_rewards_consistency(
         self,
@@ -954,7 +976,11 @@ class TestFeedbackIntegration:
         disposal_result_repaired: DisposalResult,
     ) -> None:
         """Batch rewards are consistent across multiple runs."""
-        results = [disposal_result_valid, disposal_result_invalid, disposal_result_repaired]
+        results = [
+            disposal_result_valid,
+            disposal_result_invalid,
+            disposal_result_repaired,
+        ]
 
         batch1 = compute_batch_rewards(results)
         batch2 = compute_batch_rewards(results)

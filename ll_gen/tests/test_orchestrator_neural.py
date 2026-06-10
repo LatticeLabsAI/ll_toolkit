@@ -11,6 +11,7 @@ the CPU test environment), so ``is_valid`` is expected to be ``False``. The
 contract under test is that the neural propose track is wired end-to-end and
 the pipeline degrades gracefully to an invalid result instead of crashing.
 """
+
 from __future__ import annotations
 
 import pytest

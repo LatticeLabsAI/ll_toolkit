@@ -17,23 +17,22 @@ from __future__ import annotations
 import argparse
 import asyncio
 from pathlib import Path
-from typing import Optional
 
 import torch
 from transformers import AutoTokenizer
 
 try:
-    from vllm import AsyncLLMEngine, AsyncEngineArgs, SamplingParams
+    from vllm import AsyncEngineArgs, AsyncLLMEngine, SamplingParams
+
     VLLM_AVAILABLE = True
 except ImportError:
     VLLM_AVAILABLE = False
     print("Warning: vLLM not available. Install with: pip install vllm")
 
+from ll_ocadr.vllm.config import get_config_for_model
 from ll_ocadr.vllm.latticelabs_ocadr import (
     LatticelabsOCADRForCausalLM,
-    LLOCADRMultiModalProcessor,
 )
-from ll_ocadr.vllm.config import LLOCADRConfig, get_config_for_model
 from ll_ocadr.vllm.process.mesh_process import MeshLoader
 
 
@@ -48,7 +47,7 @@ class LLOCADRInference:
         model_path: str,
         model_size: str = "7b",
         device: str = "cuda",
-        use_vllm: bool = True
+        use_vllm: bool = True,
     ):
         """
         Initialize LL-OCADR inference engine.
@@ -69,8 +68,7 @@ class LLOCADRInference:
 
         # Load tokenizer
         self.tokenizer = AutoTokenizer.from_pretrained(
-            self.config.language_model_name,
-            trust_remote_code=True
+            self.config.language_model_name, trust_remote_code=True
         )
 
         # Add mesh token if not present
@@ -104,9 +102,7 @@ class LLOCADRInference:
         # Load checkpoint if provided
         if Path(self.model_path).exists():
             checkpoint = torch.load(
-                self.model_path,
-                map_location=self.device,
-                weights_only=True
+                self.model_path, map_location=self.device, weights_only=True
             )
             model.load_state_dict(checkpoint["model_state_dict"])
             print(f"✓ Loaded checkpoint from {self.model_path}")
@@ -123,7 +119,7 @@ class LLOCADRInference:
                 tensor_parallel_size=1,
                 gpu_memory_utilization=0.9,
                 trust_remote_code=True,
-                dtype="float16" if self.device == "cuda" else "float32"
+                dtype="float16" if self.device == "cuda" else "float32",
             )
             self.engine = AsyncLLMEngine.from_engine_args(engine_args)
             print("✓ Initialized vLLM engine")
@@ -144,7 +140,7 @@ class LLOCADRInference:
             print(f"✗ File not found: {mesh_file}")
             return False
 
-        supported_extensions = {'.step', '.stp', '.stl', '.obj', '.ply'}
+        supported_extensions = {".step", ".stp", ".stl", ".obj", ".ply"}
         if path.suffix.lower() not in supported_extensions:
             print(f"✗ Unsupported file format: {path.suffix}")
             print(f"  Supported: {', '.join(supported_extensions)}")
@@ -158,7 +154,7 @@ class LLOCADRInference:
         prompt: str,
         temperature: float = 0.7,
         max_tokens: int = 512,
-        top_p: float = 0.9
+        top_p: float = 0.9,
     ) -> str:
         """
         Generate text asynchronously using vLLM.
@@ -185,20 +181,22 @@ class LLOCADRInference:
 
         # Prepare sampling parameters
         sampling_params = SamplingParams(
-            temperature=temperature,
-            max_tokens=max_tokens,
-            top_p=top_p
+            temperature=temperature, max_tokens=max_tokens, top_p=top_p
         )
 
         # Generate
         print(f"\n🔄 Processing mesh: {Path(mesh_file).name}")
-        print(f"📝 Prompt: {prompt[:100]}..." if len(prompt) > 100 else f"📝 Prompt: {prompt}")
+        print(
+            f"📝 Prompt: {prompt[:100]}..."
+            if len(prompt) > 100
+            else f"📝 Prompt: {prompt}"
+        )
 
         outputs = []
         async for output in self.engine.generate(
             prompt=prompt,
             multi_modal_data={"mesh": [mesh_file]},
-            sampling_params=sampling_params
+            sampling_params=sampling_params,
         ):
             outputs.append(output)
 
@@ -212,7 +210,7 @@ class LLOCADRInference:
         prompt: str,
         temperature: float = 0.7,
         max_tokens: int = 512,
-        top_p: float = 0.9
+        top_p: float = 0.9,
     ) -> str:
         """
         Generate text using native PyTorch model (non-vLLM).
@@ -232,7 +230,11 @@ class LLOCADRInference:
             return ""
 
         print(f"\n🔄 Processing mesh: {Path(mesh_file).name}")
-        print(f"📝 Prompt: {prompt[:100]}..." if len(prompt) > 100 else f"📝 Prompt: {prompt}")
+        print(
+            f"📝 Prompt: {prompt[:100]}..."
+            if len(prompt) > 100
+            else f"📝 Prompt: {prompt}"
+        )
 
         # Preprocess mesh
         from ll_ocadr.vllm.process.mesh_process import LLOCADRProcessor
@@ -242,13 +244,11 @@ class LLOCADRInference:
             mesh_token_id=self.config.mesh_token_id,
             min_chunk_size=self.config.min_chunk_size,
             max_chunks=self.config.max_chunks,
-            target_global_faces=self.config.target_global_faces
+            target_global_faces=self.config.target_global_faces,
         )
 
         inputs = processor.tokenize_with_meshes(
-            mesh_files=[mesh_file],
-            conversation=prompt,
-            cropping=True
+            mesh_files=[mesh_file], conversation=prompt, cropping=True
         )
 
         # Move to device
@@ -262,14 +262,11 @@ class LLOCADRInference:
             max_new_tokens=max_tokens,
             temperature=temperature,
             top_p=top_p,
-            do_sample=temperature > 0
+            do_sample=temperature > 0,
         )
 
         # Decode
-        output_text = self.tokenizer.decode(
-            output_ids[0],
-            skip_special_tokens=True
-        )
+        output_text = self.tokenizer.decode(output_ids[0], skip_special_tokens=True)
 
         # Remove prompt from output
         if prompt in output_text:
@@ -285,12 +282,12 @@ async def main_async(args):
         model_path=args.model_path,
         model_size=args.model_size,
         device=args.device,
-        use_vllm=True
+        use_vllm=True,
     )
 
     # Prepare prompt
     if args.prompt_file:
-        with open(args.prompt_file, 'r') as f:
+        with open(args.prompt_file) as f:
             prompt = f.read().strip()
     else:
         prompt = args.prompt
@@ -305,19 +302,19 @@ async def main_async(args):
         prompt=prompt,
         temperature=args.temperature,
         max_tokens=args.max_tokens,
-        top_p=args.top_p
+        top_p=args.top_p,
     )
 
     # Display result
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("RESULT:")
-    print("="*60)
+    print("=" * 60)
     print(result)
-    print("="*60 + "\n")
+    print("=" * 60 + "\n")
 
     # Save to file if requested
     if args.output_file:
-        with open(args.output_file, 'w') as f:
+        with open(args.output_file, "w") as f:
             f.write(result)
         print(f"✓ Saved to {args.output_file}")
 
@@ -329,12 +326,12 @@ def main_sync(args):
         model_path=args.model_path,
         model_size=args.model_size,
         device=args.device,
-        use_vllm=False
+        use_vllm=False,
     )
 
     # Prepare prompt
     if args.prompt_file:
-        with open(args.prompt_file, 'r') as f:
+        with open(args.prompt_file) as f:
             prompt = f.read().strip()
     else:
         prompt = args.prompt
@@ -349,19 +346,19 @@ def main_sync(args):
         prompt=prompt,
         temperature=args.temperature,
         max_tokens=args.max_tokens,
-        top_p=args.top_p
+        top_p=args.top_p,
     )
 
     # Display result
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("RESULT:")
-    print("="*60)
+    print("=" * 60)
     print(result)
-    print("="*60 + "\n")
+    print("=" * 60 + "\n")
 
     # Save to file if requested
     if args.output_file:
-        with open(args.output_file, 'w') as f:
+        with open(args.output_file, "w") as f:
             f.write(result)
         print(f"✓ Saved to {args.output_file}")
 
@@ -377,7 +374,7 @@ def parse_args():
         "--mesh-file",
         type=str,
         required=True,
-        help="Path to mesh file (STEP, STL, OBJ, PLY)"
+        help="Path to mesh file (STEP, STL, OBJ, PLY)",
     )
 
     # Model arguments
@@ -385,14 +382,14 @@ def parse_args():
         "--model-path",
         type=str,
         default="latticelabs/ll-ocadr-7b",
-        help="Path to model checkpoint or HuggingFace model ID"
+        help="Path to model checkpoint or HuggingFace model ID",
     )
     parser.add_argument(
         "--model-size",
         type=str,
         default="7b",
         choices=["1.8b", "7b", "14b"],
-        help="Model size"
+        help="Model size",
     )
 
     # Prompt arguments
@@ -400,12 +397,10 @@ def parse_args():
         "--prompt",
         type=str,
         default="<mesh>\nDescribe this CAD model and list its key features.",
-        help="Text prompt (use <mesh> as placeholder)"
+        help="Text prompt (use <mesh> as placeholder)",
     )
     parser.add_argument(
-        "--prompt-file",
-        type=str,
-        help="Read prompt from file (overrides --prompt)"
+        "--prompt-file", type=str, help="Read prompt from file (overrides --prompt)"
     )
 
     # Generation arguments
@@ -413,41 +408,33 @@ def parse_args():
         "--temperature",
         type=float,
         default=0.7,
-        help="Sampling temperature (0.0 = greedy)"
+        help="Sampling temperature (0.0 = greedy)",
     )
     parser.add_argument(
-        "--max-tokens",
-        type=int,
-        default=512,
-        help="Maximum tokens to generate"
+        "--max-tokens", type=int, default=512, help="Maximum tokens to generate"
     )
     parser.add_argument(
-        "--top-p",
-        type=float,
-        default=0.9,
-        help="Nucleus sampling parameter"
+        "--top-p", type=float, default=0.9, help="Nucleus sampling parameter"
     )
 
     # Device arguments
     parser.add_argument(
         "--device",
         type=str,
-        default="cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu",
+        default=(
+            "cuda"
+            if torch.cuda.is_available()
+            else "mps" if torch.backends.mps.is_available() else "cpu"
+        ),
         choices=["cuda", "mps", "cpu"],
-        help="Device to run on"
+        help="Device to run on",
     )
     parser.add_argument(
-        "--no-vllm",
-        action="store_true",
-        help="Disable vLLM (use native PyTorch)"
+        "--no-vllm", action="store_true", help="Disable vLLM (use native PyTorch)"
     )
 
     # Output arguments
-    parser.add_argument(
-        "--output-file",
-        type=str,
-        help="Save result to file"
-    )
+    parser.add_argument("--output-file", type=str, help="Save result to file")
 
     return parser.parse_args()
 

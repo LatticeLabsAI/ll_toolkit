@@ -7,6 +7,7 @@ Tests integration between ll_gen and geotoken:
 All tests are marked with @pytest.mark.requires_geotoken and skip if geotoken
 is not installed.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -18,13 +19,13 @@ import pytest
 # Check if geotoken is available
 try:
     from geotoken.tokenizer.token_types import TokenSequence
+
     _GEOTOKEN_AVAILABLE = True
 except ImportError:
     _GEOTOKEN_AVAILABLE = False
 
 requires_geotoken = pytest.mark.skipif(
-    not _GEOTOKEN_AVAILABLE,
-    reason="geotoken package not installed"
+    not _GEOTOKEN_AVAILABLE, reason="geotoken package not installed"
 )
 
 
@@ -47,9 +48,21 @@ class TestTokenSequenceConversion:
             confidence=0.8,
             source_prompt="Test",
             command_dicts=[
-                {"command_type": "SOL", "parameters": [0] * 16, "parameter_mask": [False] * 16},
-                {"command_type": "LINE", "parameters": [0, 0, 128, 0] + [0] * 12, "parameter_mask": [True] * 4 + [False] * 12},
-                {"command_type": "EOS", "parameters": [0] * 16, "parameter_mask": [False] * 16},
+                {
+                    "command_type": "SOL",
+                    "parameters": [0] * 16,
+                    "parameter_mask": [False] * 16,
+                },
+                {
+                    "command_type": "LINE",
+                    "parameters": [0, 0, 128, 0] + [0] * 12,
+                    "parameter_mask": [True] * 4 + [False] * 12,
+                },
+                {
+                    "command_type": "EOS",
+                    "parameters": [0] * 16,
+                    "parameter_mask": [False] * 16,
+                },
             ],
             quantization_bits=8,
         )
@@ -67,7 +80,11 @@ class TestTokenSequenceConversion:
             confidence=0.8,
             source_prompt="Test",
             command_dicts=[
-                {"command_type": "SOL", "parameters": [0] * 16, "parameter_mask": [False] * 16},
+                {
+                    "command_type": "SOL",
+                    "parameters": [0] * 16,
+                    "parameter_mask": [False] * 16,
+                },
             ],
             quantization_bits=8,
         )
@@ -95,6 +112,7 @@ class TestGeotokenImports:
             CommandType,
             TokenSequence,
         )
+
         assert CommandToken is not None
         assert CommandType is not None
         assert TokenSequence is not None
@@ -102,11 +120,13 @@ class TestGeotokenImports:
     def test_geo_tokenizer_import(self) -> None:
         """Test GeoTokenizer can be imported."""
         from geotoken.tokenizer.geo_tokenizer import GeoTokenizer
+
         assert GeoTokenizer is not None
 
     def test_vocabulary_import(self) -> None:
         """Test CADVocabulary can be imported."""
         from geotoken import CADVocabulary
+
         assert CADVocabulary is not None
 
 
@@ -122,6 +142,7 @@ class TestDatasetLoaderIntegration:
     def test_deepcad_loader_geotoken_callable(self) -> None:
         """Test DeepCAD loader can get geotoken via lazy import."""
         from ll_gen.datasets.deepcad_loader import _get_geotoken
+
         # When geotoken is installed, this should return the module
         geotoken = _get_geotoken()
         assert geotoken is not None
@@ -129,6 +150,7 @@ class TestDatasetLoaderIntegration:
     def test_text2cad_loader_geotoken_callable(self) -> None:
         """Test Text2CAD loader can get geotoken via lazy import."""
         from ll_gen.datasets.text2cad_loader import _get_geotoken
+
         # When geotoken is installed, this should return the module
         geotoken = _get_geotoken()
         assert geotoken is not None
@@ -179,7 +201,9 @@ class TestCommandTypeIntegration:
 
         for cmd_type in expected_types:
             # Check if the command type exists in the enum
-            assert hasattr(CommandType, cmd_type) or cmd_type in [e.name for e in CommandType]
+            assert hasattr(CommandType, cmd_type) or cmd_type in [
+                e.name for e in CommandType
+            ]
 
 
 # ============================================================================
@@ -196,10 +220,26 @@ class TestProposalTokenRoundTrip:
         from ll_gen.proposals.command_proposal import CommandSequenceProposal
 
         command_dicts = [
-            {"command_type": "SOL", "parameters": [0] * 16, "parameter_mask": [False] * 16},
-            {"command_type": "LINE", "parameters": [0, 0, 128, 128] + [0] * 12, "parameter_mask": [True] * 4 + [False] * 12},
-            {"command_type": "EXTRUDE", "parameters": [64] + [0] * 15, "parameter_mask": [True] + [False] * 15},
-            {"command_type": "EOS", "parameters": [0] * 16, "parameter_mask": [False] * 16},
+            {
+                "command_type": "SOL",
+                "parameters": [0] * 16,
+                "parameter_mask": [False] * 16,
+            },
+            {
+                "command_type": "LINE",
+                "parameters": [0, 0, 128, 128] + [0] * 12,
+                "parameter_mask": [True] * 4 + [False] * 12,
+            },
+            {
+                "command_type": "EXTRUDE",
+                "parameters": [64] + [0] * 15,
+                "parameter_mask": [True] + [False] * 15,
+            },
+            {
+                "command_type": "EOS",
+                "parameters": [0] * 16,
+                "parameter_mask": [False] * 16,
+            },
         ]
 
         proposal = CommandSequenceProposal(
@@ -230,10 +270,12 @@ class TestModuleAvailability:
     def test_conftest_geotoken_marker(self) -> None:
         """Test that conftest has geotoken availability check."""
         from tests.conftest import _geotoken_available
+
         assert _geotoken_available() is True
 
     def test_proposal_module_imports_geotoken(self) -> None:
         """Test command_proposal module can import geotoken."""
         from ll_gen.proposals import command_proposal
+
         # The module should have geotoken types in scope during conversion
         assert hasattr(command_proposal, "CommandSequenceProposal")

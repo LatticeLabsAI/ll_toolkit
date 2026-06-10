@@ -7,21 +7,23 @@ Mirrors DeepSeek-OCR's image_process.py for 3D geometry.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any
 
 import numpy as np
 import torch
 import trimesh
+
 from .file_content_chunker import UnifiedCADContentChunker
 
 
 @dataclass
 class BRepData:
     """B-Rep (Boundary Representation) data for STEP/CAD files."""
+
     surfaces: list[dict]  # Analytical surfaces (cylinders, planes, cones, etc.)
-    curves: list[dict]    # Parametric curves (circles, ellipses, lines, splines)
-    faces: list[dict]     # Topological faces with surface references
-    edges: list[dict]     # Topological edges with curve references
+    curves: list[dict]  # Parametric curves (circles, ellipses, lines, splines)
+    faces: list[dict]  # Topological faces with surface references
+    edges: list[dict]  # Topological edges with curve references
     vertices: list[dict]  # Topological vertices (not tessellation vertices!)
     bbox: tuple[np.ndarray, np.ndarray]
     metadata: dict = field(default_factory=dict)
@@ -46,19 +48,17 @@ class BRepData:
 @dataclass
 class MeshData:
     """Triangle mesh representation for STL/OBJ files."""
+
     vertices: np.ndarray  # [N, 3] - vertex coordinates
-    faces: np.ndarray     # [F, 3] - face indices
-    normals: np.ndarray   # [N, 3] - vertex normals
+    faces: np.ndarray  # [F, 3] - face indices
+    normals: np.ndarray  # [N, 3] - vertex normals
     bbox: tuple[np.ndarray, np.ndarray]  # (min_xyz, max_xyz)
     metadata: dict = field(default_factory=dict)
 
     def __post_init__(self):
         # Calculate bbox if not provided
         if self.bbox is None and self.vertices is not None:
-            self.bbox = (
-                np.min(self.vertices, axis=0),
-                np.max(self.vertices, axis=0)
-            )
+            self.bbox = (np.min(self.vertices, axis=0), np.max(self.vertices, axis=0))
 
     @property
     def num_vertices(self) -> int:
@@ -81,9 +81,10 @@ class MeshData:
 @dataclass
 class MeshChunk:
     """Spatial subdivision of a mesh (like image tiles)."""
+
     vertices: np.ndarray  # [M, 3] - local vertex coordinates
-    faces: np.ndarray     # [K, 3] - face indices (reindexed to local vertices)
-    normals: np.ndarray   # [M, 3] - vertex normals
+    faces: np.ndarray  # [K, 3] - face indices (reindexed to local vertices)
+    normals: np.ndarray  # [M, 3] - vertex normals
     bbox: tuple[np.ndarray, np.ndarray]  # Spatial bounding box
     chunk_id: tuple[int, int, int]  # (x, y, z) position in grid
 
@@ -103,9 +104,9 @@ def compute_bbox_volume(bbox: tuple[np.ndarray, np.ndarray]) -> float:
     return float(np.prod(dimensions))
 
 
-def vertices_in_bbox(vertices: np.ndarray,
-                     bbox_min: np.ndarray,
-                     bbox_max: np.ndarray) -> np.ndarray:
+def vertices_in_bbox(
+    vertices: np.ndarray, bbox_min: np.ndarray, bbox_max: np.ndarray
+) -> np.ndarray:
     """
     Find vertices within a bounding box.
 
@@ -144,9 +145,9 @@ def extract_faces_in_region(faces: np.ndarray, vertex_mask: np.ndarray) -> np.nd
     return local_faces
 
 
-def dynamic_mesh_partition(mesh: MeshData,
-                          min_chunk_size: int | None = None,
-                          max_chunks: int = 27) -> list[MeshChunk]:
+def dynamic_mesh_partition(
+    mesh: MeshData, min_chunk_size: int | None = None, max_chunks: int = 27
+) -> list[MeshChunk]:
     """
     Octree-based spatial subdivision similar to image tiling.
     Automatically determines optimal chunk size if not specified.
@@ -212,13 +213,15 @@ def dynamic_mesh_partition(mesh: MeshData,
                     # No faces in this chunk
                     continue
 
-                chunks.append(MeshChunk(
-                    vertices=chunk_vertices,
-                    faces=chunk_faces,
-                    normals=chunk_normals,
-                    bbox=(chunk_min, chunk_max),
-                    chunk_id=(ix, iy, iz)
-                ))
+                chunks.append(
+                    MeshChunk(
+                        vertices=chunk_vertices,
+                        faces=chunk_faces,
+                        normals=chunk_normals,
+                        bbox=(chunk_min, chunk_max),
+                        chunk_id=(ix, iy, iz),
+                    )
+                )
 
     return chunks
 
@@ -240,9 +243,7 @@ def create_global_view(mesh: MeshData, target_faces: int = 4096) -> MeshData:
 
     # Create trimesh object
     tmesh = trimesh.Trimesh(
-        vertices=mesh.vertices,
-        faces=mesh.faces,
-        vertex_normals=mesh.normals
+        vertices=mesh.vertices, faces=mesh.faces, vertex_normals=mesh.normals
     )
 
     # Try quadric decimation first, fall back to simple face sampling
@@ -252,7 +253,10 @@ def create_global_view(mesh: MeshData, target_faces: int = 4096) -> MeshData:
         simplified_mesh = _sample_faces_from_mesh(tmesh, target_faces)
 
     # Recompute normals if missing after decimation
-    if simplified_mesh.vertex_normals is None or len(simplified_mesh.vertex_normals) == 0:
+    if (
+        simplified_mesh.vertex_normals is None
+        or len(simplified_mesh.vertex_normals) == 0
+    ):
         simplified_mesh.fix_normals()
 
     return MeshData(
@@ -261,18 +265,16 @@ def create_global_view(mesh: MeshData, target_faces: int = 4096) -> MeshData:
         normals=simplified_mesh.vertex_normals,
         bbox=(
             np.min(simplified_mesh.vertices, axis=0),
-            np.max(simplified_mesh.vertices, axis=0)
+            np.max(simplified_mesh.vertices, axis=0),
         ),
-        metadata={"downsampled": True, "original_faces": mesh.num_faces}
+        metadata={"downsampled": True, "original_faces": mesh.num_faces},
     )
 
 
 def _sample_faces_from_mesh(tmesh, target_faces):
     """Fall back to simple uniform face sampling for mesh decimation."""
     face_indices = np.random.choice(
-        len(tmesh.faces),
-        size=min(target_faces, len(tmesh.faces)),
-        replace=False
+        len(tmesh.faces), size=min(target_faces, len(tmesh.faces)), replace=False
     )
     # Keep only selected faces and their vertices
     selected_faces = tmesh.faces[face_indices]
@@ -280,8 +282,13 @@ def _sample_faces_from_mesh(tmesh, target_faces):
     used_vertices = np.unique(selected_faces.flatten())
     vertex_map = {old: new for new, old in enumerate(used_vertices)}
     # Reindex faces
-    new_faces = np.array([[vertex_map[f[0]], vertex_map[f[1]], vertex_map[f[2]]]
-                          for f in selected_faces], dtype=np.int32)
+    new_faces = np.array(
+        [
+            [vertex_map[f[0]], vertex_map[f[1]], vertex_map[f[2]]]
+            for f in selected_faces
+        ],
+        dtype=np.int32,
+    )
     return trimesh.Trimesh(
         vertices=tmesh.vertices[used_vertices], faces=new_faces, process=False
     )
@@ -310,6 +317,7 @@ class CADLoader:
             BRepData for STEP files, MeshData for STL/OBJ/PLY files
         """
         import os
+
         _, ext = os.path.splitext(file_path.lower())
 
         if ext not in self.loaders:
@@ -336,7 +344,7 @@ class CADLoader:
             faces=mesh.faces,
             normals=mesh.vertex_normals,
             bbox=tuple(mesh.bounds),
-            metadata={"file_type": "mesh", "watertight": mesh.is_watertight}
+            metadata={"file_type": "mesh", "watertight": mesh.is_watertight},
         )
 
     def _load_step(self, step_file: str) -> BRepData:
@@ -359,7 +367,6 @@ class CADLoader:
             from OCC.Core.gp import gp_Pnt
             from OCC.Core.STEPControl import STEPControl_Reader
             from OCC.Core.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_VERTEX
-            from OCC.Core.TopExp import TopExp_Explorer
             from OCC.Extend.TopologyUtils import TopologyExplorer
         except ImportError as exc:
             raise ImportError(
@@ -399,8 +406,16 @@ class CADLoader:
                 pln = adaptor.Plane()
                 surface_info |= {
                     "type": "PLANE",
-                    "location": [pln.Location().X(), pln.Location().Y(), pln.Location().Z()],
-                    "normal": [pln.Axis().Direction().X(), pln.Axis().Direction().Y(), pln.Axis().Direction().Z()]
+                    "location": [
+                        pln.Location().X(),
+                        pln.Location().Y(),
+                        pln.Location().Z(),
+                    ],
+                    "normal": [
+                        pln.Axis().Direction().X(),
+                        pln.Axis().Direction().Y(),
+                        pln.Axis().Direction().Z(),
+                    ],
                 }
             elif surface_type == GeomAbs_Cylinder:
                 cyl = adaptor.Cylinder()
@@ -430,14 +445,18 @@ class CADLoader:
                 surface_info |= {
                     "type": "SPHERE",
                     "radius": sphere.Radius(),
-                    "center": [sphere.Location().X(), sphere.Location().Y(), sphere.Location().Z()]
+                    "center": [
+                        sphere.Location().X(),
+                        sphere.Location().Y(),
+                        sphere.Location().Z(),
+                    ],
                 }
             elif surface_type == GeomAbs_Torus:
                 torus = adaptor.Torus()
                 surface_info |= {
                     "type": "TORUS",
                     "major_radius": torus.MajorRadius(),
-                    "minor_radius": torus.MinorRadius()
+                    "minor_radius": torus.MinorRadius(),
                 }
             else:
                 surface_info["type"] = "NURBS"
@@ -471,7 +490,11 @@ class CADLoader:
                 curve_info |= {
                     "type": "CIRCLE",
                     "radius": circ.Radius(),
-                    "center": [circ.Location().X(), circ.Location().Y(), circ.Location().Z()],
+                    "center": [
+                        circ.Location().X(),
+                        circ.Location().Y(),
+                        circ.Location().Z(),
+                    ],
                 }
             elif curve_type == GeomAbs_Ellipse:
                 elps = curve_adaptor.Ellipse()
@@ -493,8 +516,12 @@ class CADLoader:
             }
             edges_topo.append(edge_info)
 
-            all_points.extend([[start_pnt.X(), start_pnt.Y(), start_pnt.Z()],
-                             [end_pnt.X(), end_pnt.Y(), end_pnt.Z()]])
+            all_points.extend(
+                [
+                    [start_pnt.X(), start_pnt.Y(), start_pnt.Z()],
+                    [end_pnt.X(), end_pnt.Y(), end_pnt.Z()],
+                ]
+            )
 
         # Store topology constants as serializable ints for downstream
         # face/edge/vertex type filtering. Raw SWIG objects (C++ pointers)
@@ -509,10 +536,9 @@ class CADLoader:
         # Extract vertices
         for idx, vertex in enumerate(explorer.vertices()):
             pnt = BRep_Tool.Pnt(vertex)
-            vertices_topo.append({
-                "vertex_id": idx,
-                "point": [pnt.X(), pnt.Y(), pnt.Z()]
-            })
+            vertices_topo.append(
+                {"vertex_id": idx, "point": [pnt.X(), pnt.Y(), pnt.Z()]}
+            )
             all_points.append([pnt.X(), pnt.Y(), pnt.Z()])
 
         # Calculate bounding box
@@ -533,7 +559,7 @@ class CADLoader:
                 "file_type": "step",
                 "num_topo_faces": len(faces_topo),
                 "topology_constants": _topology_constants,
-            }
+            },
         )
 
 
@@ -543,9 +569,15 @@ class LLOCADRProcessor:
     Processes actual file format content (like OCR processes document text).
     """
 
-    def __init__(self, tokenizer, mesh_token_id: int, chunk_size: int | None = None,
-                 min_chunk_size: int | None = None, max_chunks: int = 27,
-                 target_global_faces: int = 4096):
+    def __init__(
+        self,
+        tokenizer,
+        mesh_token_id: int,
+        chunk_size: int | None = None,
+        min_chunk_size: int | None = None,
+        max_chunks: int = 27,
+        target_global_faces: int = 4096,
+    ):
         self.tokenizer = tokenizer
         self.mesh_token_id = mesh_token_id  # From vocab: "<mesh>"
         self.min_chunk_size = min_chunk_size
@@ -555,7 +587,9 @@ class LLOCADRProcessor:
         # chunk_size=None enables dynamic chunking based on file analysis
         self.content_chunker = UnifiedCADContentChunker(chunk_size=chunk_size)
 
-    def _chunk_brep(self, brep: BRepData, max_surfaces_per_chunk: int = 10) -> list[dict]:
+    def _chunk_brep(
+        self, brep: BRepData, max_surfaces_per_chunk: int = 10
+    ) -> list[dict]:
         """
         Chunk BRepData by grouping surfaces and their associated faces.
 
@@ -577,7 +611,7 @@ class LLOCADRProcessor:
             if sid is not None:
                 surface_to_faces.setdefault(sid, []).append(face)
 
-        chunks = []
+        chunks: list[dict[str, Any]] = []
         num_surfaces = len(brep.surfaces)
 
         for i in range(0, num_surfaces, max_surfaces_per_chunk):
@@ -624,7 +658,7 @@ class LLOCADRProcessor:
             result["file_content_chunks"] = {
                 "num_chunks": len(file_chunks),
                 "chunks": file_chunks,
-                "stats": self.content_chunker.get_chunk_statistics(file_chunks)
+                "stats": self.content_chunker.get_chunk_statistics(file_chunks),
             }
 
         # Get spatial/topological chunks
@@ -637,11 +671,12 @@ class LLOCADRProcessor:
                     "chunks": spatial_chunks,
                     "total_surfaces": data.num_surfaces,
                     "total_faces": data.num_faces,
-                    "total_edges": data.num_edges
+                    "total_edges": data.num_edges,
                 }
             elif isinstance(data, MeshData):
-                spatial_chunks = dynamic_mesh_partition(data, min_chunk_size=self.min_chunk_size,
-                                                            max_chunks=self.max_chunks)
+                spatial_chunks = dynamic_mesh_partition(
+                    data, min_chunk_size=self.min_chunk_size, max_chunks=self.max_chunks
+                )
                 result["spatial_chunks"] = {
                     "type": "mesh_octree",
                     "num_chunks": len(spatial_chunks),
@@ -651,20 +686,19 @@ class LLOCADRProcessor:
                             "num_vertices": chunk.num_vertices,
                             "num_faces": chunk.num_faces,
                             "bbox": chunk.bbox,
-                            "grid_position": chunk.chunk_id
+                            "grid_position": chunk.chunk_id,
                         }
                         for i, chunk in enumerate(spatial_chunks)
                     ],
                     "total_vertices": data.num_vertices,
-                    "total_faces": data.num_faces
+                    "total_faces": data.num_faces,
                 }
 
         return result
 
-    def tokenize_with_meshes(self,
-                            mesh_files: list[str],
-                            conversation: str,
-                            cropping: bool = True) -> dict[str, torch.Tensor]:
+    def tokenize_with_meshes(
+        self, mesh_files: list[str], conversation: str, cropping: bool = True
+    ) -> dict[str, torch.Tensor]:
         """
         Full preprocessing pipeline:
         1. Load CAD files (BRep or Mesh)
@@ -705,8 +739,11 @@ class LLOCADRProcessor:
             elif isinstance(data, MeshData):
                 # STL/OBJ file - spatial chunking
                 if cropping:
-                    chunks = dynamic_mesh_partition(data, min_chunk_size=self.min_chunk_size,
-                                                        max_chunks=self.max_chunks)
+                    chunks = dynamic_mesh_partition(
+                        data,
+                        min_chunk_size=self.min_chunk_size,
+                        max_chunks=self.max_chunks,
+                    )
                     chunks_list.append(chunks)
 
                     # Determine subdivision from chunks
@@ -722,7 +759,9 @@ class LLOCADRProcessor:
                     spatial_partitions.append((1, 1, 1))
 
                 # Create global view for meshes
-                global_mesh = create_global_view(data, target_faces=self.target_global_faces)
+                global_mesh = create_global_view(
+                    data, target_faces=self.target_global_faces
+                )
                 cad_data.append(global_mesh)
             else:
                 raise TypeError(f"Unknown data type: {type(data)}")
@@ -740,8 +779,10 @@ class LLOCADRProcessor:
             "vertex_normals": vertex_normals,
             "chunks_coords": chunks_coords,
             "chunks_normals": chunks_normals,
-            "mesh_spatial_partition": torch.tensor(spatial_partitions, dtype=torch.long),
-            "num_mesh_tokens": tokenized["num_mesh_tokens"]
+            "mesh_spatial_partition": torch.tensor(
+                spatial_partitions, dtype=torch.long
+            ),
+            "num_mesh_tokens": tokenized["num_mesh_tokens"],
         }
 
     def _cad_to_tensors(self, cad_data: list) -> tuple[torch.Tensor, torch.Tensor]:
@@ -752,7 +793,7 @@ class LLOCADRProcessor:
         for data in cad_data:
             if isinstance(data, BRepData):
                 # For BRep, extract representative points from topology
-                points = []
+                points: list[Any] = []
                 points.extend(vertex["point"] for vertex in data.vertices)
                 # Convert to arrays
                 if points:
@@ -777,7 +818,7 @@ class LLOCADRProcessor:
         padded_coords_batch = []
         padded_normals_batch = []
 
-        for coords, normals in zip(coords_batch, normals_batch):
+        for coords, normals in zip(coords_batch, normals_batch, strict=False):
             padded_coords = np.zeros((max_verts, 3), dtype=np.float32)
             padded_normals = np.zeros((max_verts, 3), dtype=np.float32)
 
@@ -790,10 +831,12 @@ class LLOCADRProcessor:
 
         return (
             torch.from_numpy(np.stack(padded_coords_batch)),
-            torch.from_numpy(np.stack(padded_normals_batch))
+            torch.from_numpy(np.stack(padded_normals_batch)),
         )
 
-    def _chunks_to_tensors(self, chunks_list: list[list]) -> tuple[torch.Tensor, torch.Tensor]:
+    def _chunks_to_tensors(
+        self, chunks_list: list[list]
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Convert list of chunk lists (BRep or Mesh) to batched tensors."""
         if not chunks_list or not chunks_list[0]:
             # No chunks, return empty tensors
@@ -832,7 +875,9 @@ class LLOCADRProcessor:
                     else:
                         chunk_features.append([0.0, 0.0, 0.0])
 
-                chunk_coords = np.array(chunk_features, dtype=np.float32).reshape(len(chunks), 1, 3)
+                chunk_coords = np.array(chunk_features, dtype=np.float32).reshape(
+                    len(chunks), 1, 3
+                )
                 chunk_normals = np.zeros_like(chunk_coords)
 
             else:
@@ -856,7 +901,7 @@ class LLOCADRProcessor:
         padded_coords = []
         padded_normals = []
 
-        for coords, normals in zip(coords_batch, normals_batch):
+        for coords, normals in zip(coords_batch, normals_batch, strict=False):
             pad_coords = np.zeros((max_chunks, max_verts, 3), dtype=np.float32)
             pad_normals = np.zeros((max_chunks, max_verts, 3), dtype=np.float32)
 
@@ -869,12 +914,12 @@ class LLOCADRProcessor:
 
         return (
             torch.from_numpy(np.stack(padded_coords)),
-            torch.from_numpy(np.stack(padded_normals))
+            torch.from_numpy(np.stack(padded_normals)),
         )
 
-    def _create_token_sequence(self, conversation: str,
-                              cad_data: list,
-                              chunks_list: list[list]) -> dict:
+    def _create_token_sequence(
+        self, conversation: str, cad_data: list, chunks_list: list[list]
+    ) -> dict:
         """Create token sequence with mesh placeholders replaced."""
         # Split conversation by <mesh> markers
         parts = conversation.split("<mesh>")
@@ -884,7 +929,9 @@ class LLOCADRProcessor:
         # Global tokens: fixed ~384
         global_tokens = 384
 
-        for _idx, (_data, chunks) in enumerate(zip(cad_data, chunks_list)):
+        for _idx, (_data, chunks) in enumerate(
+            zip(cad_data, chunks_list, strict=False)
+        ):
             # Local tokens: depends on chunks
             if len(chunks) > 1:
                 local_tokens = len(chunks) * 128
@@ -910,7 +957,7 @@ class LLOCADRProcessor:
 
         return {
             "input_ids": torch.tensor([token_ids], dtype=torch.long),
-            "num_mesh_tokens": num_mesh_tokens
+            "num_mesh_tokens": num_mesh_tokens,
         }
 
 

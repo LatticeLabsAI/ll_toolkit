@@ -8,6 +8,7 @@ Tests integration between ll_gen and ll_stepnet:
 All tests are marked with @pytest.mark.requires_torch and skip if PyTorch
 is not installed.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -18,6 +19,7 @@ import pytest
 # Check if torch is available
 try:
     import torch
+
     _TORCH_AVAILABLE = True
 except ImportError:
     _TORCH_AVAILABLE = False
@@ -25,18 +27,17 @@ except ImportError:
 # Check if ll_stepnet is available
 try:
     import ll_stepnet
+
     _LL_STEPNET_AVAILABLE = True
 except ImportError:
     _LL_STEPNET_AVAILABLE = False
 
 requires_torch = pytest.mark.skipif(
-    not _TORCH_AVAILABLE,
-    reason="PyTorch not installed"
+    not _TORCH_AVAILABLE, reason="PyTorch not installed"
 )
 
 requires_ll_stepnet = pytest.mark.skipif(
-    not _LL_STEPNET_AVAILABLE,
-    reason="ll_stepnet package not installed"
+    not _LL_STEPNET_AVAILABLE, reason="ll_stepnet package not installed"
 )
 
 
@@ -51,16 +52,19 @@ class TestNeuralRouteEnums:
     def test_neural_vae_route_defined(self) -> None:
         """Test NEURAL_VAE route is defined."""
         from ll_gen.config import GenerationRoute
+
         assert GenerationRoute.NEURAL_VAE == "neural_vae"
 
     def test_neural_diffusion_route_defined(self) -> None:
         """Test NEURAL_DIFFUSION route is defined."""
         from ll_gen.config import GenerationRoute
+
         assert GenerationRoute.NEURAL_DIFFUSION == "neural_diffusion"
 
     def test_neural_vqvae_route_defined(self) -> None:
         """Test NEURAL_VQVAE route is defined."""
         from ll_gen.config import GenerationRoute
+
         assert GenerationRoute.NEURAL_VQVAE == "neural_vqvae"
 
 
@@ -86,6 +90,7 @@ class TestOrchestratorNeuralPathsMocked:
     def test_orchestrator_importable(self) -> None:
         """Test GenerationOrchestrator is importable."""
         from ll_gen.pipeline.orchestrator import GenerationOrchestrator
+
         assert GenerationOrchestrator is not None
 
 
@@ -102,11 +107,13 @@ class TestVAEIntegration:
     def test_stepvae_import(self) -> None:
         """Test STEPVAE can be imported from ll_stepnet."""
         from ll_stepnet.stepnet.vae import STEPVAE
+
         assert STEPVAE is not None
 
     def test_vae_config_import(self) -> None:
         """Test VAEConfig can be imported from ll_stepnet."""
         from ll_stepnet.stepnet.config import VAEConfig
+
         assert VAEConfig is not None
 
 
@@ -123,11 +130,13 @@ class TestDiffusionIntegration:
     def test_structured_diffusion_import(self) -> None:
         """Test StructuredDiffusion can be imported from ll_stepnet."""
         from ll_stepnet.stepnet.diffusion import StructuredDiffusion
+
         assert StructuredDiffusion is not None
 
     def test_diffusion_config_import(self) -> None:
         """Test DiffusionConfig can be imported from ll_stepnet."""
         from ll_stepnet.stepnet.config import DiffusionConfig
+
         assert DiffusionConfig is not None
 
 
@@ -144,6 +153,7 @@ class TestVQVAEIntegration:
     def test_vqvae_import(self) -> None:
         """Test VQVAEModel can be imported from ll_stepnet."""
         from ll_stepnet.stepnet.vqvae import VQVAEModel
+
         assert VQVAEModel is not None
 
 
@@ -160,6 +170,7 @@ class TestGenerationPipelineIntegration:
     def test_generation_pipeline_import(self) -> None:
         """Test CADGenerationPipeline can be imported from ll_stepnet."""
         from ll_stepnet.stepnet.generation_pipeline import CADGenerationPipeline
+
         assert CADGenerationPipeline is not None
 
 

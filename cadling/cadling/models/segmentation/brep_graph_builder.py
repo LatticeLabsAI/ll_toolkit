@@ -416,14 +416,26 @@ class BRepFaceGraphBuilder:
                 edge_features[e, 0] = dihedral_angle
                 edge_features[e, 3] = dot_product
 
-                # Feature 1: Edge type (concave/convex/tangent)
-                # Simplified: based on angle
-                if dihedral_angle < np.pi / 6:  # < 30 degrees
-                    edge_features[e, 1] = 0.5  # Tangent
-                elif dihedral_angle < np.pi / 2:  # < 90 degrees
-                    edge_features[e, 1] = 1.0  # Convex
+                # Feature 1: Edge type (convex 1.0 / concave 0.0 / tangent 0.5).
+                # Determined by the SIGN of the fold, not the angle magnitude
+                # alone — magnitude cannot tell a 90deg convex edge from a 270deg
+                # concave one. Each face's centroid is tested against the other
+                # face's tangent plane: both centroids on the inner (-normal)
+                # side means the material is on the inside -> convex; both on the
+                # outer side -> concave; near-parallel normals -> tangent/smooth.
+                if dihedral_angle < np.pi / 12:  # ~15deg: faces near-coplanar
+                    edge_features[e, 1] = 0.5  # Tangent / smooth
                 else:
-                    edge_features[e, 1] = 0.0  # Concave
+                    c_src = face_centroids[src_face]
+                    c_dst = face_centroids[dst_face]
+                    s1 = float(np.dot(n1, c_dst - c_src))
+                    s2 = float(np.dot(n2, c_src - c_dst))
+                    if s1 < 0.0 and s2 < 0.0:
+                        edge_features[e, 1] = 1.0  # Convex
+                    elif s1 > 0.0 and s2 > 0.0:
+                        edge_features[e, 1] = 0.0  # Concave
+                    else:
+                        edge_features[e, 1] = 0.5  # Ambiguous -> tangent/unknown
             else:
                 # Invalid normals - use defaults
                 edge_features[e, 0] = 0.0

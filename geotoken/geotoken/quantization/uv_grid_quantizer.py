@@ -412,11 +412,20 @@ class UVGridQuantizer:
                     exc,
                 )
 
-        _log.info(
-            "UV grid quantization: %d/%d faces quantized",
-            len(results),
-            len(node_features),
-        )
+        # These tokens carry SYNTHETIC xyz (a linear UV→xyz model from feature
+        # statistics, not real B-Rep surface evaluation); every result has
+        # ``is_approximated=True``. Surface that at WARNING level so callers do
+        # not silently treat them as genuine UV-grid geometry — the flag alone
+        # was invisible to consumers that never inspect it.
+        if results:
+            _log.warning(
+                "UV grid quantization from topology produced %d/%d APPROXIMATE "
+                "faces (synthesized xyz from feature stats, NOT B-Rep surface "
+                "evaluation; tokens are flagged is_approximated=True). Use "
+                "quantize_surface_samples with real UV samples for exact tokens.",
+                len(results),
+                len(node_features),
+            )
         return results
 
     def dequantize(self, tokens: UVGridTokens) -> np.ndarray:

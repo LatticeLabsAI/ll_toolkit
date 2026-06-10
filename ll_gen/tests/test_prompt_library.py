@@ -7,6 +7,7 @@ Tests prompt template functionality:
 - Error recovery templates
 - Repair prompt construction
 """
+
 from __future__ import annotations
 
 from typing import Dict, Optional
@@ -21,7 +22,6 @@ from ll_gen.codegen.prompt_library import (
     get_system_prompt,
     get_repair_prompt,
 )
-
 
 # ============================================================================
 # SECTION 1: API Reference Tests
@@ -49,7 +49,9 @@ class TestCadQueryAPIReference:
 
     def test_api_reference_contains_selection(self) -> None:
         """Test API reference contains selection section."""
-        assert "SELECTION" in CADQUERY_API_REFERENCE or ".faces" in CADQUERY_API_REFERENCE
+        assert (
+            "SELECTION" in CADQUERY_API_REFERENCE or ".faces" in CADQUERY_API_REFERENCE
+        )
         assert '.faces(">Z")' in CADQUERY_API_REFERENCE
 
     def test_api_reference_contains_features(self) -> None:
@@ -107,7 +109,9 @@ class TestCadQueryExamples:
     def test_all_examples_have_proper_imports(self) -> None:
         """Test all examples have proper CadQuery imports."""
         for name, code in CADQUERY_EXAMPLES.items():
-            assert "from cadquery import Workplane as cq" in code, f"{name} missing import"
+            assert (
+                "from cadquery import Workplane as cq" in code
+            ), f"{name} missing import"
 
     def test_all_examples_return_result(self) -> None:
         """Test all examples call result.val()."""
@@ -139,7 +143,9 @@ class TestErrorRecoveryTemplates:
             ErrorCategory.TOLERANCE_VIOLATION,
         ]
         for category in expected_categories:
-            assert category in ERROR_RECOVERY_TEMPLATES, f"Missing template for {category}"
+            assert (
+                category in ERROR_RECOVERY_TEMPLATES
+            ), f"Missing template for {category}"
 
     def test_invalid_params_template(self) -> None:
         """Test INVALID_PARAMS template content."""
@@ -333,6 +339,7 @@ class TestModuleImport:
     def test_module_importable(self) -> None:
         """Test that prompt_library module is importable."""
         from ll_gen.codegen import prompt_library
+
         assert hasattr(prompt_library, "get_system_prompt")
         assert hasattr(prompt_library, "get_repair_prompt")
         assert hasattr(prompt_library, "CADQUERY_API_REFERENCE")
@@ -379,4 +386,7 @@ class TestPromptLibraryIntegration:
             backend="cadquery",
             error_context=error_context,
         )
-        assert "TOPOLOGY" in system_prompt_2.upper() or "topology" in system_prompt_2.lower()
+        assert (
+            "TOPOLOGY" in system_prompt_2.upper()
+            or "topology" in system_prompt_2.lower()
+        )

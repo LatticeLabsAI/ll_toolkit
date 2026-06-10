@@ -169,9 +169,14 @@ class HoleGeometryExtractor:
                 ]
                 _log.debug(f"Found direction={orientation}")
 
-        # Estimate depth from face count and bounding box
-        # Simplified: assume standard hole depth is 2x diameter
+        # Depth cannot be measured from STEP text alone (no 3D geometry is
+        # available on this fallback path — only regex-parsed entity fields).
+        # Provide a heuristic estimate (≈2× diameter) but flag it as estimated
+        # so consumers do not treat it as a measured dimension; the OCC path
+        # (_extract_from_occ_faces) measures the real depth from the cylinder's
+        # axial extent.
         depth = diameter * 2.0 if diameter else 20.0
+        depth_estimated = True
 
         # Determine hole type based on face count
         # Through hole: typically has bottom face (>=3 faces: side, top, bottom)
@@ -197,6 +202,7 @@ class HoleGeometryExtractor:
             "location": location if location else [0.0, 0.0, 0.0],
             "orientation": orientation if orientation else [0.0, 0.0, 1.0],
             "hole_type": hole_type,
+            "depth_estimated": depth_estimated,
             "confidence": min(confidence, 1.0),
         }
 
@@ -219,6 +225,7 @@ class HoleGeometryExtractor:
             from OCC.Core.BRepAdaptor import BRepAdaptor_Surface
             from OCC.Core.GeomAbs import GeomAbs_Cylinder
             from OCC.Core.BRep import BRep_Tool
+            from OCC.Core.BRepTools import breptools
             from OCC.Core.gp import gp_Cylinder
 
             # Get TopoDS_Face objects from graph
@@ -263,8 +270,14 @@ class HoleGeometryExtractor:
             location = [location_pnt.X(), location_pnt.Y(), location_pnt.Z()]
             orientation = [direction.X(), direction.Y(), direction.Z()]
 
-            # Estimate depth (simplified)
-            depth = diameter * 2.0
+            # Measure the REAL depth: an OCC cylindrical surface is parameterised
+            # (u = angle, v = axial length), so the trimmed face's V-extent is the
+            # hole's depth in model units. Sum across all cylindrical faces of the
+            # same hole (e.g. counterbored holes split into stacked walls).
+            depth = 0.0
+            for cyl_face in cylindrical_faces:
+                u_min, u_max, v_min, v_max = breptools.UVBounds(cyl_face)
+                depth += abs(v_max - v_min)
 
             # Determine hole type
             hole_type = "through" if len(cylindrical_faces) >= 2 else "blind"
@@ -275,6 +288,7 @@ class HoleGeometryExtractor:
                 "location": location,
                 "orientation": orientation,
                 "hole_type": hole_type,
+                "depth_estimated": False,
                 "confidence": 0.9,
             }
 
@@ -354,8 +368,9 @@ class HoleGeometryExtractor:
             return None
 
 
-# Placeholder classes for other feature extractors
-# These can be implemented following the same pattern as HoleGeometryExtractor
+# Additional feature extractors (Pocket, Boss, Fillet, Chamfer below) — each a
+# full three-strategy extractor (STEP text -> OCC geometry -> graph features),
+# following the same pattern as HoleGeometryExtractor.
 
 
 class PocketGeometryExtractor:
@@ -1559,15 +1574,16 @@ class ChamferGeometryExtractor:
 
         try:
             from OCC.Core.BRepAdaptor import BRepAdaptor_Surface
+            from OCC.Core.BRepTools import breptools
             from OCC.Core.GeomAbs import GeomAbs_Plane
             from OCC.Core.gp import gp_Pln
-            import math
 
             # Get faces from graph
             if not hasattr(graph, "faces") or not graph.faces:
                 return None
 
             planar_normals = []
+            chamfer_widths = []
 
             # Analyze chamfer faces (should be planar)
             for face_id in face_ids:
@@ -1587,6 +1603,19 @@ class ChamferGeometryExtractor:
                         normal = plane.Axis().Direction()
 
                         planar_normals.append([normal.X(), normal.Y(), normal.Z()])
+
+                        # Measure the chamfer face's strip width: for a
+                        # Geom_Plane the U/V parameters are real lengths, so the
+                        # trimmed face's SHORTER UV extent is the chamfer face
+                        # width (the dimension across the bevel). This is the
+                        # real measured chamfer size, replacing the former
+                        # hardcoded default.
+                        u_min, u_max, v_min, v_max = breptools.UVBounds(occ_face)
+                        u_extent = abs(u_max - u_min)
+                        v_extent = abs(v_max - v_min)
+                        width = min(u_extent, v_extent)
+                        if width > 0.0:
+                            chamfer_widths.append(width)
 
             if len(planar_normals) < 1:
                 return None
@@ -1609,12 +1638,20 @@ class ChamferGeometryExtractor:
             common_angles = [30.0, 45.0, 60.0]
             angle = min(common_angles, key=lambda x: abs(x - angle_deg))
 
-            # Estimate distance (simplified: use default)
-            distance = 2.0
+            # Measured chamfer distance from the face geometry (mean strip width
+            # across the chamfer faces). distance_measured flags whether it came
+            # from real geometry vs the last-resort default.
+            if chamfer_widths:
+                distance = float(np.mean(chamfer_widths))
+                distance_measured = True
+            else:
+                distance = 2.0
+                distance_measured = False
 
             return {
                 "angle": float(angle),
                 "distance": distance,
+                "distance_measured": distance_measured,
                 "confidence": 0.75,
                 "method": "occ_geometric_analysis",
             }

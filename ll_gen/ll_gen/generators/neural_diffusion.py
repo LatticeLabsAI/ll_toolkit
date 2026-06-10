@@ -72,13 +72,17 @@ class NeuralDiffusionGenerator(BaseNeuralGenerator):
         stage_latents: dict[str, Any] | None = None
 
         if isinstance(output, dict):
+            # The diffusion model decodes its final stage tokens into batched
+            # primitive-set tensors: face_grids [B, N_faces, U, V, 3] and
+            # edge_points [B, N_edges, M, 3]. Split them into per-primitive
+            # arrays ([U, V, 3] per face, [M, 3] per edge).
             if "face_grids" in output:
-                face_grids = self._tensor_to_numpy_list(output["face_grids"])
+                face_grids = self._decoded_primitive_list(output["face_grids"], 3)
             elif "face_positions" in output:
                 face_grids = self._tensor_to_numpy_list(output["face_positions"])
 
             if "edge_points" in output:
-                edge_points = self._tensor_to_numpy_list(output["edge_points"])
+                edge_points = self._decoded_primitive_list(output["edge_points"], 2)
             elif "edge_positions" in output:
                 edge_points = self._tensor_to_numpy_list(output["edge_positions"])
 
@@ -88,7 +92,11 @@ class NeuralDiffusionGenerator(BaseNeuralGenerator):
                     for k, v in output["stage_latents"].items()
                 }
         else:
-            face_grids = self._create_placeholder_face_grids(output)
+            # Bare-tensor output (no stage dict): the sampled latent IS the
+            # geometry representation this model produces — StructuredDiffusion
+            # has no separate latent→grid decoder — so surface it directly,
+            # exactly as the dict path does for its stage latents above.
+            face_grids = self._latent_to_face_grids(output)
 
         if not face_grids and not edge_points:
             _log.warning(
@@ -157,72 +165,56 @@ class NeuralDiffusionGenerator(BaseNeuralGenerator):
         error_context: dict[str, Any] | None = None,
         target_dimensions: tuple[float, float, float] | None = None,
     ) -> LatentProposal:
-        """Generate with a (decoupled) policy gradient signal for RL training.
+        """Generate with a REAL DDPO policy-gradient signal for RL training.
 
         ``target_dimensions`` is accepted for trainer-call uniformity (diffusion
         does not yet condition on it).
 
-        IMPORTANT — the REINFORCE signal returned here is currently DECOUPLED
-        from the geometry that is actually produced. ``StructuredDiffusion``
-        does not expose a noise-conditioned / log-prob sampling API: its
-        ``sample()`` draws its own noise internally and runs the full
-        (non-differentiable) denoising chain. The ``noise`` tensor whose
-        Gaussian-prior log-prob we compute below is therefore an *independent*
-        sample, not the latent that generated ``output``.
+        This runs ``StructuredDiffusion.sample_with_log_prob`` — a stochastic
+        DDIM reverse process (DDPO; Black et al., 2023) executed **with
+        gradients enabled**. The returned ``log_probs`` is the sum of the
+        per-step Gaussian log-probabilities of the actual sampled denoising
+        trajectory, whose transition means are produced by the denoiser
+        network. It is therefore connected to the model parameters: the RL
+        trainer's ``-advantage * log_probs`` REINFORCE update backpropagates
+        into the diffusion denoisers and trains them. This replaces the former
+        decoupled noise-prior stand-in, which produced a finite loss while
+        updating zero parameters.
 
-        Consequence: ``log_probs`` is an unbiased-but-high-variance stand-in
-        policy gradient (the score of an N(0, I) draw), **not** a true DDPO
-        gradient flowing through the denoising trajectory. It lets the RL loop
-        run end-to-end, but the reward is not attached to the actual sampling
-        path.
-
-        Properly wiring the sampled noise through ``sample()`` — or adding a
-        ``sample_with_log_prob`` DDPO path to ``StructuredDiffusion`` so the
-        reward attaches to the real trajectory — is tracked as future work in
-        the M2 training plan. Until then, treat the diffusion RL signal as
-        approximate.
+        A non-zero DDIM ``eta`` is required for a usable policy gradient (a
+        deterministic trajectory has a degenerate policy); when ``self.eta`` is
+        0 (the deterministic inference default) the training path uses
+        ``eta = 1.0``.
 
         Args:
             prompt: User prompt.
             conditioning: Optional conditioning embeddings.
             error_context: Optional error context.
+            target_dimensions: Accepted for call uniformity; unused here.
 
         Returns:
-            LatentProposal with ``log_probs`` (prior log-prob of an independent
-            noise sample) and ``entropy`` set.
+            LatentProposal whose ``log_probs`` is a differentiable scalar
+            connected to the model parameters and whose ``entropy`` is the
+            trajectory's summed Gaussian entropy.
         """
-        import torch
-
         if self._model is None:
             self._init_model()
 
-        batch_size = 1
-        noise_shape = self._get_noise_shape()
+        # Deterministic inference uses eta=0; RL needs a stochastic trajectory.
+        train_eta = self.eta if self.eta and self.eta > 0.0 else 1.0
 
-        # Independent N(0, I) sample whose prior log-prob is the (decoupled)
-        # REINFORCE signal — see the method docstring. This is NOT threaded into
-        # sample() below, which draws its own internal noise.
-        noise = torch.randn(
-            batch_size,
-            *noise_shape,
+        # Stochastic DDIM sampling WITH gradients: the trajectory log-prob flows
+        # through every denoiser's epsilon prediction into the model params.
+        output, log_prob_batch, entropy_batch = self._model.sample_with_log_prob(
+            batch_size=1,
             device=self.device,
-            dtype=torch.float32,
-            requires_grad=True,
+            num_inference_steps=self.inference_steps,
+            eta=train_eta,
         )
 
-        # Log-prob of noise under N(0, I): -0.5 * sum(z^2) - 0.5*d*log(2*pi)
-        d = noise.numel()
-        log_prob = -0.5 * noise.pow(2).sum() - 0.5 * d * torch.log(
-            torch.tensor(2.0 * torch.pi, device=self.device)
-        )
-
-        # Entropy of N(0,I) = 0.5 * d * (1 + log(2*pi))
-        entropy_value = float(0.5 * d * (1.0 + np.log(2.0 * np.pi)))
-
-        # sample() runs the full denoising chain with its OWN internal noise; the
-        # geometry it returns is independent of `noise` above (see docstring).
-        with torch.no_grad():
-            output = self._model.sample(batch_size=batch_size, device=self.device)
+        # Sum over the (size-1) batch -> scalar trajectory log-prob (keeps grad).
+        log_prob = log_prob_batch.sum()
+        entropy_value = float(entropy_batch.sum().detach().cpu())
 
         face_grids, edge_points, stage_latents = self._extract_geometry_from_output(
             output
@@ -241,7 +233,7 @@ class NeuralDiffusionGenerator(BaseNeuralGenerator):
             generation_metadata=self._build_metadata(
                 "StructuredDiffusion",
                 inference_steps=self.inference_steps,
-                eta=self.eta,
+                eta=train_eta,
             ),
             error_context=error_context,
             log_probs=log_prob,
@@ -480,33 +472,58 @@ class NeuralDiffusionGenerator(BaseNeuralGenerator):
             _log.warning(f"Unexpected tensor shape: {tensor.shape}")
             return [tensor]
 
-    def _create_placeholder_face_grids(
+    def _decoded_primitive_list(
+        self,
+        tensor: Any,
+        primitive_ndim: int,
+    ) -> list[np.ndarray]:
+        """Split a decoded primitive-set tensor into per-primitive arrays.
+
+        The diffusion codec returns batched sets — face grids as
+        ``[B, N_faces, U, V, 3]`` and edge polylines as ``[B, N_edges, M, 3]``.
+        ``primitive_ndim`` is the ndim of a *single* primitive (3 for a face
+        grid ``[U, V, 3]``, 2 for an edge polyline ``[M, 3]``). Leading batch
+        dimensions are dropped (generation uses ``batch_size == 1``) and the
+        primitive dimension is split into one array per face/edge.
+
+        Args:
+            tensor: Decoded geometry tensor or array.
+            primitive_ndim: ndim of one primitive's array.
+
+        Returns:
+            List of per-primitive ``np.ndarray`` (each with ndim
+            ``primitive_ndim``).
+        """
+        arr = self._tensor_to_numpy(tensor)
+        # Drop leading batch dim(s) until we have [N_primitives, *primitive].
+        while arr.ndim > primitive_ndim + 1:
+            arr = arr[0]
+        if arr.ndim == primitive_ndim + 1:
+            return [arr[i] for i in range(arr.shape[0])]
+        return [arr]
+
+    def _latent_to_face_grids(
         self,
         latent_tensor: Any,
     ) -> list[np.ndarray]:
-        """Create placeholder face grids from latent tensor shape.
+        """Surface a bare-tensor diffusion output as face-grid arrays.
+
+        ``StructuredDiffusion.sample()`` normally returns a per-stage dict
+        whose ``face_positions`` / ``face_geometry`` latents are consumed by
+        :meth:`_extract_geometry_from_output`. When a caller hands this method
+        a bare tensor instead, that tensor *is* the model's geometry latent —
+        the model has no separate latent→grid decoder — so it is converted to
+        numpy and returned directly, identically to how the dict path handles
+        its stage latents (see :meth:`_tensor_to_numpy_list`). A leading batch
+        dimension is split into one array per sample.
 
         Args:
-            latent_tensor: Raw latent output tensor.
+            latent_tensor: Raw latent output tensor from the diffusion model.
 
         Returns:
-            List of face grid arrays (U×V×3).
+            List of latent arrays, one per face/sample.
         """
-        latent = self._tensor_to_numpy(latent_tensor)
-
-        # Try to infer number of faces from latent shape
-        if latent.ndim >= 2:
-            num_faces = max(1, latent.shape[0])
-        else:
-            num_faces = 1
-
-        _log.warning(
-            "Model produced no decodable face grids from latent "
-            "(shape=%s); returning zero-valued placeholder grids.",
-            latent.shape,
-        )
-        face_grids = [np.zeros((32, 32, 3), dtype=np.float32) for _ in range(num_faces)]
-        return face_grids
+        return self._tensor_to_numpy_list(latent_tensor)
 
     def _compute_confidence(
         self,

@@ -448,3 +448,57 @@ class TestThreadedGeometryVlmPipeline:
         for feature in features:
             assert "source" in feature
             assert feature["source"] in ("geometric_analysis", "topology_heuristic")
+
+
+# ============================================================================
+# Stage-1 real feature detection (surface type from one-hot, measured params,
+# geometric recession) — regression for the former toy curvature heuristic +
+# broken extract_from_face calls + unreachable pocket branch.
+# ============================================================================
+
+import math
+import numpy as np
+
+
+def _node_face(type_idx, area=0.0, mean_curv=0.0, normal=(0, 0, 1),
+               centroid=(0, 0, 0), bbox=(1, 1, 1)):
+    """Build a 24-dim node-feature row matching BRepFaceGraphBuilder's layout."""
+    f = np.zeros(24)
+    f[type_idx] = 1.0          # surface-type one-hot ([0]=PLANE, [1]=CYLINDER)
+    f[10] = area
+    f[12] = mean_curv
+    f[13:16] = normal
+    f[16:19] = centroid
+    f[19:22] = bbox
+    return f
+
+
+class TestStage1RealDetection:
+    def test_surface_type_from_real_one_hot(self):
+        pipe = ThreadedGeometryVlmPipeline.__new__(ThreadedGeometryVlmPipeline)
+        assert pipe._classify_surface_type(_node_face(1))[0] == "cylindrical"
+        assert pipe._classify_surface_type(_node_face(0))[0] == "planar"
+        # confidence is the real one-hot magnitude
+        assert pipe._classify_surface_type(_node_face(1))[1] == 1.0
+
+    def test_hole_parameters_are_measured(self):
+        # mean_curv 0.1 -> R=5 -> d=10; area=pi*d*h with h=20 -> depth 20.
+        cyl = _node_face(1, area=math.pi * 10 * 20, mean_curv=0.1, centroid=(5, 5, 0))
+        params = ThreadedGeometryVlmPipeline._hole_parameters(cyl)
+        assert params["diameter"] == pytest.approx(10.0, abs=1e-3)
+        assert params["depth"] == pytest.approx(20.0, abs=1e-2)
+        assert params["location"] == [5.0, 5.0, 0.0]
+
+    def test_recession_detects_pocket_floor_only(self):
+        # Floor at z=0 with a face above it (z=10) along +z -> recessed pocket.
+        node_feats = np.stack([
+            _node_face(0, normal=(0, 0, 1), centroid=(0, 0, 0), bbox=(8, 6, 1)),
+            _node_face(0, normal=(0, 0, 1), centroid=(0, 0, 10), bbox=(20, 20, 1)),
+            _node_face(0, normal=(1, 0, 0), centroid=(10, 0, 5), bbox=(1, 20, 10)),
+        ])
+        pocket = ThreadedGeometryVlmPipeline._planar_recession(0, node_feats)
+        assert pocket is not None
+        assert pocket["depth"] == pytest.approx(10.0, abs=1e-3)
+        assert pocket["width"] == 8.0
+        # The outermost (top) face is NOT recessed -> no fabricated pocket.
+        assert ThreadedGeometryVlmPipeline._planar_recession(1, node_feats) is None

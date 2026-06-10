@@ -7,6 +7,7 @@ Tests surface execution functionality for LatentProposal objects:
 - Adjacency-based face merging
 - Fallback behavior without cadling
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -21,7 +22,6 @@ from ll_gen.disposal.surface_executor import (
     _chamfer_distance,
 )
 
-
 # ============================================================================
 # SECTION 1: Module Import Tests
 # ============================================================================
@@ -33,6 +33,7 @@ class TestModuleImport:
     def test_module_importable(self) -> None:
         """Test that surface_executor module is importable."""
         from ll_gen.disposal import surface_executor
+
         assert hasattr(surface_executor, "execute_latent_proposal")
         assert hasattr(surface_executor, "_fit_bspline_surface")
         assert hasattr(surface_executor, "_fit_bspline_curve")
@@ -42,6 +43,7 @@ class TestModuleImport:
     def test_availability_flags_are_boolean(self) -> None:
         """Test that availability flags are boolean values."""
         from ll_gen.disposal import surface_executor
+
         assert isinstance(surface_executor._OCC_AVAILABLE, bool)
         assert isinstance(surface_executor._CADLING_SURFACE_FITTER_AVAILABLE, bool)
         assert isinstance(surface_executor._CADLING_TOPOLOGY_MERGER_AVAILABLE, bool)
@@ -49,6 +51,7 @@ class TestModuleImport:
     def test_execute_function_is_callable(self) -> None:
         """Test that execute_latent_proposal is callable."""
         from ll_gen.disposal.surface_executor import execute_latent_proposal
+
         assert callable(execute_latent_proposal)
 
 
@@ -68,9 +71,7 @@ class TestExecuteLatentProposalMocked:
             source_prompt="Test shape",
             face_grids=[np.random.randn(4, 4, 3).astype(np.float32)],
         )
-        with patch(
-            "ll_gen.disposal.surface_executor._OCC_AVAILABLE", False
-        ):
+        with patch("ll_gen.disposal.surface_executor._OCC_AVAILABLE", False):
             with pytest.raises(RuntimeError) as exc_info:
                 execute_latent_proposal(proposal)
             assert "pythonocc" in str(exc_info.value).lower()
@@ -88,6 +89,7 @@ class TestExecuteLatentProposalMocked:
         # This test verifies the preference logic exists
         # Actual execution requires OCC and cadling
         from ll_gen.disposal import surface_executor
+
         assert hasattr(surface_executor, "_CADLING_SURFACE_FITTER_AVAILABLE")
 
 
@@ -210,17 +212,20 @@ class TestBSplineFittingStructure:
     def test_fit_bspline_surface_exists(self) -> None:
         """Test _fit_bspline_surface function exists."""
         from ll_gen.disposal.surface_executor import _fit_bspline_surface
+
         assert callable(_fit_bspline_surface)
 
     def test_fit_bspline_curve_exists(self) -> None:
         """Test _fit_bspline_curve function exists."""
         from ll_gen.disposal.surface_executor import _fit_bspline_curve
+
         assert callable(_fit_bspline_curve)
 
     def test_surface_fitter_tolerance_parameter(self) -> None:
         """Test that _fit_bspline_surface accepts tolerance parameter."""
         from ll_gen.disposal.surface_executor import _fit_bspline_surface
         import inspect
+
         sig = inspect.signature(_fit_bspline_surface)
         assert "tolerance" in sig.parameters
 
@@ -236,16 +241,19 @@ class TestTopologyOperationsStructure:
     def test_deduplicate_edges_exists(self) -> None:
         """Test _deduplicate_edges function exists."""
         from ll_gen.disposal.surface_executor import _deduplicate_edges
+
         assert callable(_deduplicate_edges)
 
     def test_trim_surfaces_with_edges_exists(self) -> None:
         """Test _trim_surfaces_with_edges function exists."""
         from ll_gen.disposal.surface_executor import _trim_surfaces_with_edges
+
         assert callable(_trim_surfaces_with_edges)
 
     def test_sew_faces_exists(self) -> None:
         """Test _sew_faces function exists."""
         from ll_gen.disposal.surface_executor import _sew_faces
+
         assert callable(_sew_faces)
 
 
@@ -269,6 +277,7 @@ class TestEdgeDeduplicationLogic:
     def test_deduplication_uses_chamfer_distance(self) -> None:
         """Test that deduplication uses Chamfer distance for similarity."""
         from ll_gen.disposal.surface_executor import _chamfer_distance
+
         assert callable(_chamfer_distance)
 
 
@@ -283,11 +292,13 @@ class TestSewingOperationsStructure:
     def test_sew_faces_function_exists(self) -> None:
         """Test _sew_faces function exists."""
         from ll_gen.disposal.surface_executor import _sew_faces
+
         assert callable(_sew_faces)
 
     def test_check_sewed_shape_quality_exists(self) -> None:
         """Test _check_sewed_shape_quality function exists."""
         from ll_gen.disposal.surface_executor import _check_sewed_shape_quality
+
         assert callable(_check_sewed_shape_quality)
 
 
@@ -323,14 +334,17 @@ class TestHelperFunctions:
     def test_compute_edge_bbox_center_exists(self) -> None:
         """Test _compute_edge_bbox_center function exists."""
         from ll_gen.disposal.surface_executor import _compute_edge_bbox_center
+
         assert callable(_compute_edge_bbox_center)
 
     def test_sample_edge_points_exists(self) -> None:
         """Test _sample_edge_points function exists."""
         from ll_gen.disposal.surface_executor import _sample_edge_points
+
         assert callable(_sample_edge_points)
 
     def test_average_edges_exists(self) -> None:
         """Test _average_edges function exists."""
         from ll_gen.disposal.surface_executor import _average_edges
+
         assert callable(_average_edges)

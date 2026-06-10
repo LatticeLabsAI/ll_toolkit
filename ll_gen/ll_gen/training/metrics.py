@@ -24,9 +24,14 @@ class GenerationMetrics:
     Attributes:
         validity_rate: Fraction of proposals passing validation (0–1).
         compile_rate: Fraction of proposals that execute without error (0–1).
-        coverage: Coverage of reference shape set via COV metric (0–1).
-        mmd: Minimum Matching Distance between generated and reference sets.
-        jsd: Jensen-Shannon Divergence between point distributions (0–1).
+        coverage: Coverage of reference shape set via COV metric (0–1), or
+            ``None`` when no reference shape set was supplied (distribution
+            metrics are undefined without a reference and must NOT be reported
+            as 0.0).
+        mmd: Minimum Matching Distance between generated and reference sets, or
+            ``None`` when no reference was supplied.
+        jsd: Jensen-Shannon Divergence between point distributions (0–1), or
+            ``None`` when no reference was supplied.
         mean_reward: Mean disposal reward signal across all samples.
         reward_std: Standard deviation of reward signal.
         num_samples: Total number of samples evaluated.
@@ -35,19 +40,25 @@ class GenerationMetrics:
         num_distinct_valid: Number of distinct valid shapes (by rounded bounding-
             box dimensions). Guards against mode collapse inflating the validity
             rate with the same shape repeated.
+        mean_sequence_log_prob: Mean teacher-forcing log-probability of the
+            generated token sequences under the policy, scored from each
+            proposal's own latent (a deterministic reconstruction-likelihood
+            diagnostic). 0.0 when the generator emits no command-token sequence
+            (e.g. diffusion). Populated by ``evaluate_validity``.
     """
 
     validity_rate: float = 0.0
     compile_rate: float = 0.0
-    coverage: float = 0.0
-    mmd: float = 0.0
-    jsd: float = 0.0
+    coverage: float | None = None
+    mmd: float | None = None
+    jsd: float | None = None
     mean_reward: float = 0.0
     reward_std: float = 0.0
     num_samples: int = 0
     num_valid: int = 0
     num_compiled: int = 0
     num_distinct_valid: int = 0
+    mean_sequence_log_prob: float = 0.0
 
     def summary(self) -> dict[str, Any]:
         """Generate a summary dict suitable for logging or JSON export.
@@ -67,6 +78,7 @@ class GenerationMetrics:
             "num_valid": self.num_valid,
             "num_compiled": self.num_compiled,
             "num_distinct_valid": self.num_distinct_valid,
+            "mean_sequence_log_prob": self.mean_sequence_log_prob,
         }
 
 
@@ -347,6 +359,65 @@ class MetricsComputer:
 
         return covered / len(reference)
 
+    def _sample_shape_points(
+        self, shape: Any, num_points: int = 512
+    ) -> np.ndarray | None:
+        """Sample a real surface point cloud from a ``TopoDS_Shape``.
+
+        Tessellates the shape with ``BRepMesh_IncrementalMesh`` and collects the
+        triangulation node coordinates from every face, then uniformly
+        subsamples to ``num_points``. Returns ``None`` when no shape is given or
+        pythonocc / a usable triangulation is unavailable — never fabricated
+        points.
+
+        Args:
+            shape: A ``TopoDS_Shape`` (or ``None``).
+            num_points: Target number of sampled points.
+
+        Returns:
+            ``(P, 3)`` float array of real surface points, or ``None``.
+        """
+        if shape is None:
+            return None
+        try:
+            from OCC.Core.BRep import BRep_Tool
+            from OCC.Core.BRepMesh import BRepMesh_IncrementalMesh
+            from OCC.Core.TopAbs import TopAbs_FACE
+            from OCC.Core.TopExp import TopExp_Explorer
+            from OCC.Core.TopLoc import TopLoc_Location
+            from OCC.Core.TopoDS import topods
+        except ImportError:
+            return None
+
+        try:
+            # Build a mesh on the shape (deflection relative to its size).
+            BRepMesh_IncrementalMesh(shape, 0.5, False, 0.5, True)
+
+            points: list[list[float]] = []
+            explorer = TopExp_Explorer(shape, TopAbs_FACE)
+            while explorer.More():
+                face = topods.Face(explorer.Current())
+                location = TopLoc_Location()
+                triangulation = BRep_Tool.Triangulation(face, location)
+                if triangulation is not None:
+                    trsf = location.Transformation()
+                    for i in range(1, triangulation.NbNodes() + 1):
+                        node = triangulation.Node(i).Transformed(trsf)
+                        points.append([node.X(), node.Y(), node.Z()])
+                explorer.Next()
+
+            if not points:
+                return None
+
+            arr = np.asarray(points, dtype=np.float64)
+            if len(arr) > num_points:
+                idx = np.linspace(0, len(arr) - 1, num_points).astype(int)
+                arr = arr[idx]
+            return arr
+        except Exception as exc:  # tessellation/geometry failure
+            _log.debug("Shape point sampling failed: %s", exc)
+            return None
+
     def compute_all(
         self,
         results: list[DisposalResult],
@@ -367,36 +438,14 @@ class MetricsComputer:
         if not results:
             return GenerationMetrics()
 
-        # Extract point clouds from results
+        # Extract REAL surface point clouds from each constructed shape by
+        # tessellating it (not bounding-box corners). Results that produced no
+        # shape contribute no points.
         generated_points = []
         for r in results:
-            if r.geometry_report and r.geometry_report.bounding_box:
-                # Create a simple point cloud from bounding box
-                # (in practice, you'd use actual geometry)
-                bbox = r.geometry_report.bounding_box
-                if len(bbox) >= 6:
-                    # Create 8 corners of the bounding box
-                    x_min, y_min, z_min, x_max, y_max, z_max = (
-                        bbox[0],
-                        bbox[1],
-                        bbox[2],
-                        bbox[3],
-                        bbox[4],
-                        bbox[5],
-                    )
-                    corners = np.array(
-                        [
-                            [x_min, y_min, z_min],
-                            [x_min, y_min, z_max],
-                            [x_min, y_max, z_min],
-                            [x_min, y_max, z_max],
-                            [x_max, y_min, z_min],
-                            [x_max, y_min, z_max],
-                            [x_max, y_max, z_min],
-                            [x_max, y_max, z_max],
-                        ]
-                    )
-                    generated_points.append(corners)
+            pts = self._sample_shape_points(getattr(r, "shape", None))
+            if pts is not None and len(pts) > 0:
+                generated_points.append(pts)
 
         # Compute scalar metrics
         validity_rate = self.compute_validity_rate(results)
@@ -412,18 +461,19 @@ class MetricsComputer:
         # cannot masquerade as a high validity rate.
         num_distinct_valid = self.compute_distinct_valid(results)
 
-        # Compute distance metrics if reference is provided
-        mmd = 0.0
-        jsd = 0.0
-        coverage = 0.0
+        # Distribution metrics are only defined against a reference shape set.
+        # When none is supplied they stay None (NOT 0.0) so a missing reference
+        # is never reported as a computed score of zero.
+        mmd: float | None = None
+        jsd: float | None = None
+        coverage: float | None = None
 
         if reference_points and generated_points:
             mmd = self.compute_mmd(generated_points, reference_points)
             if reference_points[0].ndim == 2 and reference_points[0].shape[1] == 3:
-                if generated_points:
-                    ref_combined = np.vstack(reference_points)
-                    gen_combined = np.vstack(generated_points)
-                    jsd = self.compute_jsd(gen_combined, ref_combined)
+                ref_combined = np.vstack(reference_points)
+                gen_combined = np.vstack(generated_points)
+                jsd = self.compute_jsd(gen_combined, ref_combined)
             coverage = self.compute_coverage(generated_points, reference_points)
 
         return GenerationMetrics(

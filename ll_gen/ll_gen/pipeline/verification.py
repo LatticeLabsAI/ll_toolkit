@@ -20,7 +20,10 @@ import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from transformers import CLIPModel, CLIPProcessor
 
 from ll_gen.proposals.disposal_result import GeometryReport
 
@@ -38,6 +41,11 @@ class VerificationResult:
         dimension_checks: Per-dimension pass/fail results.
         issues: List of detected mismatches.
         vlm_response: Raw VLM response text (if VLM was used).
+        vlm_verified: True only when a VLM backend actually ran and produced a
+            real comparison. False when VLM verification was requested but could
+            not run (missing dependency, no usable renders, backend error) — in
+            which case the VLM result is NOT counted toward confidence, so an
+            unavailable verifier never masquerades as a passed check.
     """
 
     matches_intent: bool = True
@@ -46,6 +54,7 @@ class VerificationResult:
     dimension_checks: list[dict[str, Any]] = field(default_factory=list)
     issues: list[str] = field(default_factory=list)
     vlm_response: str | None = None
+    vlm_verified: bool = False
 
 
 class VisualVerifier:
@@ -76,8 +85,8 @@ class VisualVerifier:
     ) -> None:
         self.dimension_tolerance = dimension_tolerance
         self.vlm_backend = vlm_backend
-        self._clip_model = None
-        self._clip_processor = None
+        self._clip_model: CLIPModel | None = None
+        self._clip_processor: CLIPProcessor | None = None
 
     def verify(
         self,
@@ -123,10 +132,22 @@ class VisualVerifier:
             try:
                 vlm_result = self._verify_vlm(render_paths, prompt)
                 result.vlm_response = vlm_result.get("response", "")
-                if not vlm_result.get("matches", True):
-                    result.issues.extend(vlm_result.get("issues", []))
-                    result.matches_intent = False
-                methods_used.append("vlm")
+                if vlm_result.get("verified"):
+                    # The VLM actually ran and produced a comparison.
+                    result.vlm_verified = True
+                    if not vlm_result.get("matches", True):
+                        result.issues.extend(vlm_result.get("issues", []))
+                        result.matches_intent = False
+                    methods_used.append("vlm")
+                else:
+                    # VLM was requested but could not run (missing dependency,
+                    # no usable renders, or backend error). Do NOT count it as a
+                    # passed method — failing open here would silently inflate
+                    # confidence and report an unverified shape as matching.
+                    _log.warning(
+                        "VLM verification unavailable, not counted: %s",
+                        vlm_result.get("response", ""),
+                    )
             except Exception as exc:
                 _log.warning("VLM verification failed: %s", exc)
 
@@ -312,7 +333,10 @@ class VisualVerifier:
         - "llm": LLM with vision capability (requires API key)
 
         Returns:
-            Dict with "matches" (bool), "response" (str), "issues" (list).
+            Dict with "matches" (bool|None), "verified" (bool), "response"
+            (str), "issues" (list). ``verified`` is True only when the backend
+            actually ran a comparison; when it could not run, ``verified`` is
+            False and ``matches`` is None (unknown) — never a silent True.
         """
         if self.vlm_backend == "clip":
             return self._verify_clip(render_paths, prompt)
@@ -320,7 +344,12 @@ class VisualVerifier:
             return self._verify_llm_vision(render_paths, prompt)
         else:
             _log.warning("Unknown VLM backend: %s", self.vlm_backend)
-            return {"matches": True, "response": "", "issues": []}
+            return {
+                "matches": None,
+                "verified": False,
+                "response": f"Unknown VLM backend: {self.vlm_backend}",
+                "issues": [],
+            }
 
     def _verify_clip(
         self,
@@ -338,7 +367,12 @@ class VisualVerifier:
             from transformers import CLIPModel, CLIPProcessor
         except ImportError as exc:
             _log.warning("CLIP verification requires transformers+PIL: %s", exc)
-            return {"matches": True, "response": "", "issues": []}
+            return {
+                "matches": None,
+                "verified": False,
+                "response": f"CLIP verification unavailable (transformers/PIL): {exc}",
+                "issues": [],
+            }
 
         if self._clip_model is None:
             self._clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
@@ -347,9 +381,10 @@ class VisualVerifier:
             )
         model = self._clip_model
         processor = self._clip_processor
+        assert model is not None and processor is not None  # just initialized above
 
         # Load images
-        images = []
+        images: list[Any] = []
         for rp in render_paths:
             if rp.exists():
                 try:
@@ -359,7 +394,12 @@ class VisualVerifier:
                     continue
 
         if not images:
-            return {"matches": True, "response": "No valid renders", "issues": []}
+            return {
+                "matches": None,
+                "verified": False,
+                "response": "No valid renders to verify",
+                "issues": [],
+            }
 
         # Compute similarities
         inputs = processor(
@@ -385,6 +425,7 @@ class VisualVerifier:
 
         return {
             "matches": matches,
+            "verified": True,
             "response": response,
             "issues": issues,
         }
@@ -403,7 +444,12 @@ class VisualVerifier:
             from cadling.generation.codegen.cadquery_generator import CadQueryGenerator
         except ImportError:
             _log.warning("cadling not available for LLM vision verification")
-            return {"matches": True, "response": "", "issues": []}
+            return {
+                "matches": None,
+                "verified": False,
+                "response": "LLM vision verification unavailable (cadling not importable)",
+                "issues": [],
+            }
 
         # Use the first available render
         image_path = None
@@ -413,7 +459,12 @@ class VisualVerifier:
                 break
 
         if image_path is None:
-            return {"matches": True, "response": "No renders available", "issues": []}
+            return {
+                "matches": None,
+                "verified": False,
+                "response": "No renders available to verify",
+                "issues": [],
+            }
 
         # Create a temporary generator to use the ChatAgent
         gen = CadQueryGenerator()
@@ -439,12 +490,18 @@ class VisualVerifier:
 
             return {
                 "matches": matches,
+                "verified": True,
                 "response": response or "",
                 "issues": issues,
             }
         except Exception as exc:
             _log.warning("LLM vision verification failed: %s", exc)
-            return {"matches": True, "response": str(exc), "issues": []}
+            return {
+                "matches": None,
+                "verified": False,
+                "response": f"LLM vision verification errored: {exc}",
+                "issues": [],
+            }
 
     # ------------------------------------------------------------------
     # Helpers

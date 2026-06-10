@@ -48,6 +48,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Optional
 
+from cadling.lib.hashing import stable_hash
 from cadling.sdg.qa.base import AnnotationLevel
 
 _log = logging.getLogger(__name__)
@@ -659,8 +660,9 @@ class SequenceAnnotator:
             entity_type = match.group(2)
             entity_args = match.group(3)
 
-            # Encode entity type as token
-            type_token = _CMD_OFFSET + (hash(entity_type) % 49990)
+            # Encode entity type as token (deterministic, reproducible across
+            # runs — builtin hash() is PYTHONHASHSEED-salted).
+            type_token = _CMD_OFFSET + stable_hash(entity_type, 49990)
             token_ids.append(type_token)
 
             # Encode numeric parameters
@@ -745,7 +747,7 @@ class SequenceAnnotator:
 
             # Map operation type to token
             type_id = _DEEPCAD_COMMAND_TYPES.get(
-                op_type, hash(op_type) % 256
+                op_type, stable_hash(op_type, 256)
             )
             token_ids.append(_CMD_OFFSET + type_id)
 
@@ -834,7 +836,7 @@ class SequenceAnnotator:
         for op in operations:
             op_type = op.get("type", "unknown").upper()
             type_id = _DEEPCAD_COMMAND_TYPES.get(
-                op_type, hash(op_type) % 256
+                op_type, stable_hash(op_type, 256)
             )
             token_ids.append(_CMD_OFFSET + type_id)
             param_tokens = self._encode_operation_params(op)
@@ -1062,7 +1064,7 @@ class SequenceAnnotator:
 
             # Map to token
             type_id = _DEEPCAD_COMMAND_TYPES.get(
-                step_type, hash(step_type) % 256
+                step_type, stable_hash(step_type, 256)
             )
             token_ids.append(_CMD_OFFSET + type_id)
 

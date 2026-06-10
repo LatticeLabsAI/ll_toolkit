@@ -241,7 +241,9 @@ class GraphReconstructor:
         if edge_features is not None and edge_index is not None:
             num_edges = edge_features.shape[0]
             for i in range(num_edges):
-                edge_primitive = self._reconstruct_edge(i, edge_features[i], edge_index, i)
+                edge_primitive = self._reconstruct_edge(
+                    i, edge_features[i], edge_index, i, node_features
+                )
                 result.edges.append(edge_primitive)
 
         _log.info(
@@ -552,17 +554,27 @@ class GraphReconstructor:
         features: np.ndarray,
         edge_index: np.ndarray,
         edge_idx_in_list: int,
+        node_features: Optional[np.ndarray] = None,
     ) -> ReconstructedPrimitive:
         """Reconstruct a single edge from its features.
 
+        Builds a real OCC edge between the centroids of the two faces the edge
+        connects (recovered from ``edge_index`` + the per-face centroid in
+        ``node_features``), so the primitive carries actual geometry rather than
+        parameters alone. Straight edges are exact; curved edges (CIRCLE/SPLINE)
+        are approximated by the chord between the adjacent face centroids, which
+        is the geometry recoverable from the face-adjacency graph.
+
         Args:
             index: Edge index
-            features: Feature vector
-            edge_index: Full edge index array
-            edge_idx_in_list: Position in edge list
+            features: Edge feature vector
+            edge_index: Full ``[2, E]`` edge index array
+            edge_idx_in_list: Position in the edge list
+            node_features: ``[num_faces, F]`` node features (centroid at 16:19)
 
         Returns:
-            ReconstructedPrimitive for this edge
+            ReconstructedPrimitive for this edge (with ``occ_shape`` set when the
+            adjacent-face endpoints are available).
         """
         # Decode curve type from one-hot (first 6 dims typically)
         feature_dim = len(features)
@@ -594,13 +606,63 @@ class GraphReconstructor:
         if feature_dim > 11:
             params["convexity"] = float(features[11])
 
-        # For now, return without OCC shape (edge reconstruction requires more context)
+        # Build real OCC geometry between the two faces this edge connects.
+        endpoints = self._edge_endpoints(edge_index, edge_idx_in_list, node_features)
+        occ_shape = None
+        confidence = 0.5
+        error: Optional[str] = None
+        if endpoints is not None:
+            p_start, p_end = endpoints
+            params["start_point"] = list(p_start)
+            params["end_point"] = list(p_end)
+            if HAS_OCC:
+                try:
+                    edge = BRepBuilderAPI_MakeEdge(
+                        gp_Pnt(*p_start), gp_Pnt(*p_end)
+                    ).Edge()
+                    occ_shape = edge
+                    confidence = 0.6  # geometry built, still a chord approximation
+                except Exception as exc:  # degenerate (coincident endpoints)
+                    error = f"Edge build failed: {exc}"
+
         return ReconstructedPrimitive(
             primitive_type="EDGE",
             curve_type=curve_type,
+            occ_shape=occ_shape,
             parameters=params,
-            confidence=0.5,  # Lower confidence for edges
+            confidence=confidence,
+            error=error,
         )
+
+    @staticmethod
+    def _edge_endpoints(
+        edge_index: np.ndarray,
+        edge_idx_in_list: int,
+        node_features: Optional[np.ndarray],
+    ) -> Optional[tuple]:
+        """Return the two adjacent-face centroids for an edge, or None.
+
+        The edge connects faces ``src`` and ``dst`` (columns of ``edge_index``);
+        each face's centroid is stored at ``node_features[idx][16:19]``.
+        """
+        if (
+            node_features is None
+            or edge_index is None
+            or edge_index.shape[0] != 2
+            or edge_idx_in_list >= edge_index.shape[1]
+        ):
+            return None
+        src = int(edge_index[0, edge_idx_in_list])
+        dst = int(edge_index[1, edge_idx_in_list])
+        n = node_features.shape[0]
+        if not (0 <= src < n and 0 <= dst < n) or node_features.shape[1] < 19:
+            return None
+        p_start = [float(x) for x in node_features[src][16:19]]
+        p_end = [float(x) for x in node_features[dst][16:19]]
+        # Degenerate if the two faces share a centroid (no usable direction).
+        if np.allclose(p_start, p_end):
+            return None
+        return p_start, p_end
 
     def _build_adjacency(self, edge_index: np.ndarray) -> Dict[int, List[int]]:
         """Build adjacency dictionary from edge index."""

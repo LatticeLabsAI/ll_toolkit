@@ -15,6 +15,7 @@ Classes:
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 from collections import defaultdict
@@ -807,10 +808,16 @@ class STEPNetIntegration:
                         params_to_use, dtype=torch.float32
                     )
 
-                # Entity type hash (last dimension)
+                # Entity type hash (last dimension). Use a DETERMINISTIC hash
+                # (blake2b) rather than Python's builtin hash(), which is salted
+                # per process (PYTHONHASHSEED) and would make this feature — and
+                # thus the produced training data — non-reproducible across runs.
                 entity_type = entity.get("entity_type") or entity.get("type", "")
                 if entity_type:
-                    type_hash = (hash(entity_type) % 10000) / 10000.0
+                    digest = hashlib.blake2b(
+                        entity_type.encode("utf-8"), digest_size=8
+                    ).digest()
+                    type_hash = (int.from_bytes(digest, "big") % 10000) / 10000.0
                     node_features[idx, -1] = type_hash
 
             topology["node_features"] = node_features

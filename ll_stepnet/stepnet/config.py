@@ -196,6 +196,18 @@ class DiffusionConfig:
     denoiser_hidden_dim: int = DEFAULT_DENOISER_HIDDEN_DIM
     latent_dim: int = 256
 
+    # --- Geometry codec (latent <-> B-Rep geometry) ---
+    # A face is a U x V grid of 3D points; an edge is an M-point polyline.
+    # Counts are fixed per sample (BrepGen/BrepDiff-style) with empty-masking.
+    # Defaults follow BrepDiff's small 8x8 grid (configs/abc.yaml: n_grid=8);
+    # uv_grid_size>=4 and edge_num_points>=7 satisfy the B-spline degree bounds
+    # used by the surface executor (degree-3 surface, up-to-degree-6 curve).
+    num_faces: int = 8
+    num_edges: int = 12
+    uv_grid_size: int = 8
+    edge_num_points: int = 12
+    codec_hidden_dim: int = 256
+
 
 @dataclass
 class ConditioningConfig:

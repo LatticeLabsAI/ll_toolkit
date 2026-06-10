@@ -316,11 +316,10 @@ class ManufacturingFeatureRecognizer(EnrichmentModel):
                 bbox = geometry_analysis.get("bounding_box", {})
                 center = geometry_analysis.get("center_of_mass", [0.0, 0.0, 0.0])
 
-                # Rule 1: Cylindrical surfaces can be holes or bosses
+                # Rule 1: Cylindrical surfaces can be holes or bosses, classified
+                # by concavity — a concave cylindrical face (axis pointing into
+                # material) is a hole, a convex one is a boss.
                 if "CYLINDRICAL" in entity_type or surface_type == "CYLINDER":
-                    # Check for hole vs boss heuristics
-                    # Holes typically have axis pointing into material
-                    # For now, classify as generic cylindrical feature
                     is_concave = geometry_analysis.get("is_concave", True)
 
                     if is_concave:

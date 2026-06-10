@@ -2,8 +2,8 @@
 Configuration for LatticeLabs OCADR model.
 """
 
-from dataclasses import dataclass, field
-from typing import Dict, Any, Optional
+from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass
@@ -35,7 +35,7 @@ class LLOCADRConfig:
     max_chunks: int = 27  # Maximum number of chunks (3x3x3)
     target_global_faces: int = 4096  # Target faces for global view
     mesh_token: str = "<mesh>"  # Placeholder token for meshes
-    mesh_token_id: Optional[int] = None  # Will be set from tokenizer
+    mesh_token_id: int | None = None  # Will be set from tokenizer
 
     # Training
     freeze_vision_model: bool = False
@@ -45,7 +45,7 @@ class LLOCADRConfig:
         """Get config value like a dict."""
         return getattr(self, key, default)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return {
             "model_type": self.model_type,
@@ -68,7 +68,7 @@ class LLOCADRConfig:
         }
 
     @classmethod
-    def from_dict(cls, config_dict: Dict[str, Any]) -> "LLOCADRConfig":
+    def from_dict(cls, config_dict: dict[str, Any]) -> "LLOCADRConfig":
         """Create config from dictionary."""
         return cls(**config_dict)
 

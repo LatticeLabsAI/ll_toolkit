@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <style>
+    .edge { stroke: #2dd4bf; stroke-width: 6; stroke-linecap: round; }
+    .node { fill: #0d9488; }
+    @media (prefers-color-scheme: dark) {
+      .edge { stroke: #5eead4; }
+      .node { fill: #2dd4bf; }
+    }
+  </style>
+  <!-- Lattice edges: a 3x3 grid with diagonals -->
+  <g class="edge" fill="none">
+    <path d="M28 28 H100 M28 64 H100 M28 100 H100" />
+    <path d="M28 28 V100 M64 28 V100 M100 28 V100" />
+    <path d="M28 28 L100 100 M100 28 L28 100" />
+  </g>
+  <!-- Lattice nodes -->
+  <g class="node">
+    <circle cx="28" cy="28" r="11" /><circle cx="64" cy="28" r="11" /><circle cx="100" cy="28" r="11" />
+    <circle cx="28" cy="64" r="11" /><circle cx="64" cy="64" r="13" /><circle cx="100" cy="64" r="11" />
+    <circle cx="28" cy="100" r="11" /><circle cx="64" cy="100" r="11" /><circle cx="100" cy="100" r="11" />
+  </g>
+</svg>

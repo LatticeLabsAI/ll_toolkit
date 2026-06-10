@@ -1,0 +1,82 @@
+---
+title: LatticeLabs Toolkit
+description: A monorepo of Python packages for CAD document processing, geometric tokenization, neural CAD models, optical CAD recognition, point clouds, and generative CAD.
+template: splash
+hero:
+  tagline: Turn CAD geometry into something machine-learning systems can read, reason about, and generate.
+  actions:
+    - text: Get Started
+      link: /ll_toolkit/get-started/installation/
+      icon: right-arrow
+    - text: View on GitHub
+      link: https://github.com/LatticeLabsAI/ll_toolkit
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid, LinkCard, Badge } from '@astrojs/starlight/components';
+
+export const base = import.meta.env.BASE_URL;
+
+The **LatticeLabs Toolkit** is a monorepo of six Python packages that bring 3D
+CAD geometry into the AI ecosystem — parsing CAD files, tokenizing geometry,
+running neural models over STEP/B-Rep data, recognizing geometry for LLMs,
+processing point clouds, and generating parametric CAD.
+
+Each package is independently installable and documented here. The pages below
+describe **what actually exists in the code today** — maturity is called out per
+package so you always know what is production-ready, what is proof-of-life, and
+what is planned.
+
+## Packages
+
+<CardGrid>
+	<LinkCard
+		title="cadling"
+		description="CAD document processing (docling-inspired): STEP/STL/BRep/IGES parsing, topology analysis, RAG chunking, and synthetic Q&A generation."
+		href={base + 'cadling/overview/'}
+	/>
+	<LinkCard
+		title="ll_stepnet"
+		description="Neural networks for STEP/B-Rep files: tokenizer, feature extractor, topology builder, transformer+GNN encoder, and task heads."
+		href={base + 'll_stepnet/overview/'}
+	/>
+	<LinkCard
+		title="geotoken"
+		description="Geometric tokenizer with adaptive quantization — mesh, command-sequence, and B-Rep graph tokenization for transformer models."
+		href={base + 'geotoken/overview/'}
+	/>
+	<LinkCard
+		title="ll_ocadr"
+		description="Optical CAD Recognition: encode global + tiled-local geometry into an LLM's embedding space. HF-native inference today; vLLM serving is experimental."
+		href={base + 'll_ocadr/overview/'}
+	/>
+	<LinkCard
+		title="ll_gen"
+		description="Generation orchestration: neural propose, deterministic dispose in a CadQuery sandbox, REINFORCE training loop. Models ship untrained."
+		href={base + 'll_gen/overview/'}
+	/>
+	<LinkCard
+		title="ll_clouds"
+		description="Point-cloud processing (NumPy/SciPy): PLY/PCD/XYZ I/O, preprocessing, normals & curvature, ICP registration, RANSAC/Euclidean segmentation."
+		href={base + 'll_clouds/overview/'}
+	/>
+</CardGrid>
+
+## How the packages fit together
+
+<Card title="A typical flow" icon="seti:3d">
+	A CAD file enters through **cadling** (parse → `CADlingDocument`). From there
+	geometry can be tokenized by **geotoken**, encoded by **ll_stepnet**, fed to an
+	LLM via **ll_ocadr**, sampled as a point cloud by **ll_clouds**, or used as a
+	target for **ll_gen** to generate new parametric CAD against.
+</Card>
+
+## Project status
+
+<Card title="On the horizon" icon="rocket">
+	**ll_brepnet** — a planned B-Rep face-graph network — is not yet implemented
+	(the directory is an empty scaffold). It is tracked honestly on the{' '}
+	<a href={base + 'roadmap/ll_brepnet/'}>Roadmap</a> rather than documented as if
+	it worked. <Badge text="Planned" variant="caution" />
+</Card>

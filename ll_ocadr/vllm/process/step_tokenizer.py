@@ -8,14 +8,14 @@ Extracts:
 - ALL numeric values, entity references, keywords, and structural elements
 """
 
-import logging
 import hashlib
+import logging
 import re
 import struct
-import torch
-import numpy as np
-from typing import List, Dict, Tuple, Optional, Set
 from collections import defaultdict
+from typing import Any
+
+import torch
 
 _log = logging.getLogger(__name__)
 
@@ -54,17 +54,17 @@ class STEPCompleteTokenizer:
 
         # Pre-compile entity tokenization regex (avoid recompiling per entity)
         _patterns = [
-            (r'#\d+=', 'ENTITY_ID'),
-            (r'#\d+', 'REFERENCE'),
-            (r'[A-Z_][A-Z0-9_]*', 'ENTITY_TYPE'),
-            (r'-?\d+\.?\d*(?:[Ee][+-]?\d+)?', 'NUMERIC'),
-            (r'\.[A-Z_]+\.', 'KEYWORD'),
-            (r"'[^']*'", 'STRING'),
-            (r'[=(),;]', 'OPERATOR'),
-            (r'\$|\*', 'SPECIAL'),
-            (r'\n', 'NEWLINE'),
+            (r"#\d+=", "ENTITY_ID"),
+            (r"#\d+", "REFERENCE"),
+            (r"[A-Z_][A-Z0-9_]*", "ENTITY_TYPE"),
+            (r"-?\d+\.?\d*(?:[Ee][+-]?\d+)?", "NUMERIC"),
+            (r"\.[A-Z_]+\.", "KEYWORD"),
+            (r"'[^']*'", "STRING"),
+            (r"[=(),;]", "OPERATOR"),
+            (r"\$|\*", "SPECIAL"),
+            (r"\n", "NEWLINE"),
         ]
-        combined = '|'.join(f'(?P<{name}>{pattern})' for pattern, name in _patterns)
+        combined = "|".join(f"(?P<{name}>{pattern})" for pattern, name in _patterns)
         self._entity_regex = re.compile(combined)
 
         # Build vocabulary from STEP AP203/AP214 specification
@@ -72,118 +72,182 @@ class STEPCompleteTokenizer:
 
         # Token type IDs
         self.token_type_to_id = {
-            'PAD': 0,
-            'ENTITY_ID': 1,
-            'ENTITY_TYPE': 2,
-            'NUMERIC': 3,
-            'REFERENCE': 4,
-            'KEYWORD': 5,
-            'OPERATOR': 6,
-            'STRING': 7,
-            'PARAM_NAME': 8,
-            'NEWLINE': 9,
-            'UNK': 10
+            "PAD": 0,
+            "ENTITY_ID": 1,
+            "ENTITY_TYPE": 2,
+            "NUMERIC": 3,
+            "REFERENCE": 4,
+            "KEYWORD": 5,
+            "OPERATOR": 6,
+            "STRING": 7,
+            "PARAM_NAME": 8,
+            "NEWLINE": 9,
+            "UNK": 10,
         }
 
     def _build_vocabulary(self):
         """Build comprehensive STEP vocabulary."""
 
         # All STEP entity types from AP203/AP214
-        self.entity_types = set([
+        self.entity_types = {
             # Geometric entities
-            'CARTESIAN_POINT', 'DIRECTION', 'VECTOR',
-            'AXIS1_PLACEMENT', 'AXIS2_PLACEMENT_2D', 'AXIS2_PLACEMENT_3D',
-            'LINE', 'CIRCLE', 'ELLIPSE', 'PARABOLA', 'HYPERBOLA',
-            'B_SPLINE_CURVE', 'B_SPLINE_CURVE_WITH_KNOTS',
-            'RATIONAL_B_SPLINE_CURVE', 'BEZIER_CURVE',
-            'TRIMMED_CURVE', 'COMPOSITE_CURVE', 'POLYLINE',
-            'OFFSET_CURVE_2D', 'OFFSET_CURVE_3D',
-
+            "CARTESIAN_POINT",
+            "DIRECTION",
+            "VECTOR",
+            "AXIS1_PLACEMENT",
+            "AXIS2_PLACEMENT_2D",
+            "AXIS2_PLACEMENT_3D",
+            "LINE",
+            "CIRCLE",
+            "ELLIPSE",
+            "PARABOLA",
+            "HYPERBOLA",
+            "B_SPLINE_CURVE",
+            "B_SPLINE_CURVE_WITH_KNOTS",
+            "RATIONAL_B_SPLINE_CURVE",
+            "BEZIER_CURVE",
+            "TRIMMED_CURVE",
+            "COMPOSITE_CURVE",
+            "POLYLINE",
+            "OFFSET_CURVE_2D",
+            "OFFSET_CURVE_3D",
             # Surfaces
-            'PLANE', 'CYLINDRICAL_SURFACE', 'CONICAL_SURFACE',
-            'SPHERICAL_SURFACE', 'TOROIDAL_SURFACE',
-            'B_SPLINE_SURFACE', 'B_SPLINE_SURFACE_WITH_KNOTS',
-            'RATIONAL_B_SPLINE_SURFACE', 'BEZIER_SURFACE',
-            'SURFACE_OF_LINEAR_EXTRUSION', 'SURFACE_OF_REVOLUTION',
-            'OFFSET_SURFACE', 'RECTANGULAR_TRIMMED_SURFACE',
-
+            "PLANE",
+            "CYLINDRICAL_SURFACE",
+            "CONICAL_SURFACE",
+            "SPHERICAL_SURFACE",
+            "TOROIDAL_SURFACE",
+            "B_SPLINE_SURFACE",
+            "B_SPLINE_SURFACE_WITH_KNOTS",
+            "RATIONAL_B_SPLINE_SURFACE",
+            "BEZIER_SURFACE",
+            "SURFACE_OF_LINEAR_EXTRUSION",
+            "SURFACE_OF_REVOLUTION",
+            "OFFSET_SURFACE",
+            "RECTANGULAR_TRIMMED_SURFACE",
             # Topology
-            'VERTEX_POINT', 'EDGE_CURVE', 'EDGE_LOOP',
-            'ORIENTED_EDGE', 'FACE_BOUND', 'FACE_OUTER_BOUND',
-            'ADVANCED_FACE', 'CLOSED_SHELL', 'OPEN_SHELL',
-            'CONNECTED_FACE_SET', 'MANIFOLD_SOLID_BREP',
-            'BREP_WITH_VOIDS', 'FACETED_BREP',
-            'SHELL_BASED_SURFACE_MODEL',
-
+            "VERTEX_POINT",
+            "EDGE_CURVE",
+            "EDGE_LOOP",
+            "ORIENTED_EDGE",
+            "FACE_BOUND",
+            "FACE_OUTER_BOUND",
+            "ADVANCED_FACE",
+            "CLOSED_SHELL",
+            "OPEN_SHELL",
+            "CONNECTED_FACE_SET",
+            "MANIFOLD_SOLID_BREP",
+            "BREP_WITH_VOIDS",
+            "FACETED_BREP",
+            "SHELL_BASED_SURFACE_MODEL",
             # Properties
-            'BOUNDED_CURVE', 'BOUNDED_SURFACE',
-            'GEOMETRIC_REPRESENTATION_ITEM',
-            'CURVE', 'SURFACE', 'SOLID',
-            'REPRESENTATION_ITEM', 'REPRESENTATION',
-
+            "BOUNDED_CURVE",
+            "BOUNDED_SURFACE",
+            "GEOMETRIC_REPRESENTATION_ITEM",
+            "CURVE",
+            "SURFACE",
+            "SOLID",
+            "REPRESENTATION_ITEM",
+            "REPRESENTATION",
             # Assembly
-            'PRODUCT', 'PRODUCT_DEFINITION', 'PRODUCT_DEFINITION_SHAPE',
-            'SHAPE_REPRESENTATION', 'SHAPE_DEFINITION_REPRESENTATION',
-            'NEXT_ASSEMBLY_USAGE_OCCURRENCE',
-            'PRODUCT_DEFINITION_FORMATION',
-
+            "PRODUCT",
+            "PRODUCT_DEFINITION",
+            "PRODUCT_DEFINITION_SHAPE",
+            "SHAPE_REPRESENTATION",
+            "SHAPE_DEFINITION_REPRESENTATION",
+            "NEXT_ASSEMBLY_USAGE_OCCURRENCE",
+            "PRODUCT_DEFINITION_FORMATION",
             # Context
-            'APPLICATION_CONTEXT', 'APPLICATION_PROTOCOL_DEFINITION',
-            'DESIGN_CONTEXT', 'MECHANICAL_CONTEXT',
-
+            "APPLICATION_CONTEXT",
+            "APPLICATION_PROTOCOL_DEFINITION",
+            "DESIGN_CONTEXT",
+            "MECHANICAL_CONTEXT",
             # Relationships
-            'REPRESENTATION_RELATIONSHIP',
-            'REPRESENTATION_RELATIONSHIP_WITH_TRANSFORMATION',
-            'ITEM_DEFINED_TRANSFORMATION',
-            'CONTEXT_DEPENDENT_SHAPE_REPRESENTATION',
-            'SHAPE_REPRESENTATION_RELATIONSHIP',
-
+            "REPRESENTATION_RELATIONSHIP",
+            "REPRESENTATION_RELATIONSHIP_WITH_TRANSFORMATION",
+            "ITEM_DEFINED_TRANSFORMATION",
+            "CONTEXT_DEPENDENT_SHAPE_REPRESENTATION",
+            "SHAPE_REPRESENTATION_RELATIONSHIP",
             # Presentation
-            'STYLED_ITEM', 'PRESENTATION_STYLE_ASSIGNMENT',
-            'SURFACE_STYLE_USAGE', 'SURFACE_SIDE_STYLE',
-            'SURFACE_STYLE_FILL_AREA', 'FILL_AREA_STYLE',
-            'FILL_AREA_STYLE_COLOUR', 'COLOUR_RGB',
-            'DRAUGHTING_PRE_DEFINED_COLOUR',
-            'MECHANICAL_DESIGN_GEOMETRIC_PRESENTATION_REPRESENTATION',
-        ])
+            "STYLED_ITEM",
+            "PRESENTATION_STYLE_ASSIGNMENT",
+            "SURFACE_STYLE_USAGE",
+            "SURFACE_SIDE_STYLE",
+            "SURFACE_STYLE_FILL_AREA",
+            "FILL_AREA_STYLE",
+            "FILL_AREA_STYLE_COLOUR",
+            "COLOUR_RGB",
+            "DRAUGHTING_PRE_DEFINED_COLOUR",
+            "MECHANICAL_DESIGN_GEOMETRIC_PRESENTATION_REPRESENTATION",
+        }
 
         # STEP keywords
-        self.keywords = set([
-            '.T.', '.F.', '.U.', '.UNKNOWN.',
-            '.UNSPECIFIED.', '.PARAMETER.', '.POSITIVE.',
-            '.NEGATIVE.', '$', '*', ''
-        ])
+        self.keywords = {
+            ".T.",
+            ".F.",
+            ".U.",
+            ".UNKNOWN.",
+            ".UNSPECIFIED.",
+            ".PARAMETER.",
+            ".POSITIVE.",
+            ".NEGATIVE.",
+            "$",
+            "*",
+            "",
+        }
 
         # Operators
-        self.operators = set(['=', '(', ')', ',', ';', '#'])
+        self.operators = {"=", "(", ")", ",", ";", "#"}
 
         # Build ID mappings
-        self.entity_type_to_id = {et: i for i, et in enumerate(sorted(self.entity_types))}
+        self.entity_type_to_id = {
+            et: i for i, et in enumerate(sorted(self.entity_types))
+        }
         self.keyword_to_id = {kw: i for i, kw in enumerate(sorted(self.keywords))}
 
         # Parameter name inference patterns
         self.param_patterns = {
-            'CARTESIAN_POINT': ['coordinates'],
-            'DIRECTION': ['direction_ratios'],
-            'VECTOR': ['orientation', 'magnitude'],
-            'CIRCLE': ['position', 'radius'],
-            'ELLIPSE': ['position', 'semi_axis_1', 'semi_axis_2'],
-            'CYLINDER': ['position', 'radius'],
-            'CYLINDRICAL_SURFACE': ['position', 'radius'],
-            'CONICAL_SURFACE': ['position', 'radius', 'semi_angle'],
-            'SPHERICAL_SURFACE': ['position', 'radius'],
-            'TOROIDAL_SURFACE': ['position', 'major_radius', 'minor_radius'],
-            'B_SPLINE_CURVE': ['degree', 'control_points_list', 'curve_form', 'closed_curve', 'self_intersect'],
-            'B_SPLINE_CURVE_WITH_KNOTS': ['multiplicities', 'knots', 'knot_spec'],
-            'RATIONAL_B_SPLINE_CURVE': ['weights_data'],
-            'B_SPLINE_SURFACE': ['u_degree', 'v_degree', 'control_points_list', 'surface_form', 'u_closed', 'v_closed', 'self_intersect'],
-            'B_SPLINE_SURFACE_WITH_KNOTS': ['u_multiplicities', 'v_multiplicities', 'u_knots', 'v_knots', 'knot_spec'],
-            'ADVANCED_FACE': ['bounds', 'face_geometry', 'same_sense'],
-            'EDGE_CURVE': ['edge_start', 'edge_end', 'edge_geometry', 'same_sense'],
-            'ORIENTED_EDGE': ['edge_element', 'orientation'],
+            "CARTESIAN_POINT": ["coordinates"],
+            "DIRECTION": ["direction_ratios"],
+            "VECTOR": ["orientation", "magnitude"],
+            "CIRCLE": ["position", "radius"],
+            "ELLIPSE": ["position", "semi_axis_1", "semi_axis_2"],
+            "CYLINDER": ["position", "radius"],
+            "CYLINDRICAL_SURFACE": ["position", "radius"],
+            "CONICAL_SURFACE": ["position", "radius", "semi_angle"],
+            "SPHERICAL_SURFACE": ["position", "radius"],
+            "TOROIDAL_SURFACE": ["position", "major_radius", "minor_radius"],
+            "B_SPLINE_CURVE": [
+                "degree",
+                "control_points_list",
+                "curve_form",
+                "closed_curve",
+                "self_intersect",
+            ],
+            "B_SPLINE_CURVE_WITH_KNOTS": ["multiplicities", "knots", "knot_spec"],
+            "RATIONAL_B_SPLINE_CURVE": ["weights_data"],
+            "B_SPLINE_SURFACE": [
+                "u_degree",
+                "v_degree",
+                "control_points_list",
+                "surface_form",
+                "u_closed",
+                "v_closed",
+                "self_intersect",
+            ],
+            "B_SPLINE_SURFACE_WITH_KNOTS": [
+                "u_multiplicities",
+                "v_multiplicities",
+                "u_knots",
+                "v_knots",
+                "knot_spec",
+            ],
+            "ADVANCED_FACE": ["bounds", "face_geometry", "same_sense"],
+            "EDGE_CURVE": ["edge_start", "edge_end", "edge_geometry", "same_sense"],
+            "ORIENTED_EDGE": ["edge_element", "orientation"],
         }
 
-    def tokenize_raw_content(self, raw_content: str) -> Dict[str, any]:
+    def tokenize_raw_content(self, raw_content: str) -> dict[str, Any]:
         """
         Tokenize raw STEP content ensuring complete coverage.
 
@@ -200,36 +264,35 @@ class STEPCompleteTokenizer:
                 - geometric_features: Extracted geometric parameters
                 - topological_features: Extracted topological relationships
         """
-        tokens = []
-        token_types = []
-        token_values = []
-        entity_boundaries = []
-        reference_graph = defaultdict(list)
-        geometric_features = []
-        topological_features = []
+        tokens: list[str] = []
+        token_types: list[int] = []
+        token_values: list[float | None] = []
+        entity_boundaries: list[tuple[int, int]] = []
+        reference_graph: defaultdict[int, list[int]] = defaultdict(list)
+        geometric_features: list[dict[str, Any]] = []
+        topological_features: list[dict[str, Any]] = []
 
         # Split into entities (by lines starting with #)
-        entities = []
-        current_entity = []
+        entities: list[dict[str, Any]] = []
+        current_entity: list[str] = []
         current_entity_id = None
 
-        for line in raw_content.split('\n'):
+        for line in raw_content.split("\n"):
             stripped = line.strip()
             if not stripped:
                 continue
 
-            if stripped.startswith('#'):
+            if stripped.startswith("#"):
                 # Save previous entity
                 if current_entity:
-                    entities.append({
-                        'id': current_entity_id,
-                        'text': '\n'.join(current_entity)
-                    })
+                    entities.append(
+                        {"id": current_entity_id, "text": "\n".join(current_entity)}
+                    )
 
                 # Start new entity
                 current_entity = [line]
                 # Extract entity ID
-                id_match = re.match(r'#(\d+)', stripped)
+                id_match = re.match(r"#(\d+)", stripped)
                 current_entity_id = int(id_match.group(1)) if id_match else None
             else:
                 # Continuation of current entity
@@ -238,16 +301,15 @@ class STEPCompleteTokenizer:
 
         # Don't forget last entity
         if current_entity:
-            entities.append({
-                'id': current_entity_id,
-                'text': '\n'.join(current_entity)
-            })
+            entities.append(
+                {"id": current_entity_id, "text": "\n".join(current_entity)}
+            )
 
         # Process each entity
         for entity in entities:
             entity_start = len(tokens)
-            entity_id = entity['id']
-            entity_text = entity['text']
+            entity_id = entity["id"]
+            entity_text = entity["text"]
 
             # Tokenize this entity
             entity_tokens = self._tokenize_entity_complete(
@@ -255,25 +317,25 @@ class STEPCompleteTokenizer:
                 entity_id,
                 reference_graph,
                 geometric_features,
-                topological_features
+                topological_features,
             )
 
-            tokens.extend(entity_tokens['tokens'])
-            token_types.extend(entity_tokens['types'])
-            token_values.extend(entity_tokens['values'])
+            tokens.extend(entity_tokens["tokens"])
+            token_types.extend(entity_tokens["types"])
+            token_values.extend(entity_tokens["values"])
 
             entity_end = len(tokens)
             entity_boundaries.append((entity_start, entity_end))
 
         return {
-            'tokens': tokens,
-            'token_types': token_types,
-            'token_values': token_values,
-            'entity_boundaries': entity_boundaries,
-            'reference_graph': dict(reference_graph),
-            'geometric_features': geometric_features,
-            'topological_features': topological_features,
-            'num_entities': len(entities)
+            "tokens": tokens,
+            "token_types": token_types,
+            "token_values": token_values,
+            "entity_boundaries": entity_boundaries,
+            "reference_graph": dict(reference_graph),
+            "geometric_features": geometric_features,
+            "topological_features": topological_features,
+            "num_entities": len(entities),
         }
 
     def _tokenize_entity_complete(
@@ -282,8 +344,8 @@ class STEPCompleteTokenizer:
         entity_id: int,
         reference_graph: dict,
         geometric_features: list,
-        topological_features: list
-    ) -> Dict:
+        topological_features: list,
+    ) -> dict:
         """Completely tokenize a single entity."""
 
         tokens = []
@@ -301,106 +363,107 @@ class STEPCompleteTokenizer:
         for match in regex.finditer(entity_text):
             token_type = match.lastgroup
             token_text = match.group()
-            token_value = None
 
-            if token_type == 'ENTITY_ID':
+            if token_type == "ENTITY_ID":
                 # Entity ID - extract number from #123=
-                eid = int(token_text.strip('#='))
+                eid = int(token_text.strip("#="))
                 tokens.append(token_text)
-                types.append(self.token_type_to_id['ENTITY_ID'])
+                types.append(self.token_type_to_id["ENTITY_ID"])
                 values.append(eid)
 
-            elif token_type == 'REFERENCE':
+            elif token_type == "REFERENCE":
                 # Entity reference - extract number from #456
-                ref_id = int(token_text.strip('#'))
+                ref_id = int(token_text.strip("#"))
                 tokens.append(token_text)
-                types.append(self.token_type_to_id['REFERENCE'])
+                types.append(self.token_type_to_id["REFERENCE"])
                 values.append(ref_id)
 
                 # Track reference in graph
                 if entity_id is not None:
                     reference_graph[entity_id].append(ref_id)
-                    topological_features.append({
-                        'from_entity': entity_id,
-                        'to_entity': ref_id,
-                        'relationship': 'references'
-                    })
+                    topological_features.append(
+                        {
+                            "from_entity": entity_id,
+                            "to_entity": ref_id,
+                            "relationship": "references",
+                        }
+                    )
 
-            elif token_type == 'ENTITY_TYPE':
+            elif token_type == "ENTITY_TYPE":
                 # Entity type keyword
                 if token_text in self.entity_types:
                     current_entity_type = token_text
                     param_index = 0
 
                 tokens.append(token_text)
-                types.append(self.token_type_to_id['ENTITY_TYPE'])
+                types.append(self.token_type_to_id["ENTITY_TYPE"])
                 values.append(None)
 
-            elif token_type == 'NUMERIC':
+            elif token_type == "NUMERIC":
                 # Numeric value
                 try:
                     num_val = float(token_text)
-                    token_value = num_val
 
                     # Extract geometric feature if we know the context
                     if current_entity_type and param_index < 10:
                         param_name = self._infer_param_name(
                             current_entity_type, param_index
                         )
-                        geometric_features.append({
-                            'entity_id': entity_id,
-                            'entity_type': current_entity_type,
-                            'parameter': param_name,
-                            'value': num_val
-                        })
+                        geometric_features.append(
+                            {
+                                "entity_id": entity_id,
+                                "entity_type": current_entity_type,
+                                "parameter": param_name,
+                                "value": num_val,
+                            }
+                        )
 
                     param_index += 1
 
                 except (ValueError, TypeError):
-                    _log.debug("Could not parse numeric token %r, defaulting to 0.0", token_text)
+                    _log.debug(
+                        "Could not parse numeric token %r, defaulting to 0.0",
+                        token_text,
+                    )
                     num_val = 0.0
 
                 tokens.append(token_text)
-                types.append(self.token_type_to_id['NUMERIC'])
+                types.append(self.token_type_to_id["NUMERIC"])
                 values.append(num_val)
 
-            elif token_type == 'KEYWORD':
+            elif token_type == "KEYWORD":
                 tokens.append(token_text)
-                types.append(self.token_type_to_id['KEYWORD'])
+                types.append(self.token_type_to_id["KEYWORD"])
                 values.append(None)
 
-            elif token_type == 'SPECIAL':
+            elif token_type == "SPECIAL":
                 tokens.append(token_text)
-                types.append(self.token_type_to_id['KEYWORD'])  # Treat as keyword
+                types.append(self.token_type_to_id["KEYWORD"])  # Treat as keyword
                 values.append(None)
 
-            elif token_type == 'STRING':
+            elif token_type == "STRING":
                 tokens.append(token_text)
-                types.append(self.token_type_to_id['STRING'])
+                types.append(self.token_type_to_id["STRING"])
                 values.append(None)
 
-            elif token_type == 'OPERATOR':
+            elif token_type == "OPERATOR":
                 tokens.append(token_text)
-                types.append(self.token_type_to_id['OPERATOR'])
+                types.append(self.token_type_to_id["OPERATOR"])
                 values.append(None)
 
-                if token_text == '(':
+                if token_text == "(":
                     in_parentheses += 1
-                elif token_text == ')':
+                elif token_text == ")":
                     in_parentheses -= 1
                     if in_parentheses == 0:
                         param_index = 0  # Reset for next entity type
 
-            elif token_type == 'NEWLINE':
-                tokens.append('<NL>')
-                types.append(self.token_type_to_id['NEWLINE'])
+            elif token_type == "NEWLINE":
+                tokens.append("<NL>")
+                types.append(self.token_type_to_id["NEWLINE"])
                 values.append(None)
 
-        return {
-            'tokens': tokens,
-            'types': types,
-            'values': values
-        }
+        return {"tokens": tokens, "types": types, "values": values}
 
     def _infer_param_name(self, entity_type: str, param_index: int) -> str:
         """Infer parameter name from entity type and position."""
@@ -408,9 +471,9 @@ class STEPCompleteTokenizer:
             param_names = self.param_patterns[entity_type]
             if param_index < len(param_names):
                 return param_names[param_index]
-        return f'param_{param_index}'
+        return f"param_{param_index}"
 
-    def encode_to_tensors(self, tokenized: Dict) -> Dict[str, torch.Tensor]:
+    def encode_to_tensors(self, tokenized: dict) -> dict[str, torch.Tensor]:
         """
         Convert tokenized data to tensor format for neural network.
 
@@ -424,60 +487,67 @@ class STEPCompleteTokenizer:
                 - geometric_tensor: [num_geometric_features, 4] - (entity_id, param_id, value, type)
         """
         # Hash tokens to IDs
-        token_ids = [_deterministic_hash(t) % self.vocab_size for t in tokenized['tokens']]
-
-        # Token types
-        token_types = tokenized['token_types']
-
-        # Token values (0 for non-numeric)
-        token_values = [
-            v if v is not None else 0.0
-            for v in tokenized['token_values']
+        token_ids = [
+            _deterministic_hash(t) % self.vocab_size for t in tokenized["tokens"]
         ]
 
+        # Token types
+        token_types = tokenized["token_types"]
+
+        # Token values (0 for non-numeric)
+        token_values = [v if v is not None else 0.0 for v in tokenized["token_values"]]
+
         # Entity mask
-        entity_mask = torch.zeros(len(tokenized['tokens']), dtype=torch.bool)
-        for start, end in tokenized['entity_boundaries']:
+        entity_mask = torch.zeros(len(tokenized["tokens"]), dtype=torch.bool)
+        for start, _end in tokenized["entity_boundaries"]:
             entity_mask[start] = True
 
         # Reference matrix (adjacency matrix for entity graph)
-        if tokenized['num_entities'] > 0:
+        if tokenized["num_entities"] > 0:
             max_entity_id = max(
-                max(tokenized['reference_graph'].keys(), default=0),
-                max((max(refs, default=0) for refs in tokenized['reference_graph'].values()), default=0)
+                max(tokenized["reference_graph"].keys(), default=0),
+                max(
+                    (
+                        max(refs, default=0)
+                        for refs in tokenized["reference_graph"].values()
+                    ),
+                    default=0,
+                ),
             )
             ref_matrix = torch.zeros(max_entity_id + 1, max_entity_id + 1)
 
-            for from_id, to_ids in tokenized['reference_graph'].items():
+            for from_id, to_ids in tokenized["reference_graph"].items():
                 for to_id in to_ids:
                     ref_matrix[from_id, to_id] = 1
         else:
             ref_matrix = torch.zeros(1, 1)
 
         # Geometric features tensor
-        geom_features = tokenized['geometric_features']
+        geom_features = tokenized["geometric_features"]
         if geom_features:
             geom_tensor = torch.zeros(len(geom_features), 4, dtype=torch.float64)
             for i, feat in enumerate(geom_features):
-                geom_tensor[i, 0] = feat['entity_id']
-                geom_tensor[i, 1] = _deterministic_hash(feat['parameter']) % 1000
-                geom_tensor[i, 2] = feat['value']
-                geom_tensor[i, 3] = _deterministic_hash(feat.get('entity_type', '')) % 1000
+                geom_tensor[i, 0] = feat["entity_id"]
+                geom_tensor[i, 1] = _deterministic_hash(feat["parameter"]) % 1000
+                geom_tensor[i, 2] = feat["value"]
+                geom_tensor[i, 3] = (
+                    _deterministic_hash(feat.get("entity_type", "")) % 1000
+                )
         else:
             geom_tensor = torch.zeros(1, 4, dtype=torch.float64)
 
         return {
-            'token_ids': torch.tensor(token_ids, dtype=torch.long),
-            'token_types': torch.tensor(token_types, dtype=torch.long),
-            'token_values': torch.tensor(token_values, dtype=torch.float32),
-            'entity_mask': entity_mask,
-            'reference_matrix': ref_matrix,
-            'geometric_tensor': geom_tensor,
-            'num_tokens': len(token_ids),
-            'num_entities': tokenized['num_entities']
+            "token_ids": torch.tensor(token_ids, dtype=torch.long),
+            "token_types": torch.tensor(token_types, dtype=torch.long),
+            "token_values": torch.tensor(token_values, dtype=torch.float32),
+            "entity_mask": entity_mask,
+            "reference_matrix": ref_matrix,
+            "geometric_tensor": geom_tensor,
+            "num_tokens": len(token_ids),
+            "num_entities": tokenized["num_entities"],
         }
 
-    def tokenize_chunk(self, chunk: Dict) -> Dict[str, torch.Tensor]:
+    def tokenize_chunk(self, chunk: dict) -> dict[str, torch.Tensor]:
         """
         Tokenize a chunk from UnifiedCADContentChunker.
 
@@ -487,7 +557,7 @@ class STEPCompleteTokenizer:
         Returns:
             Encoded tensors ready for model
         """
-        raw_content = chunk.get('raw_content', '')
+        raw_content = chunk.get("raw_content", "")
 
         # Complete tokenization
         tokenized = self.tokenize_raw_content(raw_content)
@@ -496,9 +566,9 @@ class STEPCompleteTokenizer:
         encoded = self.encode_to_tensors(tokenized)
 
         # Add metadata
-        encoded['chunk_format'] = chunk.get('format', 'STEP')
-        encoded['chunk_start_entity'] = chunk.get('start_entity', 0)
-        encoded['chunk_end_entity'] = chunk.get('end_entity', 0)
+        encoded["chunk_format"] = chunk.get("format", "STEP")
+        encoded["chunk_start_entity"] = chunk.get("start_entity", 0)
+        encoded["chunk_end_entity"] = chunk.get("end_entity", 0)
 
         return encoded
 

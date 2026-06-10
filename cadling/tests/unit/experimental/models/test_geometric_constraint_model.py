@@ -305,21 +305,47 @@ class TestGeometricConstraintModel:
         assert isinstance(symmetry_constraints, list)
 
     def test_extract_symmetry_constraints_feature_pattern(
-        self, mock_doc_with_topology, mock_item_with_features
+        self, mock_doc_with_topology
     ):
-        """Test symmetric feature pattern detection."""
+        """Symmetric hole patterns are detected from real geometry; asymmetric
+        ones are NOT (the constraint used to be emitted unconditionally)."""
         model = GeometricConstraintModel()
 
-        # Item has multiple holes - should detect potential pattern
-        constraints = model._extract_symmetry_constraints(
-            mock_doc_with_topology, mock_item_with_features
-        )
+        def _item(hole_locations):
+            item = Mock()
+            item.self_ref = "test_item"
+            item.properties = {
+                "bounding_box": {"x": 100, "y": 50, "z": 20},
+                "machining_features": [
+                    {"feature_type": "hole", "parameters": {"diameter": 8.0},
+                     "location": loc}
+                    for loc in hole_locations
+                ],
+            }
+            return item
 
-        # Should detect symmetric pattern
-        pattern_constraints = [
-            c for c in constraints if c.constraint_type == ConstraintType.SYMMETRIC
-        ]
-        assert len(pattern_constraints) > 0
+        def _symmetric(constraints):
+            return [
+                c for c in constraints
+                if c.constraint_type == ConstraintType.SYMMETRIC
+            ]
+
+        # Holes mirror-symmetric about their centroid (50, 25): each reflects
+        # onto another -> the constraint IS detected.
+        sym = model._extract_symmetry_constraints(
+            mock_doc_with_topology,
+            _item([[10, 10, 0], [90, 40, 0], [50, 25, 0]]),
+        )
+        assert len(_symmetric(sym)) > 0
+        assert _symmetric(sym)[0].parameters["symmetric_fraction"] == pytest.approx(1.0)
+
+        # Genuinely asymmetric holes -> NO symmetric constraint (no longer
+        # fabricated for any multi-hole part).
+        asym = model._extract_symmetry_constraints(
+            mock_doc_with_topology,
+            _item([[10, 10, 0], [10, 40, 0], [50, 25, 0]]),
+        )
+        assert len(_symmetric(asym)) == 0
 
     def test_extract_dimensional_constraints_from_pmi(
         self, mock_doc_with_topology, mock_item_with_features

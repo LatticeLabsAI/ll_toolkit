@@ -81,8 +81,15 @@ def icp(
         prev_rmse = rmse
 
     final_distances, _ = tree.query(current)
-    inlier_rmse = float(np.sqrt(np.mean(final_distances**2)))
-    fitness = float(np.mean(final_distances <= max_correspondence_distance))
+    # inlier_rmse is the RMSE over INLIER correspondences only (those within
+    # max_correspondence_distance) — matching the field docstring and the
+    # Open3D convention — not over all correspondences.
+    inlier_mask = final_distances <= max_correspondence_distance
+    fitness = float(np.mean(inlier_mask))
+    if np.any(inlier_mask):
+        inlier_rmse = float(np.sqrt(np.mean(final_distances[inlier_mask] ** 2)))
+    else:
+        inlier_rmse = 0.0
 
     return RegistrationResult(
         transformation=transform,

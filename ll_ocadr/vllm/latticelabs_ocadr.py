@@ -3,8 +3,6 @@ LatticeLabs OCADR - Main model implementation.
 Integrates GeometryNet, ShapeNet, and LLM for 3D CAD/Mesh understanding.
 """
 
-from typing import Dict, List, Optional, Tuple
-
 import torch
 import torch.nn as nn
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -29,7 +27,7 @@ class LatticelabsOCADRForCausalLM(nn.Module):
         self.shape_model = build_shape_net(
             embed_dim=config.shape_embed_dim,
             depth=config.shape_depth,
-            num_heads=config.shape_num_heads
+            num_heads=config.shape_num_heads,
         )  # Global shape features
 
         # MLP Projector: concatenated features -> LLM embedding space
@@ -51,14 +49,38 @@ class LatticelabsOCADRForCausalLM(nn.Module):
         # Token IDs
         self.mesh_token_id = config.mesh_token_id
 
+        # Optional rendered-image modality (dual SAM + CLIP vision tower).
+        # Enabled by config.use_vision; off by default so the 3D-only path is
+        # unchanged when no images are supplied.
+        self.use_vision = bool(getattr(config, "use_vision", False))
+        self.image_token_id = getattr(config, "image_token_id", None)
+        if self.use_vision:
+            from .lattice_encoder.vision_tower import build_vision_tower
+
+            self.vision_tower = build_vision_tower(
+                n_embed=config.n_embed,
+                image_size=getattr(config, "vision_image_size", 224),
+                clip_patch_size=getattr(config, "vision_clip_patch_size", 14),
+                clip_embed_dim=getattr(config, "vision_clip_embed_dim", 1024),
+                clip_depth=getattr(config, "vision_clip_depth", 24),
+                clip_num_heads=getattr(config, "vision_clip_num_heads", 16),
+                sam_patch_size=getattr(config, "vision_sam_patch_size", 16),
+                sam_embed_dim=getattr(config, "vision_sam_embed_dim", 768),
+                sam_depth=getattr(config, "vision_sam_depth", 12),
+                sam_num_heads=getattr(config, "vision_sam_num_heads", 12),
+                sam_out_chans=getattr(config, "vision_sam_out_chans", 256),
+            )
+            # Separates rendered views in the multimodal token stream.
+            self.image_separator = nn.Parameter(torch.randn(1, config.n_embed))
+
     def _mesh_to_embedding(
         self,
         vertex_coords: torch.Tensor,
         vertex_normals: torch.Tensor,
-        chunks_coords: Optional[torch.Tensor] = None,
-        chunks_normals: Optional[torch.Tensor] = None,
-        mesh_spatial_partition: Optional[torch.Tensor] = None
-    ) -> List[torch.Tensor]:
+        chunks_coords: torch.Tensor | None = None,
+        chunks_normals: torch.Tensor | None = None,
+        mesh_spatial_partition: torch.Tensor | None = None,
+    ) -> list[torch.Tensor]:
         """
         Core 3D encoding pipeline. Mirrors _pixel_values_to_embedding from DeepSeek-OCR.
 
@@ -110,77 +132,97 @@ class LatticelabsOCADRForCausalLM(nn.Module):
                 if geom_tokens < shape_tokens:
                     # Pad geometry features
                     padding = torch.zeros(
-                        1, shape_tokens - geom_tokens, 256,
-                        device=device
+                        1, shape_tokens - geom_tokens, 256, device=device
                     )
-                    global_feat_geom_padded = torch.cat([global_feat_geom, padding], dim=1)
+                    global_feat_geom_padded = torch.cat(
+                        [global_feat_geom, padding], dim=1
+                    )
                 else:
                     global_feat_geom_padded = global_feat_geom[:, :shape_tokens]
 
                 # Concatenate: [1, 256, 768] + [1, 256, 256] = [1, 256, 1024]
-                global_features = torch.cat([
-                    global_feat_shape_no_cls,
-                    global_feat_geom_padded
-                ], dim=-1)  # [1, 256, 1024]
+                global_features = torch.cat(
+                    [global_feat_shape_no_cls, global_feat_geom_padded], dim=-1
+                )  # [1, 256, 1024]
 
                 # Project to LLM space
                 global_features = self.projector(global_features)  # [1, 256, n_embed]
                 global_features = global_features.squeeze(0)  # [256, n_embed]
 
                 # ===== LOCAL FEATURES (from chunks) =====
-                if chunks_coords is not None and chunks_normals is not None and mesh_spatial_partition is not None and torch.sum(chunks_coords[batch_idx]) != 0:
+                if (
+                    chunks_coords is not None
+                    and chunks_normals is not None
+                    and mesh_spatial_partition is not None
+                    and torch.sum(chunks_coords[batch_idx]) != 0
+                ):
                     chunks_c = chunks_coords[batch_idx]  # [num_chunks, M, 3]
                     chunks_n = chunks_normals[batch_idx]  # [num_chunks, M, 3]
                     num_chunks = chunks_c.shape[0]
 
                     # Process all chunks in parallel (batched encoder calls)
-                    chunk_feat_geom = self.geometry_model(chunks_c, chunks_n)  # [num_chunks, 128, 256]
-                    chunk_feat_shape = self.shape_model(chunks_c, chunks_n)  # [num_chunks, 257, 768]
+                    chunk_feat_geom = self.geometry_model(
+                        chunks_c, chunks_n
+                    )  # [num_chunks, 128, 256]
+                    chunk_feat_shape = self.shape_model(
+                        chunks_c, chunks_n
+                    )  # [num_chunks, 257, 768]
 
                     # Skip CLS token
-                    chunk_feat_shape_no_cls = chunk_feat_shape[:, 1:]  # [num_chunks, 256, 768]
+                    chunk_feat_shape_no_cls = chunk_feat_shape[
+                        :, 1:
+                    ]  # [num_chunks, 256, 768]
 
                     # Align dimensions
                     geom_tokens = chunk_feat_geom.shape[1]
                     shape_tokens = chunk_feat_shape_no_cls.shape[1]
 
                     if geom_tokens < shape_tokens:
-                        padding = torch.zeros(num_chunks, shape_tokens - geom_tokens, 256, device=device)
+                        padding = torch.zeros(
+                            num_chunks, shape_tokens - geom_tokens, 256, device=device
+                        )
                         chunk_feat_geom = torch.cat([chunk_feat_geom, padding], dim=1)
                     else:
                         chunk_feat_geom = chunk_feat_geom[:, :shape_tokens]
 
                     # Concatenate and project
-                    chunk_features = torch.cat([
-                        chunk_feat_shape_no_cls,
-                        chunk_feat_geom
-                    ], dim=-1)  # [num_chunks, 256, 1024]
+                    chunk_features = torch.cat(
+                        [chunk_feat_shape_no_cls, chunk_feat_geom], dim=-1
+                    )  # [num_chunks, 256, 1024]
 
-                    local_features = self.projector(chunk_features)  # [num_chunks, 256, n_embed]
+                    local_features = self.projector(
+                        chunk_features
+                    )  # [num_chunks, 256, n_embed]
 
                     # Flatten chunks and add boundaries between layers
                     nx, ny, nz = mesh_spatial_partition[batch_idx].tolist()
-                    formatted_local = self._format_chunk_grid(local_features, nx, ny, nz)
+                    formatted_local = self._format_chunk_grid(
+                        local_features, nx, ny, nz
+                    )
 
                     # Concatenate: [local, global, separator]
-                    combined = torch.cat([
-                        formatted_local,
-                        global_features,
-                        self.view_separator.squeeze(0).unsqueeze(0)
-                    ], dim=0)
+                    combined = torch.cat(
+                        [
+                            formatted_local,
+                            global_features,
+                            self.view_separator.squeeze(0).unsqueeze(0),
+                        ],
+                        dim=0,
+                    )
                 else:
                     # No chunking, just global + separator
-                    combined = torch.cat([
-                        global_features,
-                        self.view_separator.squeeze(0).unsqueeze(0)
-                    ], dim=0)
+                    combined = torch.cat(
+                        [global_features, self.view_separator.squeeze(0).unsqueeze(0)],
+                        dim=0,
+                    )
 
                 embeddings_list.append(combined)
 
             return embeddings_list
 
-    def _format_chunk_grid(self, local_features: torch.Tensor,
-                          nx: int, ny: int, nz: int) -> torch.Tensor:
+    def _format_chunk_grid(
+        self, local_features: torch.Tensor, nx: int, ny: int, nz: int
+    ) -> torch.Tensor:
         """
         Format chunk features into spatial grid with boundary tokens.
 
@@ -214,18 +256,87 @@ class LatticelabsOCADRForCausalLM(nn.Module):
 
         return torch.cat(formatted_parts, dim=0) if formatted_parts else flattened
 
+    def _image_to_embedding(
+        self, pixel_values: torch.Tensor
+    ) -> list[torch.Tensor]:
+        """Encode rendered images into LLM-space vision tokens.
+
+        Args:
+            pixel_values: ``[B, 3, H, W]`` (one render per item) or
+                ``[B, V, 3, H, W]`` (V views per item). Multiple views are
+                concatenated with a learned ``image_separator`` between them.
+
+        Returns:
+            List (length B) of ``[num_vision_tokens, n_embed]`` tensors — one
+            per item — mirroring :meth:`_mesh_to_embedding`'s return shape.
+        """
+        context = torch.no_grad() if not self.training else torch.enable_grad()
+        with context:
+            if pixel_values.dim() == 5:
+                b, v = pixel_values.shape[0], pixel_values.shape[1]
+                flat = pixel_values.reshape(b * v, *pixel_values.shape[2:])
+                tokens = self.vision_tower(flat)  # [B*V, T, n_embed]
+                tokens = tokens.reshape(b, v, tokens.shape[1], tokens.shape[2])
+                sep = self.image_separator.squeeze(0).unsqueeze(0)
+                out = []
+                for bi in range(b):
+                    parts = []
+                    for vi in range(v):
+                        parts.append(tokens[bi, vi])
+                        if vi < v - 1:
+                            parts.append(sep)
+                    out.append(torch.cat(parts, dim=0))
+                return out
+
+            tokens = self.vision_tower(pixel_values)  # [B, T, n_embed]
+            return [tokens[bi] for bi in range(tokens.shape[0])]
+
+    @staticmethod
+    def _splice_tokens(
+        inputs_embeds: torch.Tensor,
+        input_ids: torch.Tensor,
+        token_id: int,
+        embeddings: list[torch.Tensor],
+    ) -> None:
+        """Replace ``token_id`` placeholder positions with modality embeddings.
+
+        Operates in-place on ``inputs_embeds``. Used for both the mesh and the
+        image modalities so a missing/short embedding never silently leaves
+        placeholder text embeddings behind for more tokens than provided.
+        """
+        batch_size = input_ids.shape[0]
+        for batch_idx in range(batch_size):
+            positions = (
+                (input_ids[batch_idx] == token_id)
+                .nonzero(as_tuple=False)
+                .squeeze(-1)
+            )
+            if len(positions) > 0 and batch_idx < len(embeddings):
+                emb = embeddings[batch_idx]
+                num = emb.shape[0]
+                if len(positions) >= num:
+                    inputs_embeds[batch_idx, positions[:num]] = emb
+                else:
+                    inputs_embeds[batch_idx, positions] = emb[: len(positions)]
+
     def get_input_embeddings(
         self,
         input_ids: torch.Tensor,
-        multimodal_embeddings: Optional[List[torch.Tensor]] = None
+        multimodal_embeddings: list[torch.Tensor] | None = None,
+        image_embeddings: list[torch.Tensor] | None = None,
     ) -> torch.Tensor:
         """
-        Merge mesh embeddings with text embeddings.
-        Identical logic to DeepSeek-OCR's implementation.
+        Merge mesh (and optional rendered-image) embeddings with text embeddings.
+        Mesh logic is identical to DeepSeek-OCR's implementation; image tokens
+        are spliced at ``image_token_id`` positions when the vision modality is
+        enabled.
 
         Args:
-            input_ids: [batch, seq_len] with mesh_token_id placeholders
+            input_ids: [batch, seq_len] with mesh_token_id (and optionally
+                image_token_id) placeholders
             multimodal_embeddings: List of [num_mesh_tokens, n_embed] tensors
+            image_embeddings: Optional list of [num_vision_tokens, n_embed]
+                tensors (one per item)
 
         Returns:
             inputs_embeds: [batch, seq_len, n_embed] merged embeddings
@@ -235,35 +346,28 @@ class LatticelabsOCADRForCausalLM(nn.Module):
         # [batch, seq_len, n_embed]
 
         if multimodal_embeddings is not None:
-            # Replace mesh_token_id positions with actual mesh embeddings
-            batch_size, seq_len = input_ids.shape
+            self._splice_tokens(
+                inputs_embeds, input_ids, self.mesh_token_id, multimodal_embeddings
+            )
 
-            for batch_idx in range(batch_size):
-                # Find positions of mesh tokens
-                mesh_positions = (input_ids[batch_idx] == self.mesh_token_id).nonzero(as_tuple=False).squeeze(-1)
-
-                if len(mesh_positions) > 0 and batch_idx < len(multimodal_embeddings):
-                    mesh_emb = multimodal_embeddings[batch_idx]
-                    num_mesh_tokens = mesh_emb.shape[0]
-
-                    # Replace tokens
-                    if len(mesh_positions) >= num_mesh_tokens:
-                        inputs_embeds[batch_idx, mesh_positions[:num_mesh_tokens]] = mesh_emb
-                    else:
-                        inputs_embeds[batch_idx, mesh_positions] = mesh_emb[:len(mesh_positions)]
+        if image_embeddings is not None and self.image_token_id is not None:
+            self._splice_tokens(
+                inputs_embeds, input_ids, self.image_token_id, image_embeddings
+            )
 
         return inputs_embeds
 
     def forward(
         self,
         input_ids: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        vertex_coords: Optional[torch.Tensor] = None,
-        vertex_normals: Optional[torch.Tensor] = None,
-        chunks_coords: Optional[torch.Tensor] = None,
-        chunks_normals: Optional[torch.Tensor] = None,
-        mesh_spatial_partition: Optional[torch.Tensor] = None,
-        **kwargs
+        attention_mask: torch.Tensor | None = None,
+        vertex_coords: torch.Tensor | None = None,
+        vertex_normals: torch.Tensor | None = None,
+        chunks_coords: torch.Tensor | None = None,
+        chunks_normals: torch.Tensor | None = None,
+        mesh_spatial_partition: torch.Tensor | None = None,
+        pixel_values: torch.Tensor | None = None,
+        **kwargs,
     ):
         """
         Full inference pipeline integrating 3D geometry + language.
@@ -276,6 +380,9 @@ class LatticelabsOCADRForCausalLM(nn.Module):
             chunks_coords: [batch, num_chunks, M, 3]
             chunks_normals: [batch, num_chunks, M, 3]
             mesh_spatial_partition: [batch, 3]
+            pixel_values: optional rendered images [batch, 3, H, W] or
+                [batch, V, 3, H, W] (V views); used only when the vision
+                modality is enabled (config.use_vision)
 
         Returns:
             Language model outputs
@@ -287,22 +394,28 @@ class LatticelabsOCADRForCausalLM(nn.Module):
                 vertex_normals=vertex_normals,
                 chunks_coords=chunks_coords,
                 chunks_normals=chunks_normals,
-                mesh_spatial_partition=mesh_spatial_partition
+                mesh_spatial_partition=mesh_spatial_partition,
             )
         else:
             mesh_embeddings = None
 
-        # Merge mesh embeddings with text
+        # Process rendered images if provided and the vision modality is enabled
+        image_embeddings = (
+            self._image_to_embedding(pixel_values)
+            if self.use_vision and pixel_values is not None
+            else None
+        )
+
+        # Merge mesh + image embeddings with text
         inputs_embeds = self.get_input_embeddings(
             input_ids=input_ids,
-            multimodal_embeddings=mesh_embeddings
+            multimodal_embeddings=mesh_embeddings,
+            image_embeddings=image_embeddings,
         )
 
         # Pass to language model
         outputs = self.language_model(
-            inputs_embeds=inputs_embeds,
-            attention_mask=attention_mask,
-            **kwargs
+            inputs_embeds=inputs_embeds, attention_mask=attention_mask, **kwargs
         )
 
         return outputs
@@ -311,20 +424,23 @@ class LatticelabsOCADRForCausalLM(nn.Module):
     def generate(
         self,
         input_ids: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        vertex_coords: Optional[torch.Tensor] = None,
-        vertex_normals: Optional[torch.Tensor] = None,
-        chunks_coords: Optional[torch.Tensor] = None,
-        chunks_normals: Optional[torch.Tensor] = None,
-        mesh_spatial_partition: Optional[torch.Tensor] = None,
-        **kwargs
+        attention_mask: torch.Tensor | None = None,
+        vertex_coords: torch.Tensor | None = None,
+        vertex_normals: torch.Tensor | None = None,
+        chunks_coords: torch.Tensor | None = None,
+        chunks_normals: torch.Tensor | None = None,
+        mesh_spatial_partition: torch.Tensor | None = None,
+        pixel_values: torch.Tensor | None = None,
+        **kwargs,
     ):
         """
-        Autoregressive generation with 3D mesh conditioning.
+        Autoregressive generation with 3D mesh (and optional rendered-image)
+        conditioning.
 
-        Processes mesh inputs through the 3D encoders, merges the resulting
-        embeddings with text token embeddings, then delegates to the inner
-        language model's generate() (which inherits from GenerationMixin).
+        Processes mesh inputs through the 3D encoders (and rendered images
+        through the vision tower when ``config.use_vision`` is set), merges the
+        resulting embeddings with text token embeddings, then delegates to the
+        inner language model's generate() (which inherits from GenerationMixin).
 
         Accepts all keyword arguments supported by
         ``transformers.GenerationMixin.generate`` (e.g. max_new_tokens,
@@ -345,10 +461,18 @@ class LatticelabsOCADRForCausalLM(nn.Module):
         else:
             mesh_embeddings = None
 
-        # Merge mesh embeddings with text token embeddings
+        # Process rendered images if provided and the vision modality is enabled
+        image_embeddings = (
+            self._image_to_embedding(pixel_values)
+            if self.use_vision and pixel_values is not None
+            else None
+        )
+
+        # Merge mesh + image embeddings with text token embeddings
         inputs_embeds = self.get_input_embeddings(
             input_ids=input_ids,
             multimodal_embeddings=mesh_embeddings,
+            image_embeddings=image_embeddings,
         )
 
         # Delegate to the language model's generate(), passing inputs_embeds
@@ -376,6 +500,7 @@ def build_ll_ocadr_model(config):
 # runtime integration is planned future work.
 # =============================================================================
 
+
 class LLOCADRProcessingInfo:
     """
     Metadata about mesh processing for vLLM.
@@ -385,6 +510,7 @@ class LLOCADRProcessingInfo:
     def __init__(self, config):
         self.config = config
         from .process.mesh_process import MeshLoader
+
         self.loader = MeshLoader()
 
     def get_num_mesh_tokens(self, mesh_file: str, chunking: bool = True) -> int:
@@ -452,11 +578,10 @@ class LLOCADRMultiModalProcessor:
         from .process.mesh_process import LLOCADRProcessor
 
         self._processor = LLOCADRProcessor(
-            tokenizer=self._tokenizer,
-            mesh_token_id=self.config.mesh_token_id
+            tokenizer=self._tokenizer, mesh_token_id=self.config.mesh_token_id
         )
 
-    def _call_hf_processor(self, prompt: str, mm_data: Dict, mm_kwargs: Dict):
+    def _call_hf_processor(self, prompt: str, mm_data: dict, mm_kwargs: dict):
         """
         Call LLOCADRProcessor to preprocess meshes.
 
@@ -473,10 +598,10 @@ class LLOCADRMultiModalProcessor:
         return self._processor.tokenize_with_meshes(
             mesh_files=mesh_files,
             conversation=prompt,
-            cropping=mm_kwargs.get("cropping", True)
+            cropping=mm_kwargs.get("cropping", True),
         )
 
-    def _get_mm_fields_config(self) -> Dict:
+    def _get_mm_fields_config(self) -> dict:
         """
         Declare which tensor fields are multimodal.
         Used by vLLM for batch handling.
@@ -494,7 +619,7 @@ class LLOCADRMultiModalProcessor:
             "mesh_spatial_partition": "batched_mesh",
         }
 
-    def _get_prompt_updates(self, mm_items: List, hf_processor_mm_kwargs: Dict) -> List:
+    def _get_prompt_updates(self, mm_items: list, hf_processor_mm_kwargs: dict) -> list:
         """
         Calculate dynamic token count and create prompt replacements.
 
@@ -505,20 +630,23 @@ class LLOCADRMultiModalProcessor:
         Returns:
             List of prompt replacement configs
         """
-        def get_replacement_ll_ocadr(item_idx: int) -> List[int]:
+
+        def get_replacement_ll_ocadr(item_idx: int) -> list[int]:
             """Get token IDs to replace <mesh> placeholder."""
             mesh_file = mm_items[item_idx]
             num_tokens = self.info.get_num_mesh_tokens(
                 mesh_file=mesh_file,
-                chunking=hf_processor_mm_kwargs.get("cropping", True)
+                chunking=hf_processor_mm_kwargs.get("cropping", True),
             )
             # Return that many mesh_token_ids
             return [self.config.mesh_token_id] * num_tokens
 
         # This would use vLLM's PromptReplacement if available
         # For now, return the function
-        return [{
-            "modality": "mesh",
-            "target": [self.config.mesh_token_id],
-            "replacement": get_replacement_ll_ocadr
-        }]
+        return [
+            {
+                "modality": "mesh",
+                "target": [self.config.mesh_token_id],
+                "replacement": get_replacement_ll_ocadr,
+            }
+        ]

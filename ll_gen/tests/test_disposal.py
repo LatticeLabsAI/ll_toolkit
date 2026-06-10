@@ -29,7 +29,13 @@ import pytest
 from tests.conftest import requires_occ, requires_cadquery
 
 # Import the modules being tested
-from ll_gen.config import DisposalConfig, ErrorCategory, ExportConfig, FeedbackConfig, StepSchema
+from ll_gen.config import (
+    DisposalConfig,
+    ErrorCategory,
+    ExportConfig,
+    FeedbackConfig,
+    StepSchema,
+)
 from ll_gen.disposal.engine import DisposalEngine, _suggest_from_execution_error
 from ll_gen.disposal.validator import ValidationReport
 from ll_gen.disposal.repairer import RepairResult
@@ -37,10 +43,10 @@ from ll_gen.proposals.code_proposal import CodeProposal
 from ll_gen.proposals.disposal_result import ValidationFinding
 from ll_gen.config import ErrorSeverity, CodeLanguage
 
-
 # ============================================================================
 # SECTION 1: Unit Tests (NO pythonocc required)
 # ============================================================================
+
 
 class TestValidationReport:
     """Test ValidationReport data structure construction and properties."""
@@ -264,38 +270,50 @@ class TestDisposalEngineInit:
 class TestSuggestFromExecutionError:
     """Test error suggestion generation from various exception types."""
 
-    def test_suggest_from_timeout_error(self, code_proposal_cadquery: CodeProposal) -> None:
+    def test_suggest_from_timeout_error(
+        self, code_proposal_cadquery: CodeProposal
+    ) -> None:
         """Test that TimeoutError generates timeout/long execution suggestion."""
         timeout_exc = TimeoutError("Code execution timeout limit reached")
         suggestion = _suggest_from_execution_error(timeout_exc, code_proposal_cadquery)
-        assert ("timeout" in suggestion.lower() or "too long" in suggestion.lower())
+        assert "timeout" in suggestion.lower() or "too long" in suggestion.lower()
         assert "simplify" in suggestion.lower()
 
-    def test_suggest_from_syntax_error(self, code_proposal_cadquery: CodeProposal) -> None:
+    def test_suggest_from_syntax_error(
+        self, code_proposal_cadquery: CodeProposal
+    ) -> None:
         """Test that SyntaxError generates syntax suggestion."""
         syntax_exc = SyntaxError("invalid syntax")
         suggestion = _suggest_from_execution_error(syntax_exc, code_proposal_cadquery)
         assert "syntax" in suggestion.lower()
 
-    def test_suggest_from_import_error(self, code_proposal_cadquery: CodeProposal) -> None:
+    def test_suggest_from_import_error(
+        self, code_proposal_cadquery: CodeProposal
+    ) -> None:
         """Test that ImportError generates import/module suggestion."""
         import_exc = ImportError("No module named 'unknown_module'")
         suggestion = _suggest_from_execution_error(import_exc, code_proposal_cadquery)
         assert "import" in suggestion.lower() or "module" in suggestion.lower()
 
-    def test_suggest_from_cadquery_error(self, code_proposal_cadquery: CodeProposal) -> None:
+    def test_suggest_from_cadquery_error(
+        self, code_proposal_cadquery: CodeProposal
+    ) -> None:
         """Test that CadQuery-related error generates CadQuery suggestion."""
         cq_exc = RuntimeError("cadquery.workplane error")
         suggestion = _suggest_from_execution_error(cq_exc, code_proposal_cadquery)
         assert "cadquery" in suggestion.lower() or "workplane" in suggestion.lower()
 
-    def test_suggest_from_boolean_error(self, code_proposal_cadquery: CodeProposal) -> None:
+    def test_suggest_from_boolean_error(
+        self, code_proposal_cadquery: CodeProposal
+    ) -> None:
         """Test that boolean operation error generates boolean suggestion."""
         bool_exc = RuntimeError("Boolean fuse operation failed")
         suggestion = _suggest_from_execution_error(bool_exc, code_proposal_cadquery)
         assert "boolean" in suggestion.lower() or "fuse" in suggestion.lower()
 
-    def test_suggest_from_generic_exception(self, code_proposal_cadquery: CodeProposal) -> None:
+    def test_suggest_from_generic_exception(
+        self, code_proposal_cadquery: CodeProposal
+    ) -> None:
         """Test that generic exception generates fallback suggestion."""
         generic_exc = Exception("Some unexpected error occurred")
         suggestion = _suggest_from_execution_error(generic_exc, code_proposal_cadquery)
@@ -317,50 +335,59 @@ class TestModuleImportability:
     def test_import_validator_module(self) -> None:
         """Test that validator module imports without error."""
         from ll_gen.disposal import validator  # noqa: F401
+
         assert hasattr(validator, "ValidationReport")
         assert hasattr(validator, "validate_shape")
 
     def test_import_repairer_module(self) -> None:
         """Test that repairer module imports without error."""
         from ll_gen.disposal import repairer  # noqa: F401
+
         assert hasattr(repairer, "RepairResult")
         assert hasattr(repairer, "repair_shape")
 
     def test_import_introspector_module(self) -> None:
         """Test that introspector module imports without error."""
         from ll_gen.disposal import introspector  # noqa: F401
+
         assert hasattr(introspector, "introspect")
 
     def test_import_exporter_module(self) -> None:
         """Test that exporter module imports without error."""
         from ll_gen.disposal import exporter  # noqa: F401
+
         assert hasattr(exporter, "export_step")
         assert hasattr(exporter, "export_stl")
 
     def test_import_engine_module(self) -> None:
         """Test that engine module imports without error."""
         from ll_gen.disposal import engine  # noqa: F401
+
         assert hasattr(engine, "DisposalEngine")
 
     def test_import_code_executor_module(self) -> None:
         """Test that code_executor module imports without error."""
         from ll_gen.disposal import code_executor  # noqa: F401
+
         assert hasattr(code_executor, "execute_code_proposal")
 
     def test_import_command_executor_module(self) -> None:
         """Test that command_executor module imports without error."""
         from ll_gen.disposal import command_executor  # noqa: F401
+
         assert hasattr(command_executor, "execute_command_proposal")
 
     def test_import_surface_executor_module(self) -> None:
         """Test that surface_executor module imports without error."""
         from ll_gen.disposal import surface_executor  # noqa: F401
+
         assert hasattr(surface_executor, "execute_latent_proposal")
 
 
 # ============================================================================
 # SECTION 2: Integration Tests (REQUIRE pythonocc)
 # ============================================================================
+
 
 @requires_occ
 class TestValidateShape:
@@ -735,7 +762,9 @@ class TestDisposalEngineDispose:
     ) -> None:
         """Test DisposalEngine.dispose() creates STEP export when valid."""
         export_cfg = ExportConfig()
-        engine = DisposalEngine(export_config=export_cfg, output_dir=str(tmp_output_dir))
+        engine = DisposalEngine(
+            export_config=export_cfg, output_dir=str(tmp_output_dir)
+        )
         result = engine.dispose(code_proposal_cadquery, export=True)
 
         if result.is_valid and result.step_path:
@@ -747,7 +776,9 @@ class TestDisposalEngineDispose:
     ) -> None:
         """Test DisposalEngine.dispose() creates STL export when valid."""
         export_cfg = ExportConfig()
-        engine = DisposalEngine(export_config=export_cfg, output_dir=str(tmp_output_dir))
+        engine = DisposalEngine(
+            export_config=export_cfg, output_dir=str(tmp_output_dir)
+        )
         result = engine.dispose(code_proposal_cadquery, export=True)
 
         if result.is_valid and result.stl_path:

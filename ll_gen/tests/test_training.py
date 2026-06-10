@@ -7,6 +7,7 @@ Tests cover:
 
 All tests work WITHOUT torch installed by mocking heavy dependencies.
 """
+
 from __future__ import annotations
 
 import json
@@ -38,9 +39,11 @@ class TestGenerationMetrics:
         metrics = GenerationMetrics()
         assert metrics.validity_rate == 0.0
         assert metrics.compile_rate == 0.0
-        assert metrics.coverage == 0.0
-        assert metrics.mmd == 0.0
-        assert metrics.jsd == 0.0
+        # Distribution metrics default to None (undefined without a reference
+        # set) — NOT 0.0, which would read as a computed score of zero.
+        assert metrics.coverage is None
+        assert metrics.mmd is None
+        assert metrics.jsd is None
         assert metrics.mean_reward == 0.0
         assert metrics.reward_std == 0.0
         assert metrics.num_samples == 0
@@ -101,6 +104,7 @@ class TestGenerationMetrics:
             "num_valid",
             "num_compiled",
             "num_distinct_valid",
+            "mean_sequence_log_prob",
         }
         assert set(summary.keys()) == expected_keys
 
@@ -553,29 +557,50 @@ class TestMetricsComputerComputeAll:
         assert metrics.num_valid == 1
         assert metrics.mean_reward == pytest.approx(0.7)
 
-    def test_compute_all_with_reference_points(self) -> None:
-        """Test compute_all with reference point clouds."""
+    def test_compute_all_without_reference_is_none_not_zero(self) -> None:
+        """Without a reference set, distribution metrics must be None (undefined)
+        — never reported as a computed 0.0."""
         computer = MetricsComputer()
+        results = [DisposalResult(is_valid=True, shape=mock.Mock(), reward_signal=0.9)]
+        metrics = computer.compute_all(results)  # no reference_points
+        assert metrics.coverage is None
+        assert metrics.mmd is None
+        assert metrics.jsd is None
+
+    @pytest.mark.requires_pythonocc
+    def test_compute_all_with_reference_points(self) -> None:
+        """With a reference set AND a real shape, distribution metrics are
+        computed from REAL tessellated surface points (not bbox corners)."""
+        try:
+            from OCC.Core.BRepPrimAPI import BRepPrimAPI_MakeBox
+        except ImportError:
+            pytest.skip("pythonocc not available")
+
+        computer = MetricsComputer()
+        box = BRepPrimAPI_MakeBox(1.0, 1.0, 1.0).Shape()
         results = [
             DisposalResult(
                 is_valid=True,
-                shape=mock.Mock(),
+                shape=box,
                 geometry_report=GeometryReport(
                     bounding_box=(0.0, 0.0, 0.0, 1.0, 1.0, 1.0)
                 ),
                 reward_signal=0.9,
             ),
         ]
+        # Reference cloud spanning the same unit cube.
         reference_points = [
-            np.array([[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]]),
+            np.array(
+                [[0.0, 0.0, 0.0], [1.0, 1.0, 1.0], [1.0, 0.0, 0.0], [0.0, 1.0, 1.0]]
+            ),
         ]
         metrics = computer.compute_all(results, reference_points=reference_points)
 
         assert metrics.num_samples == 1
-        assert metrics.coverage >= 0.0
-        assert metrics.coverage <= 1.0
-        assert metrics.mmd >= 0.0
-        assert 0.0 <= metrics.jsd <= np.log(2) + 1e-5
+        # Real points were sampled and the metrics were actually computed.
+        assert metrics.coverage is not None and 0.0 <= metrics.coverage <= 1.0
+        assert metrics.mmd is not None and metrics.mmd >= 0.0
+        assert metrics.jsd is not None and 0.0 <= metrics.jsd <= np.log(2) + 1e-5
 
 
 # ============================================================================
@@ -705,6 +730,7 @@ def _has_torch() -> bool:
     """Check if torch is available."""
     try:
         import torch  # noqa: F401
+
         return True
     except ImportError:
         return False
@@ -818,10 +844,7 @@ class TestMetricsEdgeCases:
         computer = MetricsComputer()
         # Create 1000 results with 75% validity
         n = 1000
-        results = [
-            DisposalResult(is_valid=(i % 4 != 0))
-            for i in range(n)
-        ]
+        results = [DisposalResult(is_valid=(i % 4 != 0)) for i in range(n)]
         rate = computer.compute_validity_rate(results)
         assert rate == pytest.approx(0.75, abs=0.01)
 
@@ -999,7 +1022,9 @@ class TestMetricsComputerIntegration:
 
         # Create sample results
         results = [
-            DisposalResult(is_valid=i % 2 == 0, shape=mock.Mock(), reward_signal=0.5 + 0.1 * i)
+            DisposalResult(
+                is_valid=i % 2 == 0, shape=mock.Mock(), reward_signal=0.5 + 0.1 * i
+            )
             for i in range(10)
         ]
 

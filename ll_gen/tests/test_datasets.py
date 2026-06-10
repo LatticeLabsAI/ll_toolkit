@@ -9,6 +9,7 @@ Tests cover:
 - Configuration validation
 - Special handling for annotation levels and entity types
 """
+
 from __future__ import annotations
 
 import json
@@ -30,6 +31,7 @@ try:
         EOS_TOKEN_ID,
         PARAM_OFFSET,
     )
+
     deepcad_available = True
 except ImportError:
     deepcad_available = False
@@ -39,6 +41,7 @@ try:
         _tokenize_abc_sample,
         ABCDataset,
     )
+
     abc_available = True
 except ImportError:
     abc_available = False
@@ -49,6 +52,7 @@ try:
         ANNOTATION_LEVELS,
         Text2CADDataset,
     )
+
     text2cad_available = True
 except ImportError:
     text2cad_available = False
@@ -60,6 +64,7 @@ try:
         CONSTRAINT_TYPES,
         SketchGraphsDataset,
     )
+
     sketchgraphs_available = True
 except ImportError:
     sketchgraphs_available = False
@@ -68,6 +73,7 @@ except ImportError:
 # =============================================================================
 # DeepCAD Loader Tests
 # =============================================================================
+
 
 class TestDeepCADImports:
     """Test that DeepCAD loader module imports successfully."""
@@ -110,29 +116,37 @@ class TestDeepCADTokenization:
         commands = []
 
         # SOL command (start of loop)
-        commands.append({
-            "type": "SOL",
-            "params": [0.0] * 16,
-        })
+        commands.append(
+            {
+                "type": "SOL",
+                "params": [0.0] * 16,
+            }
+        )
 
         # Add LINE commands
         for i in range(num_commands - 2):
-            commands.append({
-                "type": "LINE",
-                "params": [0.0, 0.0, 0.5, 0.0] + [0.0] * 12,
-            })
+            commands.append(
+                {
+                    "type": "LINE",
+                    "params": [0.0, 0.0, 0.5, 0.0] + [0.0] * 12,
+                }
+            )
 
         # EXTRUDE command
-        commands.append({
-            "type": "EXTRUDE",
-            "params": [0.3, 0.0] + [0.0] * 14,
-        })
+        commands.append(
+            {
+                "type": "EXTRUDE",
+                "params": [0.3, 0.0] + [0.0] * 14,
+            }
+        )
 
         # EOS command
-        commands.append({
-            "type": "EOS",
-            "params": [0.0] * 16,
-        })
+        commands.append(
+            {
+                "type": "EOS",
+                "params": [0.0] * 16,
+            }
+        )
 
         return {"sequence": commands}
 
@@ -316,7 +330,9 @@ class TestDeepCADTokenization:
         result = _tokenize_deepcad_sample(sample)
 
         # UNKNOWN_CMD should be skipped, but SOL, LINE, EOS should be processed
-        assert len(result["command_tokens"]) == 3  # SOL, LINE, EOS (UNKNOWN_CMD skipped)
+        assert (
+            len(result["command_tokens"]) == 3
+        )  # SOL, LINE, EOS (UNKNOWN_CMD skipped)
         assert result["command_tokens"][0]["command_type"] == COMMAND_TYPE_IDS["SOL"]
         assert result["command_tokens"][1]["command_type"] == COMMAND_TYPE_IDS["LINE"]
         assert result["command_tokens"][2]["command_type"] == COMMAND_TYPE_IDS["EOS"]
@@ -452,6 +468,7 @@ class TestDeepCADDatasetGetItem:
 # ABC Loader Tests
 # =============================================================================
 
+
 class TestABCImports:
     """Test that ABC loader module imports successfully."""
 
@@ -582,6 +599,7 @@ class TestABCDatasetGetItem:
 # Text2CAD Loader Tests
 # =============================================================================
 
+
 class TestText2CADImports:
     """Test that Text2CAD loader module imports successfully."""
 
@@ -602,7 +620,9 @@ class TestText2CADImports:
 class TestText2CADTokenization:
     """Test _tokenize_text2cad_sample function."""
 
-    def _create_text2cad_sample(self, annotation_level: str = "detailed") -> Dict[str, Any]:
+    def _create_text2cad_sample(
+        self, annotation_level: str = "detailed"
+    ) -> Dict[str, Any]:
         """Create synthetic Text2CAD sample."""
         if not text2cad_available:
             pytest.skip("text2cad_loader not available")
@@ -614,7 +634,7 @@ class TestText2CADTokenization:
                 {"type": "SOL", "params": [0.0] * 16},
                 {"type": "LINE", "params": [1.0, 0.0] + [0.0] * 14},
                 {"type": "EOS", "params": [0.0] * 16},
-            ]
+            ],
         }
 
     def test_tokenize_text2cad_returns_dict(self):
@@ -739,7 +759,7 @@ class TestText2CADDatasetGetItem:
                 "sequence": [
                     {"type": "SOL", "params": [0.0] * 16},
                     {"type": "EOS", "params": [0.0] * 16},
-                ]
+                ],
             }
             json_file = split_dir / "sample.json"
             json_file.write_text(json.dumps(sample_data))
@@ -758,15 +778,13 @@ class TestText2CADDatasetGetItem:
 
             sample_data = {
                 "text_expert": "Complex geometry description",
-                "sequence": []
+                "sequence": [],
             }
             json_file = split_dir / "sample.json"
             json_file.write_text(json.dumps(sample_data))
 
             dataset = Text2CADDataset(
-                data_dir=tmpdir,
-                split="train",
-                annotation_level="expert"
+                data_dir=tmpdir, split="train", annotation_level="expert"
             )
             result = dataset[0]
 
@@ -776,6 +794,7 @@ class TestText2CADDatasetGetItem:
 # =============================================================================
 # SketchGraphs Loader Tests
 # =============================================================================
+
 
 class TestSketchGraphsImports:
     """Test that SketchGraphs loader module imports successfully."""
@@ -824,13 +843,13 @@ class TestSketchGraphsTokenization:
                     "params": {
                         "start": [0.0, 0.0],
                         "end": [10.0, 0.0],
-                    }
+                    },
                 },
                 {
                     "type": "Point",
                     "params": {
                         "point": [5.0, 5.0],
-                    }
+                    },
                 },
             ],
             "constraints": [
@@ -839,7 +858,7 @@ class TestSketchGraphsTokenization:
                     "references": [0, 1],
                     "value": None,
                 }
-            ]
+            ],
         }
 
     def test_tokenize_sketchgraphs_returns_arrays(self):
@@ -985,7 +1004,9 @@ class TestSketchGraphsDatasetInit:
             assert len(dataset) == 4
 
 
-@pytest.mark.skipif(not sketchgraphs_available, reason="sketchgraphs_loader not available")
+@pytest.mark.skipif(
+    not sketchgraphs_available, reason="sketchgraphs_loader not available"
+)
 class TestSketchGraphsDatasetGetItem:
     """Test SketchGraphsDataset.__getitem__ method."""
 
@@ -997,12 +1018,9 @@ class TestSketchGraphsDatasetGetItem:
 
             sample_data = {
                 "entities": [
-                    {
-                        "type": "Line",
-                        "params": {"start": [0, 0], "end": [10, 10]}
-                    }
+                    {"type": "Line", "params": {"start": [0, 0], "end": [10, 10]}}
                 ],
-                "constraints": []
+                "constraints": [],
             }
             json_file = split_dir / "sketch.json"
             json_file.write_text(json.dumps(sample_data))
@@ -1033,6 +1051,7 @@ class TestSketchGraphsDatasetGetItem:
 # =============================================================================
 # Integration Tests
 # =============================================================================
+
 
 class TestMultipleLoadersConsistency:
     """Test consistency across multiple dataset loaders."""
@@ -1077,6 +1096,7 @@ class TestMultipleLoadersConsistency:
 # =============================================================================
 # Edge Case Tests
 # =============================================================================
+
 
 class TestEdgeCases:
     """Test edge cases and error handling."""
