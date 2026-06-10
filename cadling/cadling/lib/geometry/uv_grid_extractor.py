@@ -21,7 +21,6 @@ import numpy as np
 # Try importing occwl; if not on sys.path, try adding the vendored location
 try:
     from OCC.Core.TopoDS import TopoDS_Face, TopoDS_Edge
-    from OCC.Core.TopAbs import TopAbs_IN, TopAbs_OUT
     from occwl.face import Face
     from occwl.edge import Edge
     from occwl.uvgrid import uvgrid, ugrid
@@ -33,7 +32,6 @@ except ImportError:
         sys.path.insert(0, str(_occwl_path))
         try:
             from OCC.Core.TopoDS import TopoDS_Face, TopoDS_Edge
-            from OCC.Core.TopAbs import TopAbs_IN, TopAbs_OUT
             from occwl.face import Face
             from occwl.edge import Edge
             from occwl.uvgrid import uvgrid, ugrid
@@ -99,19 +97,17 @@ class FaceUVGridExtractor:
                 logger.warning("Failed to extract normal grid from face")
                 return None
 
-            # Compute trimming mask
-            # Get UV values where we sampled
-            _, uv_values = uvgrid(face, num_u=num_u, num_v=num_v, method="point", uvs=True)
-
-            # Create trimming mask by checking if each UV point is inside the trimmed region
-            trimming_mask = np.zeros((num_u, num_v, 1), dtype=np.float32)
-            for i in range(num_u):
-                for j in range(num_v):
-                    uv = uv_values[i, j]
-                    # Use visibility_status: 0=IN, 1=OUT, 2=ON, 3=UNKNOWN
-                    status = face.visibility_status(uv)
-                    # Mark as 1 if inside (TopAbs_IN = 0)
-                    trimming_mask[i, j, 0] = 1.0 if status == TopAbs_IN else 0.0
+            # Compute trimming mask via occwl's "inside" sampling, which returns
+            # a [num_u, num_v, 1] boolean grid (1 where the sample lies inside
+            # the face's trimmed region). This replaces a per-point
+            # face.visibility_status(uv) loop, which raised a gp_Pnt2d SWIG
+            # overload error when handed numpy-float UV coordinates on some
+            # pythonocc/occwl builds and made every face UV-grid fail.
+            inside_grid = uvgrid(face, num_u=num_u, num_v=num_v, method="inside")
+            if inside_grid is None:
+                logger.warning("Failed to extract trimming mask from face")
+                return None
+            trimming_mask = inside_grid.astype(np.float32)
 
             # Stack into [num_u, num_v, 7] array
             uv_grid = np.concatenate([

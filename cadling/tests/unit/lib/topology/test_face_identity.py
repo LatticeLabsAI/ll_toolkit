@@ -353,3 +353,38 @@ class TestShapeIdentityRegistry:
 
             result = registry.register_all_vertices(mock_shape)
             assert result == {}
+
+
+class TestShapeIdentityRegistryRealShape:
+    """Regression: register_all must populate from a REAL OCC shape.
+
+    Before the fix, face_identity imported ``from OCC.Core import topods``,
+    which raises ``ImportError`` on pythonocc 7.8 ("cannot import name
+    'topods' from 'OCC.Core'"). That set ``HAS_OCC = False`` at module load,
+    so ``register_all_*`` registered nothing and every face/edge index was -1.
+    Every other test in this file mocks the shapes, so the real-OCC path was
+    never exercised and the bug went unnoticed.
+    """
+
+    @pytest.mark.requires_pythonocc
+    def test_register_all_from_real_box(self):
+        pytest.importorskip("OCC")
+        from OCC.Core.BRepPrimAPI import BRepPrimAPI_MakeBox
+
+        from cadling.lib.topology.face_identity import HAS_OCC, ShapeIdentityRegistry
+
+        assert HAS_OCC, "face_identity should detect pythonocc (topods import)"
+
+        box = BRepPrimAPI_MakeBox(10.0, 10.0, 10.0).Shape()
+        registry = ShapeIdentityRegistry()
+        registry.register_all(box)
+
+        # A box solid has 6 faces, 12 edges, 8 vertices.
+        assert registry.num_faces == 6
+        assert registry.num_edges == 12
+        assert registry.num_vertices == 8
+
+        # Index <-> id <-> shape round-trips for a registered face.
+        face_id, face = registry.get_face_by_index(0)
+        assert registry.get_face_index(face_id) == 0
+        assert registry.get_face(face_id) is face

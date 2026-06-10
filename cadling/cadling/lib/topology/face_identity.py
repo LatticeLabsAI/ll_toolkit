@@ -39,7 +39,7 @@ try:
     from OCC.Core.TopoDS import TopoDS_Shape, TopoDS_Face, TopoDS_Edge, TopoDS_Vertex
     from OCC.Core.TopExp import TopExp_Explorer
     from OCC.Core.TopAbs import TopAbs_FACE, TopAbs_EDGE, TopAbs_VERTEX
-    from OCC.Core import topods
+    from OCC.Core.TopoDS import topods
 
     HAS_OCC = True
 except ImportError:
