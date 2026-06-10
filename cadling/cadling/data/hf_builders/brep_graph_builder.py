@@ -275,18 +275,8 @@ class BRepGraphBuilder:
 
         try:
             from OCC.Core.STEPControl import STEPControl_Reader
-            from OCC.Core.TopAbs import TopAbs_FACE, TopAbs_EDGE
-            from OCC.Core.TopExp import TopExp_Explorer
-            from OCC.Core.BRepGProp import brepgprop
-            from OCC.Core.GProp import GProp_GProps
-            from OCC.Core.BRepAdaptor import BRepAdaptor_Surface, BRepAdaptor_Curve
-            from OCC.Core.GeomAbs import (
-                GeomAbs_Plane, GeomAbs_Cylinder, GeomAbs_Cone,
-                GeomAbs_Sphere, GeomAbs_Torus, GeomAbs_BSplineSurface,
-                GeomAbs_Line, GeomAbs_Circle, GeomAbs_Ellipse,
-                GeomAbs_BSplineCurve,
-            )
-            from OCC.Core.TopoDS import topods
+
+            from cadling.lib.topology.brep_face_graph import build_brep_face_graph
 
             # Read STEP file
             reader = STEPControl_Reader()
@@ -297,102 +287,12 @@ class BRepGraphBuilder:
             reader.TransferRoots()
             shape = reader.OneShape()
 
-            # Extract faces
-            faces_data = []
-            face_explorer = TopExp_Explorer(shape, TopAbs_FACE)
-            face_idx = 0
-
-            while face_explorer.More():
-                face = topods.Face(face_explorer.Current())
-
-                # Get surface type
-                adaptor = BRepAdaptor_Surface(face)
-                surf_type = adaptor.GetType()
-                surf_type_map = {
-                    GeomAbs_Plane: "plane",
-                    GeomAbs_Cylinder: "cylinder",
-                    GeomAbs_Cone: "cone",
-                    GeomAbs_Sphere: "sphere",
-                    GeomAbs_Torus: "torus",
-                    GeomAbs_BSplineSurface: "bspline",
-                }
-                surface_type_str = surf_type_map.get(surf_type, "other")
-
-                # Get area
-                props = GProp_GProps()
-                brepgprop.SurfaceProperties(face, props)
-                area = props.Mass()
-
-                # Get centroid
-                center = props.CentreOfMass()
-                centroid = [center.X(), center.Y(), center.Z()]
-
-                faces_data.append({
-                    "idx": face_idx,
-                    "surface_type": surface_type_str,
-                    "area": area,
-                    "centroid": centroid,
-                    "normal": [0.0, 0.0, 1.0],  # Simplified
-                    "curvatures": [0.0, 0.0],  # Simplified
-                })
-                face_idx += 1
-                face_explorer.Next()
-
-            # Extract edges
-            edges_data = []
-            edge_explorer = TopExp_Explorer(shape, TopAbs_EDGE)
-            edge_idx = 0
-
-            while edge_explorer.More():
-                edge = topods.Edge(edge_explorer.Current())
-
-                # Get curve type
-                try:
-                    adaptor = BRepAdaptor_Curve(edge)
-                    curve_type = adaptor.GetType()
-                    curve_type_map = {
-                        GeomAbs_Line: "line",
-                        GeomAbs_Circle: "circle",
-                        GeomAbs_Ellipse: "ellipse",
-                        GeomAbs_BSplineCurve: "bspline",
-                    }
-                    curve_type_str = curve_type_map.get(curve_type, "other")
-
-                    # Get length
-                    props = GProp_GProps()
-                    brepgprop.LinearProperties(edge, props)
-                    length = props.Mass()
-                except Exception:
-                    curve_type_str = "other"
-                    length = 0.0
-
-                edges_data.append({
-                    "idx": edge_idx,
-                    "curve_type": curve_type_str,
-                    "length": length,
-                    "convexity": 0.0,
-                    "dihedral_angle": 0.0,
-                })
-                edge_idx += 1
-                edge_explorer.Next()
-
-            # Build simple adjacency (face-to-face via shared edges)
-            # This is simplified; real implementation would use TopExp.MapShapesAndAncestors
-            edge_index_src = []
-            edge_index_dst = []
-
-            # For now, create a simple complete graph on faces (placeholder)
-            num_faces = len(faces_data)
-            for i in range(num_faces):
-                for j in range(i + 1, min(i + 5, num_faces)):  # Connect nearby
-                    edge_index_src.extend([i, j])
-                    edge_index_dst.extend([j, i])
-
-            return {
-                "faces": faces_data,
-                "edges": edges_data,
-                "edge_index": [edge_index_src, edge_index_dst],
-            }
+            # Build the real face-adjacency graph (shared-edge topology + real
+            # per-face/edge geometry) via the single source of truth helper.
+            graph = build_brep_face_graph(shape)
+            if not graph["faces"]:
+                return None
+            return graph
 
         except Exception as e:
             _log.debug("Failed to process %s with pythonocc: %s", step_path, e)

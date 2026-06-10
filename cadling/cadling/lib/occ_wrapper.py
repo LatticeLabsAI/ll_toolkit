@@ -577,10 +577,21 @@ class OCCFace:
             return None
 
         try:
+            from OCC.Core.BRepTopAdaptor import BRepTopAdaptor_FClass2d
+            from OCC.Core.gp import gp_Pnt2d
+            from OCC.Core.TopAbs import TopAbs_OUT
+
             grid = np.zeros((num_u, num_v, 7), dtype=np.float32)
 
             u_min, u_max, v_min, v_max = breptools.UVBounds(self._occ_face)
             surface = BRep_Tool.Surface(self._occ_face)
+
+            # 2D classifier for the trimmed face boundary: tells whether a (u, v)
+            # sample lies inside the actual (possibly trimmed/holed) face region.
+            try:
+                face_classifier = BRepTopAdaptor_FClass2d(self._occ_face, 1e-7)
+            except Exception:
+                face_classifier = None
 
             for i in range(num_u):
                 for j in range(num_v):
@@ -606,8 +617,17 @@ class OCCFace:
                     except Exception:
                         grid[i, j, 3:6] = [0.0, 0.0, 1.0]
 
-                    # Mask (assume inside for now)
-                    grid[i, j, 6] = 1.0
+                    # Trimming mask: 1.0 if the (u, v) point is inside the
+                    # trimmed face boundary, 0.0 if it falls in a trimmed-away
+                    # region (e.g. inside a hole). Real classification replaces
+                    # the former hardcoded "assume inside".
+                    if face_classifier is not None:
+                        state = face_classifier.Perform(
+                            gp_Pnt2d(float(u_param), float(v_param))
+                        )
+                        grid[i, j, 6] = 0.0 if state == TopAbs_OUT else 1.0
+                    else:
+                        grid[i, j, 6] = 1.0
 
             return grid
 

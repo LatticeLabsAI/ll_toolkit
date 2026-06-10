@@ -267,6 +267,70 @@ class TestVLMVerificationMocked:
             assert isinstance(result, VerificationResult)
 
 
+class TestVlmFailsClosed:
+    """An unavailable VLM verifier must NOT silently report a pass.
+
+    Regression for the fail-open bug: every error / missing-dependency / no-render
+    path used to return ``{"matches": True}``, which the verifier counted as a
+    passed VLM check — inflating confidence and reporting unverified geometry as
+    matching. Now those paths return ``verified=False`` and are not counted.
+    """
+
+    def test_unknown_backend_is_not_verified(self) -> None:
+        verifier = VisualVerifier(vlm_backend="does-not-exist")
+        out = verifier._verify_vlm([Path("/tmp/r.png")], "a box")
+        assert out["verified"] is False
+        assert out["matches"] is None
+
+    def test_clip_missing_dependency_is_not_verified(self) -> None:
+        """When transformers/PIL are unavailable, CLIP must not claim a match."""
+        verifier = VisualVerifier(vlm_backend="clip")
+        with patch.dict("sys.modules", {"transformers": None}):
+            out = verifier._verify_clip([Path("/tmp/r.png")], "a box")
+        assert out["verified"] is False
+        assert out["matches"] is None
+
+    def test_no_renders_is_not_verified(self) -> None:
+        verifier = VisualVerifier(vlm_backend="clip")
+        # Non-existent render -> no images load -> cannot verify.
+        out = verifier._verify_clip([Path("/tmp/nonexistent-xyz.png")], "a box")
+        assert out["verified"] is False
+        assert out["matches"] is None
+
+    def test_unavailable_vlm_not_counted_as_method(self) -> None:
+        """End-to-end: an unavailable VLM is not added to the method list and
+        does not flip matches_intent to a silent pass."""
+        verifier = VisualVerifier(vlm_backend="does-not-exist")
+        result = verifier.verify(
+            render_paths=[Path("/tmp/nonexistent-xyz.png")],
+            prompt="A box",
+            geometry_report=None,
+        )
+        assert result.vlm_verified is False
+        assert "vlm" not in result.method
+
+    def test_available_vlm_is_counted(self) -> None:
+        """A VLM that actually runs (verified=True) IS counted and applied."""
+        verifier = VisualVerifier(vlm_backend="clip")
+        with patch.object(
+            verifier,
+            "_verify_vlm",
+            return_value={
+                "matches": False,
+                "verified": True,
+                "response": "CLIP similarity: 0.10",
+                "issues": ["below threshold"],
+            },
+        ):
+            result = verifier.verify(
+                render_paths=[Path("/tmp/render.png")],
+                prompt="A box",
+            )
+        assert result.vlm_verified is True
+        assert "vlm" in result.method
+        assert result.matches_intent is False
+
+
 # ============================================================================
 # SECTION 7: Dimension Pattern Extraction Tests
 # ============================================================================

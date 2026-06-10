@@ -19,7 +19,10 @@ Example:
 from __future__ import annotations
 
 import logging
+import math
 from typing import TYPE_CHECKING
+
+import numpy as np
 
 from cadling.pipeline.base_pipeline import BaseCADPipeline
 from cadling.experimental.models import (
@@ -218,10 +221,13 @@ class ThreadedGeometryVlmPipeline(BaseCADPipeline):
         return conv_res
 
     def _extract_geometric_features(self, doc, item) -> None:
-        """Extract geometric features from item (Stage 1 helper).
+        """Extract machining features from the item's B-Rep face graph (Stage 1).
 
-        Uses BRepGraphBuilder and geometry extractors (HoleGeometryExtractor,
-        PocketGeometryExtractor) for robust feature detection.
+        Builds the face graph with ``BRepFaceGraphBuilder`` and reads each face's
+        REAL geometry from its 24-dim node features: the parsed surface type
+        (one-hot), area, curvatures, normal, centroid and bbox. Cylindrical faces
+        become holes (diameter from mean curvature, depth from lateral area);
+        planar faces become pockets only when geometrically recessed.
 
         Args:
             doc: The document
@@ -229,70 +235,63 @@ class ThreadedGeometryVlmPipeline(BaseCADPipeline):
         """
         detected_features = []
 
-        # Try to use BRepGraphBuilder for topology-based feature extraction
+        # Use BRepFaceGraphBuilder for topology-based feature detection. The
+        # graph's 24-dim node features carry REAL per-face geometry, so we read
+        # the parsed surface type and measured quantities directly rather than
+        # guessing from a curvature threshold.
         try:
             from cadling.models.segmentation.brep_graph_builder import BRepFaceGraphBuilder
-            from cadling.models.segmentation.geometry_extractors import (
-                HoleGeometryExtractor,
-                PocketGeometryExtractor,
-            )
 
             graph_builder = BRepFaceGraphBuilder()
-            hole_extractor = HoleGeometryExtractor()
-            pocket_extractor = PocketGeometryExtractor()
-
-            # Build face graph from item
             graph = graph_builder.build_face_graph(doc, item)
 
-            if graph is not None and graph.num_nodes > 0:
-                # Analyze face surface types from graph
-                for face_idx in range(graph.num_nodes):
-                    face_features = graph.x[face_idx] if hasattr(graph, "x") else None
+            node_feats = (
+                self._features_to_numpy(graph.x)
+                if graph is not None and hasattr(graph, "x")
+                else None
+            )
+            if (
+                node_feats is not None
+                and node_feats.ndim == 2
+                and node_feats.shape[1] >= 22
+            ):
+                for face_idx in range(node_feats.shape[0]):
+                    feat = node_feats[face_idx]
+                    surface_type, type_conf = self._classify_surface_type(feat)
 
-                    if face_features is not None:
-                        # Decode surface type from features (simplified)
-                        # Real implementation would use trained classifier
-                        surface_type = self._classify_surface_type(face_features)
+                    if surface_type == "cylindrical":
+                        # Cylindrical face -> hole, with REAL parameters measured
+                        # from the node features (diameter from mean curvature,
+                        # depth from lateral area, location from centroid).
+                        params = self._hole_parameters(feat)
+                        detected_features.append({
+                            "feature_type": "hole",
+                            "subtype": "cylindrical",
+                            "parameters": params,
+                            "confidence": round(min(0.5 + 0.35 * type_conf, 0.85), 3),
+                            "source": "brep_graph_geometry",
+                            "detection_method": "surface_type_and_curvature",
+                            "face_ids": [face_idx],
+                        })
 
-                        if surface_type == "cylindrical":
-                            # Extract hole parameters
-                            hole_params = hole_extractor.extract_from_face(
-                                graph, face_idx
-                            ) if hasattr(hole_extractor, "extract_from_face") else {}
-
-                            detected_features.append({
-                                "feature_type": "hole",
-                                "subtype": hole_params.get("hole_type", "unknown"),
-                                "parameters": {
-                                    "diameter": hole_params.get("diameter"),
-                                    "depth": hole_params.get("depth"),
-                                },
-                                "confidence": 0.75,
-                                "source": "brep_graph_analysis",
-                                "face_ids": [face_idx],
-                            })
-
-                        elif surface_type == "planar_recessed":
-                            # Extract pocket parameters
-                            pocket_params = pocket_extractor.extract_from_face(
-                                graph, face_idx
-                            ) if hasattr(pocket_extractor, "extract_from_face") else {}
-
+                    elif surface_type == "planar":
+                        # Planar face -> pocket ONLY if it is geometrically
+                        # recessed (real recession test over face centroids).
+                        pocket = self._planar_recession(face_idx, node_feats)
+                        if pocket is not None:
                             detected_features.append({
                                 "feature_type": "pocket",
-                                "subtype": pocket_params.get("pocket_type", "rectangular"),
-                                "parameters": {
-                                    "width": pocket_params.get("width"),
-                                    "length": pocket_params.get("length"),
-                                    "depth": pocket_params.get("depth"),
-                                },
-                                "confidence": 0.7,
-                                "source": "brep_graph_analysis",
+                                "subtype": "recessed_planar",
+                                "parameters": pocket,
+                                "confidence": round(min(0.45 + 0.3 * type_conf, 0.8), 3),
+                                "source": "brep_graph_geometry",
+                                "detection_method": "planar_recession",
                                 "face_ids": [face_idx],
                             })
 
                 _log.debug(
-                    f"[Stage 1] BRepGraphBuilder: {graph.num_nodes} faces analyzed"
+                    f"[Stage 1] BRepFaceGraphBuilder: {node_feats.shape[0]} faces "
+                    f"analyzed, {len(detected_features)} features detected"
                 )
 
         except ImportError as e:
@@ -322,37 +321,132 @@ class ThreadedGeometryVlmPipeline(BaseCADPipeline):
 
         _log.debug(f"[Stage 1] Detected {len(detected_features)} geometric features")
 
-    def _classify_surface_type(self, face_features) -> str:
-        """Classify surface type from face feature vector.
+    # Node-feature layout produced by
+    # cadling.models.segmentation.brep_graph_builder._extract_face_features
+    # (feature_dim=24): [0:10] surface-type one-hot, [10] area,
+    # [11] gaussian curvature, [12] mean curvature, [13:16] normal,
+    # [16:19] centroid, [19:22] bbox dimensions.
+    _SURFACE_TYPES = (
+        "PLANE", "CYLINDER", "CONE", "SPHERE", "TORUS",
+        "B_SPLINE", "BEZIER", "NURBS", "SURFACE_OF_REVOLUTION", "OTHER",
+    )
 
-        Args:
-            face_features: Feature tensor for the face
-
-        Returns:
-            Surface type string
-        """
-        # Simplified classification based on feature patterns
-        # Real implementation would use trained classifier
+    @staticmethod
+    def _features_to_numpy(face_features):
+        """Coerce a node-feature tensor/array to a numpy array, or None."""
+        if face_features is None:
+            return None
         try:
             import torch
 
             if isinstance(face_features, torch.Tensor):
-                features = face_features.detach().cpu().numpy()
-            else:
-                features = face_features
-
-            # Check for cylindrical surface indicators
-            # (curvature patterns, normal distribution, etc.)
-            if len(features) > 3:
-                # Example heuristic: high curvature in one direction
-                curvature_idx = min(3, len(features) - 1)
-                if abs(features[curvature_idx]) > 0.1:
-                    return "cylindrical"
-
-            return "planar"
-
+                return face_features.detach().cpu().numpy()
         except Exception:
-            return "unknown"
+            pass
+        try:
+            return np.asarray(face_features, dtype=float)
+        except Exception:
+            return None
+
+    def _classify_surface_type(self, face_features) -> tuple[str, float]:
+        """Classify a face's surface type from its REAL parsed surface-type
+        one-hot (NOT a curvature threshold).
+
+        Args:
+            face_features: A single face's node-feature vector.
+
+        Returns:
+            ``(surface_type, confidence)`` with ``surface_type`` one of
+            "cylindrical", "planar", "other" or "unknown", and confidence equal
+            to the winning one-hot magnitude (1.0 when the STEP surface type was
+            parsed confidently).
+        """
+        features = self._features_to_numpy(face_features)
+        if features is None or len(features) < 10:
+            return "unknown", 0.0
+        onehot = features[:10]
+        idx = int(np.argmax(onehot))
+        conf = float(onehot[idx])
+        if conf <= 0.0:
+            return "unknown", 0.0
+        name = self._SURFACE_TYPES[idx]
+        if name == "CYLINDER":
+            return "cylindrical", conf
+        if name == "PLANE":
+            return "planar", conf
+        return "other", conf
+
+    @staticmethod
+    def _hole_parameters(feat) -> dict:
+        """Measure hole parameters from a cylindrical face's node features.
+
+        Diameter from the cylinder's mean curvature (``|H| = 1/(2R)`` so
+        ``d = 1/|H|``), falling back to the smallest bbox cross-section; depth
+        from the lateral area (``A = pi*d*h`` so ``h = A/(pi*d)``), falling back
+        to the largest bbox dimension; location from the centroid.
+        """
+        area = float(feat[10])
+        mean_curv = abs(float(feat[12]))
+        centroid = [float(x) for x in feat[16:19]]
+        bbox = [float(x) for x in feat[19:22]]
+
+        if mean_curv > 1e-6:
+            diameter = 1.0 / mean_curv
+        else:
+            cross = sorted(d for d in bbox if d > 1e-9)
+            diameter = cross[0] if cross else 0.0
+
+        if diameter > 1e-9 and area > 0:
+            depth = area / (math.pi * diameter)
+        else:
+            depth = max(bbox) if bbox else 0.0
+
+        return {
+            "diameter": round(diameter, 4),
+            "depth": round(depth, 4),
+            "location": centroid,
+        }
+
+    @staticmethod
+    def _planar_recession(face_idx: int, node_feats) -> dict | None:
+        """Detect a recessed planar face (pocket floor) from real geometry.
+
+        A planar face is recessed when other faces lie farther out along its
+        outward normal (there is material "above" it). Every face centroid is
+        projected onto this face's normal; if the face sits below the outermost
+        projection by more than 10% of the model's extent along that normal, it
+        is a pocket floor whose depth is that recession distance. Width/length
+        come from the face's bbox dimensions, location from its centroid.
+
+        Returns the pocket parameters dict, or None when the face is not
+        recessed (so no pocket is fabricated for flat outer faces).
+        """
+        if node_feats.shape[0] < 3:
+            return None
+        normal = np.asarray(node_feats[face_idx, 13:16], dtype=float)
+        norm = float(np.linalg.norm(normal))
+        if norm < 1e-9:
+            return None
+        normal = normal / norm
+
+        centroids = np.asarray(node_feats[:, 16:19], dtype=float)
+        projections = centroids @ normal
+        self_proj = float(projections[face_idx])
+        max_proj = float(projections.max())
+        recession = max_proj - self_proj
+        extent = float(projections.max() - projections.min())
+        if extent < 1e-9 or recession < 0.1 * extent:
+            return None
+
+        dims = sorted((float(d) for d in node_feats[face_idx, 19:22]), reverse=True)
+        width = dims[0] if dims else 0.0
+        length = dims[1] if len(dims) > 1 else width
+        return {
+            "width": round(width, 4),
+            "length": round(length, 4),
+            "depth": round(recession, 4),
+            "location": [float(x) for x in node_feats[face_idx, 16:19]],
+        }
 
     def _render_views(self, doc, item) -> None:
         """Render views for VLM processing (Stage 1 helper).

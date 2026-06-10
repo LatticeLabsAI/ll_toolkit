@@ -314,18 +314,10 @@ class STEPWebDataset:
 
         try:
             from OCC.Core.STEPControl import STEPControl_Reader
-            from OCC.Core.TopAbs import TopAbs_FACE, TopAbs_EDGE
-            from OCC.Core.TopExp import TopExp_Explorer
-            from OCC.Core.BRepGProp import brepgprop
-            from OCC.Core.GProp import GProp_GProps
-            from OCC.Core.BRepAdaptor import BRepAdaptor_Surface
-            from OCC.Core.GeomAbs import (
-                GeomAbs_Plane, GeomAbs_Cylinder, GeomAbs_Cone,
-                GeomAbs_Sphere, GeomAbs_Torus, GeomAbs_BSplineSurface,
-            )
-            from OCC.Core.TopoDS import topods
             import tempfile
             import os
+
+            from cadling.lib.topology.brep_face_graph import build_brep_face_graph
 
             # Write bytes to temp file (pythonocc requires file path)
             with tempfile.NamedTemporaryFile(suffix=".step", delete=False) as f:
@@ -341,62 +333,12 @@ class STEPWebDataset:
                 reader.TransferRoots()
                 shape = reader.OneShape()
 
-                # Extract faces
-                faces = []
-                face_explorer = TopExp_Explorer(shape, TopAbs_FACE)
-                surf_type_map = {
-                    GeomAbs_Plane: "plane",
-                    GeomAbs_Cylinder: "cylinder",
-                    GeomAbs_Cone: "cone",
-                    GeomAbs_Sphere: "sphere",
-                    GeomAbs_Torus: "torus",
-                    GeomAbs_BSplineSurface: "bspline",
-                }
-
-                while face_explorer.More():
-                    face = topods.Face(face_explorer.Current())
-                    adaptor = BRepAdaptor_Surface(face)
-                    surf_type = adaptor.GetType()
-
-                    props = GProp_GProps()
-                    brepgprop.SurfaceProperties(face, props)
-                    area = props.Mass()
-                    center = props.CentreOfMass()
-
-                    faces.append({
-                        "surface_type": surf_type_map.get(surf_type, "other"),
-                        "area": area,
-                        "centroid": [center.X(), center.Y(), center.Z()],
-                    })
-                    face_explorer.Next()
-
-                # Extract edges (simplified)
-                edges = []
-                edge_explorer = TopExp_Explorer(shape, TopAbs_EDGE)
-
-                while edge_explorer.More():
-                    edge = topods.Edge(edge_explorer.Current())
-                    try:
-                        props = GProp_GProps()
-                        brepgprop.LinearProperties(edge, props)
-                        edges.append({"length": props.Mass()})
-                    except Exception:
-                        edges.append({"length": 0.0})
-                    edge_explorer.Next()
-
-                # Build adjacency
-                num_faces = len(faces)
-                edge_index = [[], []]
-                for i in range(num_faces):
-                    for j in range(i + 1, min(i + 5, num_faces)):
-                        edge_index[0].extend([i, j])
-                        edge_index[1].extend([j, i])
-
-                return {
-                    "faces": faces,
-                    "edges": edges,
-                    "edge_index": edge_index,
-                }
+                # Build the real face-adjacency graph (shared-edge topology +
+                # real per-face/edge geometry) via the shared helper.
+                graph = build_brep_face_graph(shape)
+                if not graph["faces"]:
+                    return None
+                return graph
 
             finally:
                 os.unlink(temp_path)
