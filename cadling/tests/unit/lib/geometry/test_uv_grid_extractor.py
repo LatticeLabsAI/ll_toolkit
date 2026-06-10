@@ -266,3 +266,40 @@ class TestUVGridExtractorIntegration:
             if result is not None:
                 assert result.shape == (num_u, 6)
                 assert np.all(np.isfinite(result))
+
+
+class TestFaceUVGridRegression:
+    """Regression: face UV-grid extraction must SUCCEED on a real face.
+
+    Before the fix, the trimming-mask computation called
+    ``face.visibility_status(uv)`` with numpy-float UV coordinates, which
+    raised a ``gp_Pnt2d`` SWIG overload error on pythonocc/occwl; the broad
+    ``except`` swallowed it and ``extract_uv_grid`` returned ``None`` for
+    *every* face. The other tests here guard their assertions with
+    ``if result is not None:`` and so passed vacuously, hiding the failure.
+    This test asserts success unconditionally on a self-contained box face.
+    """
+
+    @pytest.mark.requires_pythonocc
+    def test_box_face_uv_grid_succeeds(self):
+        pytest.importorskip("OCC")
+        pytest.importorskip("occwl")
+        from OCC.Core.BRepPrimAPI import BRepPrimAPI_MakeBox
+        from OCC.Core.TopAbs import TopAbs_FACE
+        from OCC.Core.TopExp import TopExp_Explorer
+        from OCC.Core.TopoDS import topods
+
+        box = BRepPrimAPI_MakeBox(10.0, 10.0, 10.0).Shape()
+        explorer = TopExp_Explorer(box, TopAbs_FACE)
+        face = topods.Face(explorer.Current())
+
+        result = FaceUVGridExtractor.extract_uv_grid(face, num_u=10, num_v=10)
+        assert result is not None, "face UV-grid extraction must succeed (gp_Pnt2d fix)"
+        assert result.shape == (10, 10, 7)
+        assert np.all(np.isfinite(result))
+
+        trimming = result[:, :, 6]
+        assert np.all((trimming == 0) | (trimming == 1))
+        # A planar box face is fully inside its trimmed region: real material
+        # is sampled (the mask was impossible to populate before the fix).
+        assert trimming.sum() > 0
