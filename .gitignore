@@ -110,8 +110,6 @@ venv.bak/
 # Rope project settings
 .ropeproject
 
-# mkdocs documentation
-/site
 
 # mypy
 .mypy_cache/
@@ -170,3 +168,6 @@ test_data
 research
 results
 .ruff_cache
+site/node_modules
+site/dist
+site/build

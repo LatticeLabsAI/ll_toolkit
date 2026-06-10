@@ -2,6 +2,8 @@
 
 A monorepo of Python packages for CAD document processing, neural networks for 3D geometry, geometric tokenization, optical CAD recognition, and generative CAD modeling.
 
+📚 **Documentation:** <https://latticelabsai.github.io/ll_toolkit/> — per-package guides, tutorials, concepts, and a generated API reference. Source lives in [`site/`](site/).
+
 ## Packages
 
 | Package | Path | Description |
