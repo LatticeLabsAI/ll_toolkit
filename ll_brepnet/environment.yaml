@@ -1,0 +1,25 @@
+# Conda environment for ll_brepnet.
+#
+# IMPORTANT (macOS / Apple Silicon): pytorch MUST come from conda-forge, never
+# from PyPI, to avoid the fatal OpenMP/libomp conflict documented in the repo
+# CLAUDE.md ("OMP: Error #15"). pythonocc-core is conda-only. occwl and
+# pytorch-lightning are pure-Python and installed via pip on top of conda.
+#
+# In practice ll_brepnet shares the existing `cadling` conda env, which already
+# provides pytorch 2.7.1, pythonocc-core 7.8.1.1 and occwl 3.0.0; this file
+# reproduces that stack standalone and adds pytorch-lightning.
+name: ll-brepnet
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - pytorch>=2.0.0
+  - pythonocc-core>=7.8.0
+  - numpy>=1.24.0
+  - scikit-learn>=1.0.0
+  - tqdm>=4.64.0
+  - pip
+  - pip:
+      - occwl>=3.0.0
+      - pytorch-lightning>=2.0.0
+      - -e .

@@ -1,55 +1,32 @@
 ---
-title: ll_brepnet (Planned)
-description: A planned B-Rep face-graph neural network. Not yet implemented — the package is currently an empty scaffold.
+title: ll_brepnet (Implemented)
+description: The planned B-Rep face-graph neural network is now implemented and trained — see the ll_brepnet package docs.
 sidebar:
-  label: ll_brepnet
+  label: ll_brepnet → done
   order: 1
   badge:
-    text: Planned
-    variant: caution
+    text: Done
+    variant: success
 ---
 
-:::caution[Not implemented yet]
-`ll_brepnet` is **planned, not built**. The directory exists in the repository,
-but every file in it is currently empty (0 bytes) — including `pyproject.toml`,
-`requirements.txt`, and all of its Python modules. It is **not** installable,
-importable, or runnable today, and it is intentionally **not** listed among the
-toolkit's shipping packages.
+:::tip[Implemented]
+`ll_brepnet` is **no longer a roadmap item — it is built, trained, and
+documented.** The package extracts the coedge graph + UV-grid geometry from STEP
+solids and trains a face-segmentation model end-to-end.
 
-This page exists so the project's status is honest: the toolkit documents what
-its code actually does. When `ll_brepnet` has a real implementation, it will get
-full Overview / Installation / Usage / API Reference pages like the other
-packages — and a roadmap entry will no longer be needed.
+On a real subset of the **Fusion 360 Gallery segmentation dataset** (official
+8 manufacturing-feature classes, 800-solid held-out test split) it reaches
+**test mIoU ≈ 0.709 / accuracy ≈ 0.912** — competitive with the BRepNet paper's
+reported ~0.65–0.72 mIoU, achieved with an MIT-clean architecture.
 :::
 
-## What it is intended to be
+See the package documentation:
 
-Based on the scaffolded module layout, `ll_brepnet` is intended to be a **B-Rep
-face-graph neural network** in the lineage of UV-Net / BRepNet — models that
-operate directly on the boundary-representation graph of a CAD solid (faces as
-nodes, edges as connections) with UV-grid surface features.
+- [Overview](/ll_toolkit/ll_brepnet/overview/) — architecture, results, per-class IoU
+- [Installation](/ll_toolkit/ll_brepnet/installation/)
+- [Usage](/ll_toolkit/ll_brepnet/usage/) — prepare data, train, and segment STEP files
 
-The planned structure (currently empty placeholders) sketches:
-
-| Area | Planned modules |
-|---|---|
-| Data loading | `dataloaders/brep_dataset.py`, `dataloaders/max_num_faces_loader.py` |
-| Models | `models/ll_brepnet.py`, `models/uvnet_encoders.py` |
-| Pipelines | `pipelines/extract_brepnet_data_from_step.py`, `extract_brepnet_data_from_json.py`, `entity_mapper.py`, `build_dataset_file.py` |
-| Evaluation | `eval/evaluate.py` |
-
-## How it would fit the toolkit
-
-A B-Rep face-graph model complements the existing neural packages:
-
-- [cadling](/ll_toolkit/cadling/overview/) already builds a B-Rep topology graph
-  during parsing — a natural input source.
-- [geotoken](/ll_toolkit/geotoken/overview/) already provides B-Rep
-  graph tokenization (`GraphTokenizer`).
-- [ll_stepnet](/ll_toolkit/ll_stepnet/overview/) covers STEP-text + topology
-  fusion; `ll_brepnet` would specialize in pure face-graph learning.
-
-## Status
-
-There is no code, no tests, and no checkpoints. Follow the repository for
-updates: <https://github.com/LatticeLabsAI/ll_toolkit>.
+It is an independent, MIT-licensed implementation built on the toolkit's own
+B-Rep machinery (`cadling`); inspired by BRepNet
+([arXiv:2104.00706](https://arxiv.org/abs/2104.00706)) and UV-Net but containing
+no code from those projects.

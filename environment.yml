@@ -73,3 +73,9 @@ dependencies:
       - -e ./ll_stepnet
       - -e ./cadling
       - -e ./geotoken
+      - -e ./ll_brepnet
+
+      # ll_brepnet training/eval (pytorch-lightning is pure-Python; pulls
+      # torchmetrics + tensorboard for logging and metrics)
+      - pytorch-lightning>=2.0.0
+      - tensorboard>=2.12.0
