@@ -479,24 +479,41 @@ class AssemblyHierarchyPipeline(BaseCADPipeline):
         return x_overlap and y_overlap and z_overlap
 
     def _load_component_shape(self, comp: AssemblyNode):
-        """Load OCC shape for component (use backend or cached shape).
+        """Load the OCC shape for a component (cached shape or item reference).
+
+        Returns ONLY a genuine, non-null ``TopoDS_Shape``. A missing attribute or
+        a non-shape stand-in (e.g. a ``Mock``, whose attribute access auto-returns
+        truthy children) is rejected and ``None`` is returned, so it never reaches
+        the OCC operations downstream (``TopExp_Explorer``, ``BRepAlgoAPI_Common``)
+        which would otherwise hang on garbage input.
 
         Args:
             comp: Component node
 
         Returns:
-            OCC shape object or None
+            A real ``TopoDS_Shape`` or ``None``.
         """
-        # Try cached shape first
-        if hasattr(comp, "_shape") and comp._shape is not None:
-            return comp._shape
+        try:
+            from OCC.Core.TopoDS import TopoDS_Shape
+        except ImportError:
+            # No pythonocc -> no real shape can exist; nothing to load.
+            return None
 
-        # Try loading from item reference
-        if hasattr(comp, "item") and comp.item:
-            item = comp.item
-            if hasattr(item, "_shape") and item._shape:
-                comp._shape = item._shape  # Cache for future use
-                return item._shape
+        def _is_real_shape(shape) -> bool:
+            return isinstance(shape, TopoDS_Shape) and not shape.IsNull()
+
+        # Try cached shape first.
+        cached = getattr(comp, "_shape", None)
+        if _is_real_shape(cached):
+            return cached
+
+        # Try loading from the item reference.
+        item = getattr(comp, "item", None)
+        if item is not None:
+            item_shape = getattr(item, "_shape", None)
+            if _is_real_shape(item_shape):
+                comp._shape = item_shape  # Cache for future use
+                return item_shape
 
         return None
 

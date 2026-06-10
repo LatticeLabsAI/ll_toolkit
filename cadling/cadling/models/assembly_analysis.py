@@ -451,15 +451,25 @@ class AssemblyAnalysisModel(EnrichmentModel):
                 GeomAbs_Torus,
             )
             from OCC.Core.TopAbs import TopAbs_REVERSED
-            from OCC.Core.TopoDS import topods
+            from OCC.Core.TopoDS import TopoDS_Shape, topods
             from OCC.Core.Bnd import Bnd_Box
             from OCC.Core.BRepBndLib import brepbndlib
 
-            # Get OCC shapes if available
+            # Get OCC shapes if available. Validate they are genuine, non-null
+            # TopoDS_Shape objects before handing them to OCC: a missing
+            # attribute (None) or a non-shape stand-in (e.g. a Mock, whose
+            # attribute access auto-returns truthy children) must NOT reach
+            # BRepExtrema_DistShapeShape, which would otherwise hang on garbage
+            # input.
             shape1 = getattr(part1, '_occ_shape', None)
             shape2 = getattr(part2, '_occ_shape', None)
 
-            if shape1 is None or shape2 is None:
+            if (
+                not isinstance(shape1, TopoDS_Shape)
+                or not isinstance(shape2, TopoDS_Shape)
+                or shape1.IsNull()
+                or shape2.IsNull()
+            ):
                 return contacts
 
             # Precise minimum distance between shapes
@@ -785,10 +795,14 @@ class AssemblyAnalysisModel(EnrichmentModel):
             try:
                 from OCC.Core.BRepBndLib import brepbndlib
                 from OCC.Core.Bnd import Bnd_Box
+                from OCC.Core.TopoDS import TopoDS_Shape
 
                 for nid, node in part_nodes:
                     shape = getattr(node.get("item"), "_occ_shape", None)
-                    if shape is not None:
+                    # Only feed genuine, non-null TopoDS_Shapes to OCC: a missing
+                    # attribute (None) or a non-shape stand-in (e.g. a Mock)
+                    # would otherwise hang brepbndlib.Add on garbage input.
+                    if isinstance(shape, TopoDS_Shape) and not shape.IsNull():
                         bbox = Bnd_Box()
                         brepbndlib.Add(shape, bbox)
                         aabbs[nid] = bbox.Get()  # (xmin,ymin,zmin,xmax,ymax,zmax)
