@@ -80,12 +80,25 @@ trainer = STEPTrainer(model=STEPForClassification(num_classes=10),
 trainer.train(num_epochs=10, save_every=2)
 ```
 
-:::caution[Train before you trust outputs]
-The models ship **untrained**. A randomly-initialized network produces
-meaningless predictions — train it on STEP data (labels as integers for
-classification, or float vectors for property prediction) before relying on
-outputs.
+:::tip[A trained classifier ships; train other heads before trusting them]
+`STEPForClassification` ships **trained** — face-count complexity from real DeepCAD
+models, **val acc 0.976** (vs 0.436 majority), with a native-MLX port that reproduces it
+exactly on Apple Silicon. The other heads (property prediction, similarity, captioning,
+QA) ship as architectures — a randomly-initialized network produces meaningless
+predictions, so train them on STEP data (integer labels for classification, float
+vectors for property prediction) before relying on outputs.
 :::
+
+## Native MLX (Apple Silicon)
+
+`ll_stepnet/mlx/train_classification_mlx.py` runs the classifier natively in MLX. It
+converts the real PyTorch checkpoint and **proves parity** (100% argmax agreement,
+identical 0.976 accuracy), and can also train the faithful architecture from scratch:
+
+```bash
+python ll_stepnet/mlx/train_classification_mlx.py --mode parity   # convert + verify vs PyTorch
+python ll_stepnet/mlx/train_classification_mlx.py --mode train    # native-MLX training
+```
 
 ## Generative models
 

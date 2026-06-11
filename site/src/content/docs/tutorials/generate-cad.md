@@ -10,13 +10,14 @@ In this tutorial you will run [ll_gen](/ll_toolkit/ll_gen/overview/)'s
 propose→dispose loop and then train a proof-of-life neural generator. Allow
 ~20 minutes (training is short and CPU-friendly).
 
-:::caution[Set expectations first]
-ll_gen's neural generators ship **untrained** — random weights produce mostly
-invalid geometry. The *dispose* stage (CadQuery execution + validation) and the
-RL loop are real. This tutorial shows the loop working end to end and a
-before/after validity measurement, not a production model. Read
+:::note[Two generator generations]
+This tutorial walks the **orchestrator + RL loop** with a from-scratch generator so you
+can see the propose→dispose loop and a before/after validity measurement end to end. For
+generators that already **produce valid CAD**, jump to
+[Generate valid CAD (trained, MLX)](#5-generate-valid-cad-trained-mlx) below — the
+autoregressive command generator (0.914 valid) and latent diffusion (0.934 valid). Read
 [The reality of AI CAD generation](/ll_toolkit/concepts/the-reality-of-ai-cad-generation/)
-for the why.
+for why generating the program and executing it is the reliable route.
 :::
 
 ## 1. Generate from a prompt
@@ -95,6 +96,28 @@ python -m ll_gen.training.run \
 ```
 
 The command prints a metrics JSON with reward, advantage, baseline, and loss.
+
+## 5. Generate valid CAD (trained, MLX)
+
+The generators that actually produce valid CAD take the **construction-program** route —
+generate the command program and execute it, so the kernel builds a watertight solid.
+They train and run natively in MLX on Apple Silicon:
+
+```bash
+# Autoregressive command generator: trains on real DeepCAD programs, then samples + executes.
+# Reports validity through the real kernel, gated on a non-degenerate solid.
+python ll_gen/mlx/ar_generator_mlx.py --mode train
+# -> validity 0.914 (234/256), distinct 104, non-degenerate
+
+# Latent diffusion over a program autoencoder: sample z -> decode -> execute.
+python ll_gen/mlx/latent_diffusion_mlx.py --mode train
+# -> sampled-z validity 0.934 (239/256), distinct 138  (vs a z=0 mean baseline: 14 distinct)
+```
+
+Both report `num_distinct` alongside validity, so a high rate from one repeated shape
+(mode collapse) is visible. The latent-diffusion run prints **sampled-z** validity (noise
+→ denoise → decode → execute) against a `z=0` predict-the-mean baseline — the comparison
+that proves the diffusion adds diversity rather than repeating the mean shape.
 
 ## Where to next
 

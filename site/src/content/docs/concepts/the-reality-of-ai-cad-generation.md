@@ -74,13 +74,28 @@ These are architecturally unrelated and routinely confused:
 
 ## What to expect from this toolkit
 
-The toolkit's neural packages ship **untrained** — they are architectures and
-training loops, not finished models. Treat generated output as a starting point
-to be validated, never as a manufacturing-ready part. The honest near-term value
-of neural CAD is prototyping, concept exploration, and education — with a human
-doing the majority of the design effort. The toolkit is built to make the
-*reliable* part (kernel execution + validation) load-bearing, and the
-*unreliable* part (the neural proposal) improvable through training and RL.
+The toolkit now ships **trained** generators — and they confirm the thesis above. The
+[ll_gen](/ll_toolkit/ll_gen/overview/) generators that produce valid CAD are the ones
+that generate the **construction program** and execute it: an autoregressive command
+model (**0.914** valid) and a latent diffusion over a program autoencoder (**0.934**
+valid), both measured through the real kernel and gated on a non-degenerate solid. The
+route that *doesn't* work is the one that generates raw B-rep faces to be sewn — its
+independently-sampled faces never mate, so honest validity is **0**. That is the
+"code → kernel → validate" lesson made concrete in this codebase: validity comes from
+the executable representation, not from a richer neural sampler.
+
+Still, treat generated output as a starting point to be validated, never as a
+manufacturing-ready part. These models are trained on the DeepCAD distribution of
+parametric sketch-and-extrude programs; quality drops off for high-complexity designs,
+and a human does the majority of real design effort. The toolkit makes the *reliable*
+part (kernel execution + validation) load-bearing, and the *neural* part improvable.
+
+:::note[Honest measurement]
+Validity here is gated on a real closed solid with positive volume — `BRepCheck` alone
+passes volume-less degenerates (an earlier metric scored a broken generator at 1.0 while
+it produced 0 real solids). The harness also reports distinct-shape counts so a high rate
+from one repeated shape is visible, not hidden.
+:::
 
 ## See also
 

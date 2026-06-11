@@ -77,6 +77,21 @@ convolution. (An earlier 4,800-solid subset run reached 0.709; training on the
 full set raised it to 0.828 and lifted the rare **RevolveEnd** class from 0.11
 to 0.55.)
 
+## Native MLX (Apple Silicon)
+
+A native-MLX port (`ll_brepnet/mlx/train_brepnet_mlx.py`) reproduces the exact
+architecture — UV-Net encoders with BatchNorm + the coedge message-passing encoder
+(input projection, residual coedge convolutions with LayerNorm, output projection) — and
+**converts the real trained checkpoint** into MLX. Driving both models from the same
+`BRepDataset`, it is verified at **100% per-face argmax agreement** with PyTorch and an
+**identical mIoU (0.835 on the measured subset)**, so the MLX model *is* the trained GNN
+running on Apple Silicon (the conversion handles Conv `OIHW→OHWI`/`OIW→OWI` permutes and
+inference-mode BatchNorm running stats):
+
+```bash
+python ll_brepnet/mlx/train_brepnet_mlx.py --mode parity   # convert real weights + verify
+```
+
 :::note[Scope]
 The repository ships the training/eval code and this reproducible recipe; the
 trained checkpoint (~4.8 MB) is produced by the run in **Usage** rather than

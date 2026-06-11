@@ -8,7 +8,9 @@ sidebar:
 
 This page looks inside the architectures, with the concrete shapes and choices
 that make them work. The numbers are drawn from the primary research papers and
-describe the field — not LatticeLabs' (untrained) models.
+describe the field; where the toolkit's *own* trained models are referenced, they are
+labeled as such (see [ll_gen](/ll_toolkit/ll_gen/overview/) for the toolkit's measured
+generation results).
 
 ## The four architectural families
 

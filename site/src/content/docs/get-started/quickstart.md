@@ -65,12 +65,28 @@ topology = builder.build_complete_topology(
 embedding = encoder(token_ids, topology_data=topology)  # [1, 1024]
 ```
 
-:::note[Models ship untrained]
-The neural packages (`ll_stepnet`, `ll_ocadr`, `ll_gen`) ship with
-architectures but **no trained checkpoints**. Until you train them, their
-outputs are not meaningful predictions. Each package's pages explain how to
-train or run a proof-of-life model.
+:::note[Which models are trained]
+Several models now ship **trained** with reproducible, honest metrics:
+**ll_brepnet** (B-Rep segmentation, test mIoU 0.828), **ll_stepnet** (face-count
+classifier, val acc 0.976), **ll_ocadr** (geometry-grounded, 0.919 vs 0.313 shuffled),
+and **ll_gen**'s program-based generators (valid CAD: AR 0.914 / latent diffusion 0.934).
+The neural models train and run natively in **MLX on Apple Silicon** as well as PyTorch.
+Remaining task heads (e.g. ll_stepnet property prediction/QA) ship as architectures —
+train them on your data before relying on their outputs.
 :::
+
+## Train / run natively on Apple Silicon (MLX)
+
+Each neural package has an `mlx/` trainer that runs on Apple Silicon. The ones with
+existing PyTorch checkpoints convert the real weights and prove parity:
+
+```bash
+python ll_stepnet/mlx/train_classification_mlx.py --mode parity   # acc 0.976, argmax 1.0 vs PyTorch
+python ll_brepnet/mlx/train_brepnet_mlx.py        --mode parity   # mIoU parity vs PyTorch
+python ll_gen/mlx/ar_generator_mlx.py             --mode train    # valid CAD generation 0.914
+python ll_gen/mlx/latent_diffusion_mlx.py         --mode train    # latent-diffusion generation 0.934
+python ll_ocadr/mlx/train_ocadr_mlx.py            --mode train    # geometry-grounded multimodal
+```
 
 ## Where to go next
 

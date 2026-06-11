@@ -56,12 +56,29 @@ vLLM's `ModelRegistry` and does **not** implement `SupportsMultiModal`, so it
 cannot be served by the vLLM engine as written. Use the HF-native path above.
 :::
 
+## Native MLX — a trained, geometry-grounded model
+
+`ll_ocadr/mlx/train_ocadr_mlx.py` trains the **real** geometry tower natively on Apple
+Silicon: a faithful MLX port of GeometryNet (PointNet++) + ShapeNet (Point-BERT) +
+projector — **forward-parity-verified at ~1e-6** against the PyTorch encoders
+(`ll_ocadr/mlx/faithful_tower_mlx.py`) — projects a CAD point cloud into 256 mesh tokens
+spliced into a frozen 4-bit Qwen2, with LoRA + the encoder trained jointly. On a held-out
+CAD point-cloud → class task it reaches **llm-generation accuracy 0.919 vs a shuffled-mesh
+control of 0.313** (majority 0.374) — i.e. the model genuinely *reads the geometry* and
+verbalizes it, rather than guessing from the text prior.
+
+```bash
+python ll_ocadr/mlx/faithful_tower_mlx.py --mode parity   # prove the tower == real encoders
+python ll_ocadr/mlx/train_ocadr_mlx.py    --mode train    # train encoder + projector + LoRA
+```
+
 ## Status
 
-:::note[Maturity: HF-native runnable; models untrained]
-The HF-native model, encoders, and inference script are real and tested. Like the
-other neural packages, ll_ocadr **ships no trained weights** — a tiny offline LM
-is used in tests. vLLM serving is planned future work.
+:::tip[Trained via MLX; HF-native path real; vLLM experimental]
+The native-MLX path produces a **genuinely trained, geometry-grounded model** (0.919 vs
+0.313 shuffled). The HF-native PyTorch model, encoders, and inference script are real and
+tested (a tiny offline LM is used in unit tests). vLLM serving remains experimental /
+future work (see the caution above).
 :::
 
 Use the sidebar for **Installation**, **Usage**, and the **API Reference**.
