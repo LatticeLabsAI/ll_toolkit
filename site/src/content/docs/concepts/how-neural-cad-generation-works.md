@@ -73,6 +73,16 @@ with newer holistic-latent approaches pushing past 80%. Common failure modes:
 non-watertight solids, self-intersections, dangling edges, broken
 face-edge-vertex connectivity.
 
+:::note[Measured in this toolkit]
+This shows up concretely in [ll_gen](/ll_toolkit/ll_gen/overview/): a diffusion that
+denoises **independent face grids** and sews them reaches **0** valid solids on the
+honest solid+volume gate — the sampled faces never mate. Re-targeting the same idea to
+diffuse a **construction-program** latent and decode it autoregressively (so the kernel
+*builds* the solid) reaches **0.934** sampled-z validity, and the autoregressive command
+model reaches **0.914** — both measured through the real kernel. These are the toolkit's
+own numbers, not the literature figures above.
+:::
+
 ## The role of reinforcement learning
 
 A recurring result: **RL alignment with solver/kernel feedback** unlocks large

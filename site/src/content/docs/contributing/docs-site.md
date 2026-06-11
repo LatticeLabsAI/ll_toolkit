@@ -32,7 +32,7 @@ site/src/content/docs/
   guides/                  # task-oriented how-tos
   <pkg>/                   # one per package: overview, installation, usage
     reference/             # GENERATED API reference (do not hand-edit)
-  roadmap/                 # planned, not-yet-built packages (e.g. ll_brepnet)
+  roadmap/                 # roadmap + shipped milestones (e.g. ll_brepnet → done)
   contributing/            # this section
 ```
 

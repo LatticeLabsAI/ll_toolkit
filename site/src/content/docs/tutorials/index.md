@@ -14,7 +14,7 @@ the toolkit.
 |---|---|---|
 | [Parse a STEP file](/ll_toolkit/tutorials/parse-a-step-file/) | cadling | convert a CAD file to a structured document and export it |
 | [Tokenize a mesh](/ll_toolkit/tutorials/tokenize-a-mesh/) | geotoken | turn a mesh into tokens and measure the quantization impact |
-| [Generate CAD](/ll_toolkit/tutorials/generate-cad/) | ll_gen | run the propose→dispose loop and train a proof-of-life model |
+| [Generate CAD](/ll_toolkit/tutorials/generate-cad/) | ll_gen | run the propose→dispose loop and train generators that produce valid CAD |
 | [OCADR HF inference](/ll_toolkit/tutorials/ocadr-hf-inference/) | ll_ocadr | feed geometry into a language model and read its description |
 
 For conceptual background, see [Concepts](/ll_toolkit/concepts/); for terse
