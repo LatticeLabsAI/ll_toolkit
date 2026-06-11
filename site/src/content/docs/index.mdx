@@ -18,10 +18,11 @@ import { Card, CardGrid, LinkCard, Badge } from '@astrojs/starlight/components';
 
 export const base = import.meta.env.BASE_URL;
 
-The **LatticeLabs Toolkit** is a monorepo of six Python packages that bring 3D
+The **LatticeLabs Toolkit** is a monorepo of seven Python packages that bring 3D
 CAD geometry into the AI ecosystem — parsing CAD files, tokenizing geometry,
-running neural models over STEP/B-Rep data, recognizing geometry for LLMs,
-processing point clouds, and generating parametric CAD.
+running neural models over STEP/B-Rep data, segmenting B-Rep faces, recognizing
+geometry for LLMs, processing point clouds, and generating parametric CAD. The
+neural models train and run **natively in MLX on Apple Silicon** as well as PyTorch.
 
 Each package is independently installable and documented here. The pages below
 describe **what actually exists in the code today** — maturity is called out per
@@ -38,8 +39,13 @@ what is planned.
 	/>
 	<LinkCard
 		title="ll_stepnet"
-		description="Neural networks for STEP/B-Rep files: tokenizer, feature extractor, topology builder, transformer+GNN encoder, and task heads."
+		description="Neural networks for STEP/B-Rep files: tokenizer, feature extractor, topology builder, transformer+GNN encoder, and task heads. Trained classifier (0.976), native MLX."
 		href={base + 'll_stepnet/overview/'}
+	/>
+	<LinkCard
+		title="ll_brepnet"
+		description="B-Rep face segmentation (UV-Net + coedge message passing). Trained on the full Fusion 360 split — test mIoU 0.828. Native MLX (parity-verified)."
+		href={base + 'll_brepnet/overview/'}
 	/>
 	<LinkCard
 		title="geotoken"
@@ -53,7 +59,7 @@ what is planned.
 	/>
 	<LinkCard
 		title="ll_gen"
-		description="Generation orchestration: neural propose, deterministic dispose in a CadQuery sandbox, REINFORCE training loop. Models ship untrained."
+		description="Generation orchestration: neural propose, deterministic dispose in a kernel sandbox. Trained program-based generators produce measured-valid CAD (AR 0.914 / latent diffusion 0.934)."
 		href={base + 'll_gen/overview/'}
 	/>
 	<LinkCard
@@ -74,9 +80,16 @@ what is planned.
 
 ## Project status
 
-<Card title="On the horizon" icon="rocket">
-	**ll_brepnet** — a planned B-Rep face-graph network — is not yet implemented
-	(the directory is an empty scaffold). It is tracked honestly on the{' '}
-	<a href={base + 'roadmap/ll_brepnet/'}>Roadmap</a> rather than documented as if
-	it worked. <Badge text="Planned" variant="caution" />
+<Card title="Recently shipped" icon="rocket">
+	**ll_brepnet** — the B-Rep face-segmentation network — is built, trained, and
+	documented: **test mIoU 0.828** on the full Fusion 360 split, with a parity-verified
+	native-MLX port. See its <a href={base + 'll_brepnet/overview/'}>docs</a> and the{' '}
+	<a href={base + 'roadmap/ll_brepnet/'}>Roadmap</a>. <Badge text="Trained" variant="success" />
+
+	**ll_gen generation** now produces measured-valid CAD via the construction-program
+	route (autoregressive command generator + latent diffusion), gated on real
+	non-degenerate solids. <Badge text="Generates valid CAD" variant="success" />
+
+	Still experimental: **vLLM serving** for ll_ocadr (the HF-native path works today).
+	<Badge text="Planned" variant="caution" />
 </Card>

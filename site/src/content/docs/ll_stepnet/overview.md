@@ -5,8 +5,8 @@ sidebar:
   label: Overview
   order: 1
   badge:
-    text: Untrained
-    variant: caution
+    text: Trained + MLX
+    variant: success
 ---
 
 **ll_stepnet** is a neural-network package for processing STEP / B-Rep CAD
@@ -56,15 +56,21 @@ print(features["entity_type"], features["numeric_params"])
 
 ## Status
 
-:::caution[Maturity: architectures present, models untrained]
-ll_stepnet provides full model architectures and a trainer, but **ships no
-trained checkpoints**. A randomly-initialized model produces meaningless
-predictions until you train it on STEP data. See **Usage** (in the sidebar) for
-the training loop.
+:::tip[First real trained checkpoint + native MLX]
+ll_stepnet now ships a **trained classifier**: `STEPForClassification` trained on real
+DeepCAD models to predict face-count complexity (≤4 / 5–6 / 7+ faces, a geometric label
+derived from the reconstructed solid). **Validation accuracy 0.976** vs a 0.436
+majority-class baseline (per-class 0.991 / 0.978 / 0.933). A **native-MLX port**
+(`ll_stepnet/mlx/train_classification_mlx.py`) loads those exact trained weights and
+reproduces the PyTorch model on Apple Silicon — verified at **100% argmax agreement,
+identical 0.976 accuracy** (`--mode parity`). The other task heads (property prediction,
+similarity, captioning, QA) provide architectures + trainers; train them on your data
+before relying on their outputs.
 :::
 
 `stepnet` also provides the generative models (`STEPVAE`, `StructuredDiffusion`,
-`VQVAEModel`, `CADGenerationPipeline`) that [ll_gen](/ll_toolkit/ll_gen/overview/)
-drives for neural CAD generation.
+`VQVAEModel`, `CADGenerationPipeline`). The valid-CAD generation path now lives in
+[ll_gen](/ll_toolkit/ll_gen/overview/) as trained, program-based generators
+(autoregressive command model + latent diffusion).
 
 Use the sidebar for **Installation**, **Usage**, and the **API Reference**.

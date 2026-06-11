@@ -60,6 +60,30 @@ All paths converge on the `DisposalEngine`, which executes the proposal,
 validates the result (`DisposalResult`, `GeometryReport`), and can apply
 `RepairAction`s.
 
+## Trained generators that produce valid CAD (native MLX)
+
+Two trained generators take the **construction-program** route — generate the command
+program and *execute* it — so the kernel builds a watertight solid. They run natively in
+MLX on Apple Silicon and report validity **measured through the real kernel**, gated on a
+non-degenerate solid (closed solid with positive volume):
+
+```bash
+# Autoregressive command generator — trained on real DeepCAD programs.
+# Result: validity 0.914 (234/256), 104 distinct, non-degenerate.
+python ll_gen/mlx/ar_generator_mlx.py --mode train
+
+# Latent diffusion over a program autoencoder.
+# Result: sampled-z validity 0.934 (239/256), 138 distinct.
+python ll_gen/mlx/latent_diffusion_mlx.py --mode train
+```
+
+For the latent diffusion the headline metric is **sampled-z** validity
+(noise → denoise → decode → execute), reported against a `z=0` predict-the-mean
+baseline so a diverse generator is distinguishable from one that repeats the mean shape.
+A faithful MLX port of the command-VAE (`python ll_gen/mlx/vae_mlx.py --mode parity`)
+reproduces the PyTorch model exactly, but that parallel-decoder VAE is itself a weak
+generator (~0–12% valid) — the program-based generators above are the valid-CAD path.
+
 ## Train the neural generators (REINFORCE)
 
 The RL alignment loop rewards proposals that dispose into valid solids:
@@ -94,12 +118,15 @@ python -m ll_gen.training.proof_of_life \
 It reports `validity_rate` **and** `num_distinct_valid` at both points plus the
 per-epoch curve.
 
-:::caution[Models ship untrained]
-Out of the box the neural generators are randomly initialized — their prior
-samples are mostly invalid. The dispose stage and the RL loop are real and run
-end-to-end; meaningful generation requires training. See
+:::note[Two generator generations — know which you're running]
+The **program-based** generators (`ar_generator_mlx.py`, `latent_diffusion_mlx.py`) are
+**trained** and produce measured-valid CAD (0.914 / 0.934 valid). The **legacy**
+neural generators reachable from the orchestrator (`vae`, `vqvae`, `diffusion` via the
+REINFORCE loop) are randomly initialized out of the box — their prior samples are mostly
+invalid until trained, and the raw-geometry diffusion is limited by representation
+(independently-sampled faces don't mate). See
 [The reality of AI CAD generation](/ll_toolkit/concepts/the-reality-of-ai-cad-generation/)
-for why the propose→dispose design is the reliable part.
+for why generating the program and executing it is the reliable route.
 :::
 
 ## Related

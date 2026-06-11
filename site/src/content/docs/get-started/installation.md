@@ -77,6 +77,19 @@ pip install -e ".[all]"        # Everything
 available through conda, not PyPI. It is included in `environment.yml`.
 :::
 
+## Native MLX (Apple Silicon)
+
+The neural models also train and run natively in **[MLX](https://github.com/ml-explore/mlx)**
+on Apple Silicon (M-series). Each package's `mlx/` trainers convert the real PyTorch
+checkpoints and verify parity, or train from scratch — see each package's Usage page.
+
+```bash
+pip install mlx mlx-lm   # in the conda env; mlx-lm is used by ll_ocadr's LLM splice
+```
+
+The OCC kernel (`pythonocc-core`) is still required for the generation packages, since
+validity is measured by executing generated programs through the real kernel.
+
 ## Next steps
 
 Continue to the [Quickstart](/ll_toolkit/get-started/quickstart/) for a first
