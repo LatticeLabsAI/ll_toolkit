@@ -12,8 +12,9 @@ A monorepo of Python packages for CAD document processing, neural networks for 3
 | **ll-stepnet** | [`ll_stepnet/`](ll_stepnet/) | Neural network package for STEP/B-Rep CAD files. Tokenization, feature extraction, topology encoding, and task-specific models. |
 | **geotoken** | [`geotoken/`](geotoken/) | Geometric tokenizer with adaptive quantization for CAD and mesh data. Mesh, parametric, and topology-level tokenization. |
 | **ll-ocadr** | [`ll_ocadr/`](ll_ocadr/) | Optical CAD Recognition. DeepSeek-OCR-inspired 3D geometry processing for LLMs (tiled chunks + global context). HF-native inference (`run_ll_ocadr_hf.py`); vLLM serving is experimental/future. |
-| **ll-gen** | [`ll_gen/`](ll_gen/) | Generation orchestration: neural propose, deterministic dispose. Neural generators (VAE/diffusion/VQ-VAE) + CadQuery sandbox + REINFORCE training loop (`python -m ll_gen.training.run`). Models ship untrained. |
+| **ll-gen** | [`ll_gen/`](ll_gen/) | Generation orchestration: neural propose, deterministic dispose in a kernel sandbox. Ships DeepCAD-trained, program-based generators (native MLX) that produce measured-valid CAD — an autoregressive command generator (validity 0.914) and a latent diffusion (sampled-z 0.934), measured through the real kernel. Includes the propose/dispose sandbox + REINFORCE alignment loop (`python -m ll_gen.training.run`); the legacy VAE/VQ-VAE orchestrator generators ship untrained. |
 | **ll-clouds** | [`ll_clouds/`](ll_clouds/) | Point-cloud processing & analysis (NumPy/SciPy): PLY/PCD/XYZ I/O + mesh sampling, normalize/voxel/FPS/outlier preprocessing, normals & curvature, ICP registration, RANSAC/Euclidean segmentation, lazy cadling/ll_ocadr bridges. |
+| **ll-brepnet** | [`ll_brepnet/`](ll_brepnet/) | B-Rep face-segmentation network (UV-Net / BRepNet lineage) over coedge topology + UV-grid geometry. Trained on the Fusion 360 Segmentation split (test mIoU 0.828) with a parity-verified native-MLX port. MIT-licensed, built on cadling's B-Rep machinery (no BRepNet/UV-Net code — see [`ATTRIBUTION.md`](ll_brepnet/ATTRIBUTION.md)). |
 
 ## Quick Start
 
@@ -166,6 +167,14 @@ ll_toolkit/
     tests/
   ll_gen/            # Generation orchestration
     ll_gen/          #   Python package
+    mlx/             #   native-MLX trained generators
+    tests/
+  ll_clouds/         # Point-cloud processing & analysis
+    ll_clouds/       #   Python package
+    tests/
+  ll_brepnet/        # B-Rep face-segmentation network (UV-Net/BRepNet lineage)
+    ll_brepnet/      #   Python package
+    mlx/             #   native-MLX trainer
     tests/
   docs/              # Research docs and plans
   pyproject.toml     # Root config (tooling, shared deps)
