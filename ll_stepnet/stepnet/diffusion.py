@@ -848,8 +848,14 @@ class StructuredDiffusion(nn.Module):
             ``face_grids`` [B, N_faces, U, V, 3] and ``edge_points``
             [B, N_edges, M, 3].
         """
-        if device is None:
-            device = next(self.parameters()).device
+        # The denoiser weights determine where compute must happen. Always sample
+        # on the weights' device: a caller-supplied device that disagrees with the
+        # weights (e.g. a generator whose ``.device`` attribute was not updated
+        # after the model was ``.to()``'d) would otherwise crash at the first
+        # Linear with "input is on cpu but expected on mps".
+        param_device = next(self.parameters()).device
+        if device is None or torch.device(device) != param_device:
+            device = param_device
 
         results: Dict[str, torch.Tensor] = {}
         prev_denoised: Optional[torch.Tensor] = None

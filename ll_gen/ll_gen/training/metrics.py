@@ -103,8 +103,29 @@ class MetricsComputer:
         self.num_bins = num_bins
         self.kernel_bandwidth = kernel_bandwidth
 
+    @staticmethod
+    def is_valid_solid(result: DisposalResult) -> bool:
+        """Honest validity gate: a sample counts as valid only if it passes
+        BRepCheck (``is_valid``) AND forms a non-degenerate solid.
+
+        ``is_valid`` (BRepCheck) alone passes volume-less shells and zero-volume
+        degenerates, so a generator that emits unsewable faces can score ~1.0
+        while producing zero real CAD solids. We therefore additionally require a
+        closed solid with positive volume whenever a geometry report is present.
+        Abstract stand-ins without a geometry report (unit tests) fall back to
+        ``is_valid`` so the rate arithmetic stays testable.
+        """
+        if not getattr(result, "is_valid", False):
+            return False
+        gr = getattr(result, "geometry_report", None)
+        if gr is None:
+            return True
+        is_solid = bool(getattr(gr, "is_solid", False) or getattr(gr, "solid_count", 0) >= 1)
+        vol = getattr(gr, "volume", None)
+        return is_solid and vol is not None and vol > 1e-4
+
     def compute_validity_rate(self, results: list[DisposalResult]) -> float:
-        """Compute fraction of valid samples.
+        """Compute fraction of valid samples (honest, non-degenerate-solid gated).
 
         Args:
             results: List of disposal results.
@@ -114,7 +135,7 @@ class MetricsComputer:
         """
         if not results:
             return 0.0
-        valid_count = sum(1 for r in results if r.is_valid)
+        valid_count = sum(1 for r in results if self.is_valid_solid(r))
         return valid_count / len(results)
 
     def compute_compile_rate(self, results: list[DisposalResult]) -> float:
@@ -485,7 +506,7 @@ class MetricsComputer:
             mean_reward=mean_reward,
             reward_std=reward_std,
             num_samples=len(results),
-            num_valid=sum(1 for r in results if r.is_valid),
+            num_valid=sum(1 for r in results if self.is_valid_solid(r)),
             num_compiled=sum(1 for r in results if r.has_shape),
             num_distinct_valid=num_distinct_valid,
         )
@@ -509,7 +530,7 @@ class MetricsComputer:
         """
         seen: set[Any] = set()
         for idx, r in enumerate(results):
-            if not r.is_valid:
+            if not self.is_valid_solid(r):
                 continue
             dims = r.geometry_report.bbox_dimensions if r.geometry_report else None
             if dims is None:

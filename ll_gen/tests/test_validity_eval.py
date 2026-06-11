@@ -56,12 +56,13 @@ class _FakeGenerator(BaseNeuralGenerator):
 
 def _valid_result() -> DisposalResult:
     # has_shape is derived from `shape is not None`; a truthy sentinel marks a
-    # constructed, valid shape. The reward now requires a closed solid for full
-    # credit, so a "valid result" fixture carries a solid geometry report.
+    # constructed, valid shape. The validity gate now requires a NON-DEGENERATE
+    # closed solid (BRepCheck alone passes volume-less shells), so a "valid
+    # result" fixture carries a solid geometry report WITH positive volume.
     return DisposalResult(
         shape=object(),
         is_valid=True,
-        geometry_report=GeometryReport(solid_count=1, is_solid=True),
+        geometry_report=GeometryReport(solid_count=1, is_solid=True, volume=1.0),
     )
 
 
