@@ -366,13 +366,27 @@ class STEPVAE(nn.Module):
 
             if param_targets is not None:
                 param_loss = torch.tensor(0.0, device=token_ids.device)
+                num_contributing = 0
                 for i, head_logits in enumerate(param_logits):
                     p_target = param_targets[..., i].reshape(-1)
+                    # A parameter slot that is inactive for every command in the
+                    # batch produces an all-``ignore_index`` target.  In that
+                    # case F.cross_entropy averages over zero elements and
+                    # returns NaN, which poisons recon_loss and the total loss.
+                    # The 6-command CAD schema only ever activates slots 0-7, so
+                    # heads 8-15 are always all-ignored — without this guard the
+                    # supervised forward is unusable.  Only accumulate heads that
+                    # carry a supervised target somewhere in the batch, and
+                    # average over those contributing heads.
+                    if not torch.any(p_target != -1):
+                        continue
                     p_logits = head_logits.reshape(-1, self.num_param_levels)
                     param_loss = param_loss + F.cross_entropy(
                         p_logits, p_target, ignore_index=-1
                     )
-                recon_loss = recon_loss + param_loss / len(param_logits)
+                    num_contributing += 1
+                if num_contributing > 0:
+                    recon_loss = recon_loss + param_loss / num_contributing
 
             outputs["recon_loss"] = recon_loss
             outputs["loss"] = recon_loss + self.beta * kl_loss
