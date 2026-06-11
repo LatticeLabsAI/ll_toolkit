@@ -15,7 +15,7 @@ This tutorial walks the **orchestrator + RL loop** with a from-scratch generator
 can see the propose→dispose loop and a before/after validity measurement end to end. For
 generators that already **produce valid CAD**, jump to
 [Generate valid CAD (trained, MLX)](#5-generate-valid-cad-trained-mlx) below — the
-autoregressive command generator (0.914 valid) and latent diffusion (0.934 valid). Read
+autoregressive command generator ({{metric.ll_gen.ar.validity}} valid) and latent diffusion ({{metric.ll_gen.latentDiffusion.sampledZValidity}} valid). Read
 [The reality of AI CAD generation](/ll_toolkit/concepts/the-reality-of-ai-cad-generation/)
 for why generating the program and executing it is the reliable route.
 :::
@@ -106,18 +106,18 @@ They train and run natively in MLX on Apple Silicon:
 ```bash
 # Autoregressive command generator: trains on real DeepCAD programs, then samples + executes.
 # Reports validity through the real kernel, gated on a non-degenerate solid.
-python ll_gen/mlx/ar_generator_mlx.py --mode train
-# -> validity 0.914 (234/256), distinct 104, non-degenerate
+python {{script.ll_gen.arGenerator}} --mode train
+# -> validity {{metric.ll_gen.ar.validity}} ({{metric.ll_gen.ar.validFraction}}), distinct {{metric.ll_gen.ar.distinct}}, non-degenerate
 
 # Latent diffusion over a program autoencoder: sample z -> decode -> execute.
-python ll_gen/mlx/latent_diffusion_mlx.py --mode train
-# -> sampled-z validity 0.934 (239/256), distinct 138  (vs a z=0 mean baseline: 14 distinct)
+python {{script.ll_gen.latentDiffusion}} --mode train
+# -> sampled-z validity {{metric.ll_gen.latentDiffusion.sampledZValidity}} ({{metric.ll_gen.latentDiffusion.validFraction}}), distinct {{metric.ll_gen.latentDiffusion.distinct}}  (vs a z=0 mean baseline: {{metric.ll_gen.latentDiffusion.baselineDistinct}} distinct)
 ```
 
 Both report `num_distinct` alongside validity, so a high rate from one repeated shape
-(mode collapse) is visible. The latent-diffusion run prints **sampled-z** validity (noise
-→ denoise → decode → execute) against a `z=0` predict-the-mean baseline — the comparison
-that proves the diffusion adds diversity rather than repeating the mean shape.
+(mode collapse) is visible. The latent-diffusion run prints **sampled-z** validity against
+a `z=0` predict-the-mean baseline — see [ll_gen Usage](/ll_toolkit/ll_gen/usage/) for what
+that metric means and why the baseline matters.
 
 ## Where to next
 

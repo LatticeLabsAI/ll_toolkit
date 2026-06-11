@@ -96,8 +96,8 @@ converts the real PyTorch checkpoint and **proves parity** (100% argmax agreemen
 identical 0.976 accuracy), and can also train the faithful architecture from scratch:
 
 ```bash
-python ll_stepnet/mlx/train_classification_mlx.py --mode parity   # convert + verify vs PyTorch
-python ll_stepnet/mlx/train_classification_mlx.py --mode train    # native-MLX training
+python {{script.ll_stepnet.classification}} --mode parity   # convert + verify vs PyTorch
+python {{script.ll_stepnet.classification}} --mode train    # native-MLX training
 ```
 
 ## Generative models

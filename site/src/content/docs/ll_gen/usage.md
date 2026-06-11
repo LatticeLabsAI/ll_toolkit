@@ -69,15 +69,15 @@ non-degenerate solid (closed solid with positive volume):
 
 ```bash
 # Autoregressive command generator — trained on real DeepCAD programs.
-# Result: validity 0.914 (234/256), 104 distinct, non-degenerate.
-python ll_gen/mlx/ar_generator_mlx.py --mode train
+# Result: validity {{metric.ll_gen.ar.validity}} ({{metric.ll_gen.ar.validFraction}}), {{metric.ll_gen.ar.distinct}} distinct, non-degenerate.
+python {{script.ll_gen.arGenerator}} --mode train
 
 # Latent diffusion over a program autoencoder.
-# Result: sampled-z validity 0.934 (239/256), 138 distinct.
-python ll_gen/mlx/latent_diffusion_mlx.py --mode train
+# Result: sampled-z validity {{metric.ll_gen.latentDiffusion.sampledZValidity}} ({{metric.ll_gen.latentDiffusion.validFraction}}), {{metric.ll_gen.latentDiffusion.distinct}} distinct.
+python {{script.ll_gen.latentDiffusion}} --mode train
 ```
 
-For the latent diffusion the headline metric is **sampled-z** validity
+For the latent diffusion, the headline metric is **sampled-z** validity
 (noise → denoise → decode → execute), reported against a `z=0` predict-the-mean
 baseline so a diverse generator is distinguishable from one that repeats the mean shape.
 A faithful MLX port of the command-VAE (`python ll_gen/mlx/vae_mlx.py --mode parity`)
@@ -120,7 +120,7 @@ per-epoch curve.
 
 :::note[Two generator generations — know which you're running]
 The **program-based** generators (`ar_generator_mlx.py`, `latent_diffusion_mlx.py`) are
-**trained** and produce measured-valid CAD (0.914 / 0.934 valid). The **legacy**
+**trained** and produce measured-valid CAD ({{metric.ll_gen.ar.validity}} / {{metric.ll_gen.latentDiffusion.sampledZValidity}} valid). The **legacy**
 neural generators reachable from the orchestrator (`vae`, `vqvae`, `diffusion` via the
 REINFORCE loop) are randomly initialized out of the box — their prior samples are mostly
 invalid until trained, and the raw-geometry diffusion is limited by representation

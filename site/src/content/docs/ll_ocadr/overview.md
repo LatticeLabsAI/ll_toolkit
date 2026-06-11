@@ -68,8 +68,8 @@ control of 0.313** (majority 0.374) — i.e. the model genuinely *reads the geom
 verbalizes it, rather than guessing from the text prior.
 
 ```bash
-python ll_ocadr/mlx/faithful_tower_mlx.py --mode parity   # prove the tower == real encoders
-python ll_ocadr/mlx/train_ocadr_mlx.py    --mode train    # train encoder + projector + LoRA
+python {{script.ll_ocadr.faithfulTower}} --mode parity   # prove the tower == real encoders
+python {{script.ll_ocadr.train}}    --mode train    # train encoder + projector + LoRA
 ```
 
 ## Status

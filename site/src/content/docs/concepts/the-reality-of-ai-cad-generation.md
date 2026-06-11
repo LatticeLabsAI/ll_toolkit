@@ -77,8 +77,9 @@ These are architecturally unrelated and routinely confused:
 The toolkit now ships **trained** generators — and they confirm the thesis above. The
 [ll_gen](/ll_toolkit/ll_gen/overview/) generators that produce valid CAD are the ones
 that generate the **construction program** and execute it: an autoregressive command
-model (**0.914** valid) and a latent diffusion over a program autoencoder (**0.934**
-valid), both measured through the real kernel and gated on a non-degenerate solid. The
+model (**{{metric.ll_gen.ar.validity}}** valid) and a latent diffusion over a program
+autoencoder (**{{metric.ll_gen.latentDiffusion.sampledZValidity}}** sampled-z valid), both
+measured through the real kernel and gated on a non-degenerate solid. The
 route that *doesn't* work is the one that generates raw B-rep faces to be sewn — its
 independently-sampled faces never mate, so honest validity is **0**. That is the
 "code → kernel → validate" lesson made concrete in this codebase: validity comes from

@@ -78,8 +78,9 @@ This shows up concretely in [ll_gen](/ll_toolkit/ll_gen/overview/): a diffusion 
 denoises **independent face grids** and sews them reaches **0** valid solids on the
 honest solid+volume gate — the sampled faces never mate. Re-targeting the same idea to
 diffuse a **construction-program** latent and decode it autoregressively (so the kernel
-*builds* the solid) reaches **0.934** sampled-z validity, and the autoregressive command
-model reaches **0.914** — both measured through the real kernel. These are the toolkit's
+*builds* the solid) reaches **{{metric.ll_gen.latentDiffusion.sampledZValidity}}** sampled-z
+validity, and the autoregressive command model reaches **{{metric.ll_gen.ar.validity}}** —
+both measured through the real kernel. These are the toolkit's
 own numbers, not the literature figures above.
 :::
 

@@ -69,7 +69,7 @@ embedding = encoder(token_ids, topology_data=topology)  # [1, 1024]
 Several models now ship **trained** with reproducible, honest metrics:
 **ll_brepnet** (B-Rep segmentation, test mIoU 0.828), **ll_stepnet** (face-count
 classifier, val acc 0.976), **ll_ocadr** (geometry-grounded, 0.919 vs 0.313 shuffled),
-and **ll_gen**'s program-based generators (valid CAD: AR 0.914 / latent diffusion 0.934).
+and **ll_gen**'s program-based generators (valid CAD: AR {{metric.ll_gen.ar.validity}} / latent diffusion {{metric.ll_gen.latentDiffusion.sampledZValidity}}).
 The neural models train and run natively in **MLX on Apple Silicon** as well as PyTorch.
 Remaining task heads (e.g. ll_stepnet property prediction/QA) ship as architectures —
 train them on your data before relying on their outputs.
@@ -81,11 +81,11 @@ Each neural package has an `mlx/` trainer that runs on Apple Silicon. The ones w
 existing PyTorch checkpoints convert the real weights and prove parity:
 
 ```bash
-python ll_stepnet/mlx/train_classification_mlx.py --mode parity   # acc 0.976, argmax 1.0 vs PyTorch
-python ll_brepnet/mlx/train_brepnet_mlx.py        --mode parity   # mIoU parity vs PyTorch
-python ll_gen/mlx/ar_generator_mlx.py             --mode train    # valid CAD generation 0.914
-python ll_gen/mlx/latent_diffusion_mlx.py         --mode train    # latent-diffusion generation 0.934
-python ll_ocadr/mlx/train_ocadr_mlx.py            --mode train    # geometry-grounded multimodal
+python {{script.ll_stepnet.classification}} --mode parity   # acc 0.976, argmax 1.0 vs PyTorch
+python {{script.ll_brepnet.train}}        --mode parity   # mIoU parity vs PyTorch
+python {{script.ll_gen.arGenerator}}             --mode train    # valid CAD generation {{metric.ll_gen.ar.validity}}
+python {{script.ll_gen.latentDiffusion}}         --mode train    # latent-diffusion generation {{metric.ll_gen.latentDiffusion.sampledZValidity}}
+python {{script.ll_ocadr.train}}            --mode train    # geometry-grounded multimodal
 ```
 
 ## Where to go next

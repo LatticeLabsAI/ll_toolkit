@@ -16,7 +16,7 @@ Text2CAD, and others) and describe what the *field* has achieved. They are kept
 distinct from **the toolkit's own measured results**, which are now real and
 reproducible — e.g. [ll_brepnet](/ll_toolkit/ll_brepnet/overview/) segmentation at
 test mIoU 0.828, and [ll_gen](/ll_toolkit/ll_gen/overview/)'s program-based generators
-producing measured-valid CAD (0.914 / 0.934, gated on real non-degenerate solids). Where
+producing measured-valid CAD ({{metric.ll_gen.ar.validity}} / {{metric.ll_gen.latentDiffusion.sampledZValidity}}, gated on real non-degenerate solids). Where
 a page shows a LatticeLabs number it is labeled as such; field numbers frame what is
 realistic, package pages report what this codebase outputs.
 

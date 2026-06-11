@@ -59,7 +59,7 @@ what is planned.
 	/>
 	<LinkCard
 		title="ll_gen"
-		description="Generation orchestration: neural propose, deterministic dispose in a kernel sandbox. Trained program-based generators produce measured-valid CAD (AR 0.914 / latent diffusion 0.934)."
+		description="Generation orchestration: neural propose, deterministic dispose in a kernel sandbox. DeepCAD-trained program-based generators produce measured-valid CAD (AR {{metric.ll_gen.ar.validity}} / latent diffusion {{metric.ll_gen.latentDiffusion.sampledZValidity}})."
 		href={base + 'll_gen/overview/'}
 	/>
 	<LinkCard
@@ -87,8 +87,8 @@ what is planned.
 	<a href={base + 'roadmap/ll_brepnet/'}>Roadmap</a>. <Badge text="Trained" variant="success" />
 
 	**ll_gen generation** now produces measured-valid CAD via the construction-program
-	route (autoregressive command generator + latent diffusion), gated on real
-	non-degenerate solids. <Badge text="Generates valid CAD" variant="success" />
+	route (autoregressive command generator + latent diffusion), trained on the DeepCAD
+	distribution and gated on real non-degenerate solids. <Badge text="Generates valid CAD" variant="success" />
 
 	Still experimental: **vLLM serving** for ll_ocadr (the HF-native path works today).
 	<Badge text="Planned" variant="caution" />
