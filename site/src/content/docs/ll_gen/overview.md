@@ -1,6 +1,6 @@
 ---
 title: ll_gen — Overview
-description: Generation orchestration for CAD — neural propose, deterministic dispose in a sandbox. Ships trained generators that produce measured-valid CAD via the construction-program route.
+description: Generation orchestration for CAD — neural propose, deterministic dispose in a sandbox. Ships DeepCAD-trained generators that produce measured-valid CAD via the construction-program route.
 sidebar:
   label: Overview
   order: 1
@@ -37,13 +37,15 @@ trained generators take this route and run natively in **MLX on Apple Silicon**:
 
 - **Autoregressive command generator** (`ll_gen/mlx/ar_generator_mlx.py`) — a causal
   transformer over the CAD command vocabulary, trained on ~38k real DeepCAD programs,
-  sampled token-by-token → executed. **Measured validity 0.914** (234/256), **104
-  distinct** shapes.
+  sampled token-by-token → executed. **Measured validity {{metric.ll_gen.ar.validity}}**
+  ({{metric.ll_gen.ar.validFraction}}), **{{metric.ll_gen.ar.distinct}} distinct** shapes.
 - **Latent diffusion** (`ll_gen/mlx/latent_diffusion_mlx.py`) — diffuses the latent of
-  a program autoencoder and decodes autoregressively. **Sampled-z validity 0.934**
-  (239/256), **138 distinct**. The validity comes from the execution-respecting
-  decoder; the diffusion contributes the diverse latent prior (138 distinct vs a
-  predict-the-mean baseline's 14).
+  a program autoencoder and decodes autoregressively. **Sampled-z validity
+  {{metric.ll_gen.latentDiffusion.sampledZValidity}}** ({{metric.ll_gen.latentDiffusion.validFraction}}),
+  **{{metric.ll_gen.latentDiffusion.distinct}} distinct**. The validity comes from the
+  execution-respecting decoder; the diffusion contributes the diverse latent prior
+  ({{metric.ll_gen.latentDiffusion.distinct}} distinct vs a predict-the-mean baseline's
+  {{metric.ll_gen.latentDiffusion.baselineDistinct}}).
 
 Two earlier routes are superseded because of their *representation*, not their
 training: the command-VAE's parallel (non-autoregressive) decoder is primitive-limited
@@ -64,10 +66,10 @@ is visible, not hidden. (`GenerationMetrics.is_valid_solid`.)
 
 ```bash
 # train + measure the autoregressive command generator (Apple Silicon / MLX)
-python ll_gen/mlx/ar_generator_mlx.py --mode train
+python {{script.ll_gen.arGenerator}} --mode train
 
 # train the latent-diffusion generator and measure sampled-z validity
-python ll_gen/mlx/latent_diffusion_mlx.py --mode train
+python {{script.ll_gen.latentDiffusion}} --mode train
 
 # the orchestration / RL training entry point
 python -m ll_gen.training.run --help
@@ -78,8 +80,9 @@ python -m ll_gen.training.run --help
 :::tip[Generators trained; validity measured through the real kernel]
 The orchestration, dispose sandbox, verification, and RL loop run end-to-end, and
 ll_gen now ships **trained generators that produce measured-valid CAD** on the DeepCAD
-distribution — the autoregressive command generator (0.914 valid) and the latent
-diffusion (0.934 valid), each gated on real non-degenerate solids. Native-MLX trainers
+distribution — the autoregressive command generator ({{metric.ll_gen.ar.validity}} valid)
+and the latent diffusion ({{metric.ll_gen.latentDiffusion.sampledZValidity}} valid), each
+gated on real non-degenerate solids. Native-MLX trainers
 run on Apple Silicon. Scope is stated honestly: these are trained on DeepCAD parametric
 command sequences (sketch + extrude), and validity is measured on that distribution.
 :::

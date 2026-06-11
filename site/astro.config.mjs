@@ -2,12 +2,20 @@
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import starlightLinksValidator from 'starlight-links-validator';
+import remarkMetrics from './src/plugins/remark-metrics.mjs';
 
 // https://astro.build/config
 // Deployed as a GitHub Pages project site: https://latticelabsai.github.io/ll_toolkit/
 export default defineConfig({
 	site: 'https://latticelabsai.github.io',
 	base: '/ll_toolkit/',
+	// Inject canonical model metrics (src/data/metrics.mjs) and MLX command paths
+	// (src/data/scripts.mjs) at build time via src/plugins/remark-metrics.mjs.
+	// @astrojs/mdx extends this markdown config by default, so the plugin applies
+	// to `.md` and `.mdx` alike.
+	markdown: {
+		remarkPlugins: [remarkMetrics],
+	},
 	integrations: [
 		starlight({
 			// Fails the build on any broken internal link (SPEC-2 FR-20).

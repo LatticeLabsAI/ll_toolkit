@@ -89,7 +89,7 @@ running on Apple Silicon (the conversion handles Conv `OIHW→OHWI`/`OIW→OWI` 
 inference-mode BatchNorm running stats):
 
 ```bash
-python ll_brepnet/mlx/train_brepnet_mlx.py --mode parity   # convert real weights + verify
+python {{script.ll_brepnet.train}} --mode parity   # convert real weights + verify
 ```
 
 :::note[Scope]
