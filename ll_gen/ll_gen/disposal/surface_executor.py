@@ -99,6 +99,26 @@ def execute_latent_proposal(proposal: LatentProposal) -> Any:
             _log.error(f"Failed to fit B-spline surface for face {i}: {e}")
             raise
 
+    # Primary path: cadling's TopologyMerger is purpose-built to merge
+    # independently-generated faces (the diffusion case) into a watertight solid
+    # — it dedups shared edges, averages their geometry, and sews. Use it first;
+    # fall through to the manual edge-fit/dedup/trim/sew path if it can't close.
+    if _CADLING_TOPOLOGY_MERGER_AVAILABLE:
+        try:
+            merge_res = TopologyMerger().merge(faces)
+            merged_shape = (
+                merge_res.get("shape") if isinstance(merge_res, dict) else None
+            )
+            if merged_shape is not None:
+                _log.info("Sewed watertight solid via cadling TopologyMerger")
+                return merged_shape
+            _log.debug(
+                "cadling TopologyMerger produced no shape (%s); using manual sew",
+                merge_res.get("errors") if isinstance(merge_res, dict) else "n/a",
+            )
+        except Exception as e:
+            _log.debug("cadling TopologyMerger.merge failed (%s); using manual sew", e)
+
     # Step 2: Fit B-spline curves for each edge
     _log.info("Step 2: Fitting B-spline curves for %d edges", len(proposal.edge_points))
     edges = []
@@ -111,15 +131,11 @@ def execute_latent_proposal(proposal: LatentProposal) -> Any:
             _log.error(f"Failed to fit B-spline curve for edge {i}: {e}")
             raise
 
-    # Step 3: Mating deduplication (topology merger)
+    # Step 3: Mating deduplication. cadling's TopologyMerger.merge() (tried as the
+    # primary whole-solid path above) operates on faces, not edges — there is no
+    # merge_edges(). This manual fallback dedups the fitted edge list directly.
     _log.info("Step 3: Deduplicating mating edges")
-    if _CADLING_TOPOLOGY_MERGER_AVAILABLE:
-        _log.info("Using cadling TopologyMerger for topology merging")
-        merger = TopologyMerger()
-        edges = merger.merge_edges(edges)
-    else:
-        _log.info("Using built-in edge deduplication")
-        edges = _deduplicate_edges(edges)
+    edges = _deduplicate_edges(edges)
 
     # Step 4: Surface trimming (edges bound faces)
     _log.info("Step 4: Trimming surfaces with deduplicated edges")
@@ -147,9 +163,25 @@ def _fit_bspline_surface(grid: np.ndarray, tolerance: float = 1e-3) -> Any:
         RuntimeError: If surface fitting fails.
     """
     if _CADLING_SURFACE_FITTER_AVAILABLE:
+        # cadling's BSplineSurfaceFitter.fit_surface(point_grid) takes only the
+        # grid (its tolerance is a constructor arg) and returns a dict
+        # {'face', 'surface', 'valid', ...} — not a TopoDS_Face. Passing
+        # tolerance= raised TypeError, so every face silently failed and nothing
+        # ever sewed. Use the constructor tolerance and extract the face; fall
+        # through to the direct OCC fit when cadling produces no valid face.
         _log.debug("Using cadling BSplineSurfaceFitter")
-        fitter = BSplineSurfaceFitter()
-        return fitter.fit_surface(grid, tolerance=tolerance)
+        try:
+            fitter = BSplineSurfaceFitter(tolerance=tolerance)
+        except TypeError:
+            fitter = BSplineSurfaceFitter()
+        result = fitter.fit_surface(grid)
+        face = result.get("face") if isinstance(result, dict) else result
+        if face is not None:
+            return face
+        _log.debug(
+            "cadling fitter produced no face (%s); using direct OCC fit",
+            result.get("errors") if isinstance(result, dict) else "unknown",
+        )
 
     if not _OCC_AVAILABLE:
         raise RuntimeError("pythonocc is required for B-spline surface fitting")

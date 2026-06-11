@@ -348,3 +348,77 @@ class TestHelperFunctions:
         from ll_gen.disposal.surface_executor import _average_edges
 
         assert callable(_average_edges)
+
+
+# ============================================================================
+# SECTION: End-to-end sewing of a watertight box (real OCC)
+# ============================================================================
+
+from ll_gen.disposal import surface_executor as _se  # noqa: E402
+
+
+def _box_face_grids(uv: int = 8):
+    """Six UVxUVx3 point grids sampling the faces of the unit cube [0,1]^3.
+
+    The faces share edges exactly (as a real solid does), so a correct
+    surface-fit + merge + sew pipeline must produce a closed, non-zero-volume
+    shape. This is the diffusion ``execute_latent_proposal`` path.
+    """
+    t = np.linspace(0.0, 1.0, uv)
+    a, b = np.meshgrid(t, t, indexing="ij")
+    z0 = np.zeros_like(a)
+    z1 = np.ones_like(a)
+    faces = [
+        np.stack([a, b, z0], axis=-1),  # bottom z=0
+        np.stack([a, b, z1], axis=-1),  # top z=1
+        np.stack([a, z0, b], axis=-1),  # front y=0
+        np.stack([a, z1, b], axis=-1),  # back y=1
+        np.stack([z0, a, b], axis=-1),  # left x=0
+        np.stack([z1, a, b], axis=-1),  # right x=1
+    ]
+    return [f.astype(np.float64) for f in faces]
+
+
+def _box_edge_points(m: int = 12):
+    """The 12 edges of the unit cube, each an M-point polyline."""
+    t = np.linspace(0.0, 1.0, m)
+    o, i = np.zeros(m), np.ones(m)
+    segs = [
+        (t, o, o), (t, i, o), (t, o, i), (t, i, i),  # x-parallel
+        (o, t, o), (i, t, o), (o, t, i), (i, t, i),  # y-parallel
+        (o, o, t), (i, o, t), (o, i, t), (i, i, t),  # z-parallel
+    ]
+    return [np.stack(s, axis=-1).astype(np.float64) for s in segs]
+
+
+@pytest.mark.skipif(not _se._OCC_AVAILABLE, reason="requires pythonocc-core")
+class TestWatertightSew:
+    """Regression: the surface executor must sew independently-fit faces into a
+    closed, non-zero-volume shape.
+
+    This guards three real bugs that made the diffusion path never produce a
+    solid: (1) ``_fit_bspline_surface`` called cadling's fitter with an
+    unsupported ``tolerance=`` kwarg and expected a face but got a dict
+    (TypeError → every face dropped); (2) the merge step called
+    ``TopologyMerger.merge_edges`` which does not exist (AttributeError →
+    crash); the real API is ``merge(faces)``. With those fixed, the six faces of
+    a unit cube must sew into a closed shape enclosing ~unit volume.
+    """
+
+    def _volume(self, shape):
+        from OCC.Core.GProp import GProp_GProps
+        from OCC.Core.BRepGProp import brepgprop
+
+        props = GProp_GProps()
+        brepgprop.VolumeProperties(shape, props)
+        return abs(props.Mass())
+
+    def test_unit_box_sews_to_closed_volume(self) -> None:
+        proposal = LatentProposal(
+            face_grids=_box_face_grids(), edge_points=_box_edge_points()
+        )
+        shape = execute_latent_proposal(proposal)
+        assert shape is not None, "six box faces must sew into a shape"
+        # A correctly sewn unit cube encloses ~1.0 of volume (allow fitting slack).
+        vol = self._volume(shape)
+        assert vol > 0.3, f"sewn box must enclose real volume, got {vol:.3f}"
