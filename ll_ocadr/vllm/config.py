@@ -80,34 +80,42 @@ def get_default_config() -> LLOCADRConfig:
 
 def get_config_for_model(model_size: str = "7b") -> LLOCADRConfig:
     """
-    Get configuration for specific model size.
+    Get configuration for a specific base-LLM size.
+
+    ``n_embed`` (the LLM embedding/hidden dimension that the projector and all
+    learnable separators must match) is NOT set here — it is derived from the
+    actual loaded language model in ``LatticelabsOCADRForCausalLM.__init__``, so
+    every size wires correctly regardless of this table. Only the base LLM name
+    and the 3D shape-encoder capacity vary by size.
 
     Args:
-        model_size: "1.8b", "7b", or "14b"
+        model_size: "0.5b", "1.5b", or "7b" (real Qwen2 sizes that exist on the
+            Hub). "0.5b"/"1.5b" run/train on a single consumer machine; "7b"
+            needs a GPU.
 
     Returns:
         LLOCADRConfig
     """
     base_config = LLOCADRConfig()
 
-    if model_size == "1.8b":
-        base_config.language_model_name = "Qwen/Qwen2-1.8B"
-        base_config.n_embed = 1024
+    if model_size == "0.5b":
+        base_config.language_model_name = "Qwen/Qwen2-0.5B"
+        base_config.shape_depth = 4
+        base_config.shape_num_heads = 8
+    elif model_size == "1.5b":
+        base_config.language_model_name = "Qwen/Qwen2-1.5B"
         base_config.shape_depth = 6
         base_config.shape_num_heads = 8
     elif model_size == "7b":
         base_config.language_model_name = "Qwen/Qwen2-7B"
-        base_config.n_embed = 1280
         base_config.shape_depth = 12
         base_config.shape_num_heads = 12
-    elif model_size == "14b":
-        base_config.language_model_name = "Qwen/Qwen2-14B"
-        base_config.n_embed = 1536
-        base_config.shape_depth = 16
-        base_config.shape_num_heads = 16
     else:
-        raise ValueError(f"Unknown model size: {model_size}")
+        raise ValueError(
+            f"Unknown model size: {model_size!r} (expected '0.5b', '1.5b', '7b')"
+        )
 
+    base_config.model_name = f"latticelabs/ll-ocadr-{model_size}"
     base_config.input_dim = base_config.geometry_embed_dim + base_config.shape_embed_dim
 
     return base_config
