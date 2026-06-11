@@ -238,3 +238,39 @@ def test_load_generator_checkpoint_missing_file_raises(tmp_path) -> None:
     # rather than silently no-op'ing.
     with pytest.raises((FileNotFoundError, RuntimeError, ImportError)):
         load_generator_checkpoint(gen, tmp_path / "does_not_exist.pt")
+
+
+# ---------------------------------------------------------------------------
+# Export: an eval run must write the generated CAD as files, not empty folders
+# ---------------------------------------------------------------------------
+
+
+def test_export_flag_forwarded_to_dispose() -> None:
+    """evaluate_validity exports valid shapes by default and honors export=False.
+
+    Regression: the harness used to hardcode ``export=False`` while still
+    creating ``<output_dir>/disposed/``, so every eval left an empty folder
+    instead of the generated CAD. It now defaults to exporting (writing
+    ``<id>.step`` + ``.stl`` per valid shape) and forwards the flag to
+    ``DisposalEngine.dispose``.
+    """
+    from unittest.mock import patch
+
+    captured: dict[str, Any] = {}
+
+    class _FakeEngine:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        def dispose(self, proposal: Any, export: bool = True) -> DisposalResult:
+            captured["export"] = export
+            return _valid_result()
+
+    gen = _FakeGenerator()
+    with patch("ll_gen.disposal.engine.DisposalEngine", _FakeEngine):
+        # No dispose_fn injected -> the real-engine path runs.
+        evaluate_validity(gen, ["p"], n_samples=1, output_dir="x")
+        assert captured["export"] is True  # exports by default
+
+        evaluate_validity(gen, ["p"], n_samples=1, output_dir="x", export=False)
+        assert captured["export"] is False  # honored when disabled
