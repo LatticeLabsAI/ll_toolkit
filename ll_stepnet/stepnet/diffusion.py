@@ -535,7 +535,9 @@ class GeometryCodec(nn.Module):
     def encode_faces(self, face_grids: torch.Tensor) -> torch.Tensor:
         """[B, N, U, V, 3] -> [B, N, latent_dim]."""
         b, n = face_grids.shape[0], face_grids.shape[1]
-        x = face_grids.reshape(b * n, self.uv, self.uv, 3).permute(0, 3, 1, 2)
+        # .contiguous() after permute: Conv2d's backward calls .view() on its
+        # input, which fails on the permuted (non-contiguous) tensor.
+        x = face_grids.reshape(b * n, self.uv, self.uv, 3).permute(0, 3, 1, 2).contiguous()
         z = self.face_encoder(x)
         return z.reshape(b, n, self.latent_dim)
 
@@ -548,7 +550,8 @@ class GeometryCodec(nn.Module):
     def encode_edges(self, edge_points: torch.Tensor) -> torch.Tensor:
         """[B, N, M, 3] -> [B, N, latent_dim]."""
         b, n = edge_points.shape[0], edge_points.shape[1]
-        x = edge_points.reshape(b * n, self.edge_pts, 3).permute(0, 2, 1)
+        # .contiguous() after permute (see encode_faces): Conv1d backward .view().
+        x = edge_points.reshape(b * n, self.edge_pts, 3).permute(0, 2, 1).contiguous()
         z = self.edge_encoder(x)
         return z.reshape(b, n, self.latent_dim)
 
@@ -845,8 +848,14 @@ class StructuredDiffusion(nn.Module):
             ``face_grids`` [B, N_faces, U, V, 3] and ``edge_points``
             [B, N_edges, M, 3].
         """
-        if device is None:
-            device = next(self.parameters()).device
+        # The denoiser weights determine where compute must happen. Always sample
+        # on the weights' device: a caller-supplied device that disagrees with the
+        # weights (e.g. a generator whose ``.device`` attribute was not updated
+        # after the model was ``.to()``'d) would otherwise crash at the first
+        # Linear with "input is on cpu but expected on mps".
+        param_device = next(self.parameters()).device
+        if device is None or torch.device(device) != param_device:
+            device = param_device
 
         results: Dict[str, torch.Tensor] = {}
         prev_denoised: Optional[torch.Tensor] = None

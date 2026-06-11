@@ -250,6 +250,7 @@ def evaluate_validity(
     output_dir: str | Path = "eval_output",
     seed: int | None = None,
     decode_mode: str = "inference",
+    export: bool = True,
 ) -> GenerationMetrics:
     """Measure a generator's disposal-validity rate over a prompt set.
 
@@ -271,6 +272,11 @@ def evaluate_validity(
         seed: Optional RNG seed for reproducible sampling.
         decode_mode: ``"inference"`` (``generate``, the deployment path) or
             ``"training"`` (``generate_for_training``, the path RL optimizes).
+        export: When True (default), every valid disposed shape is written to
+            ``<output_dir>/disposed/<id>.step`` and ``.stl`` — so an eval run
+            produces the generated CAD as real files, not an empty directory.
+            Pass False for throughput-sensitive callers (e.g. per-step RL evals)
+            that only need the validity rate.
 
     Returns:
         Populated ``GenerationMetrics`` (``validity_rate`` is the M3 gate).
@@ -308,7 +314,7 @@ def evaluate_validity(
         )
 
         def dispose_fn(proposal: BaseProposal) -> DisposalResult:
-            return engine.dispose(proposal, export=False)
+            return engine.dispose(proposal, export=export)
 
     model = getattr(generator, "_model", None)
     results: list[DisposalResult] = []

@@ -383,83 +383,113 @@ def _execute_sketch_group(
 def _build_sketch_face(
     sketch_commands: list[dict[str, Any]], step_offset: int = 0
 ) -> TopoDS_Shape | None:
-    """Build a 2D sketch face from sketch commands.
+    """Build a CLOSED 2D sketch face from sketch commands.
+
+    Closure-aware construction: a sketch loop is built by THREADING curve
+    endpoints — each curve starts where the previous one ended — and the loop is
+    auto-closed by connecting the last endpoint back to the first start.  This
+    guarantees a closed wire even when the upstream generator emits curves whose
+    absolute endpoints do not coincide.  That non-coincidence is the dominant
+    failure mode for non-autoregressive decoders: each curve's coordinates are
+    independent argmaxes, so consecutive segments almost never share a vertex and
+    ``MakeWire`` fails — which is why only self-closing primitives (circles) ever
+    validated.  Threading + auto-closing lets multi-line/arc polygons close,
+    unlocking diverse valid solids instead of cylinders only.
+
+    A loop consisting solely of circles is self-closing and built directly.
 
     Args:
         sketch_commands: List of sketch commands (LINE, ARC, CIRCLE).
         step_offset: Offset for step numbering in error messages.
 
     Returns:
-        A TopoDS_Shape representing the sketch face, or None if unsuccessful.
-
-    Raises:
-        RuntimeError: If edge or wire creation fails.
+        A TopoDS_Shape (face) for the closed loop, or None if unsuccessful.
     """
-    edges = []
+    circle_cmds = [c for c in sketch_commands if c.get("type") == "CIRCLE"]
+    curve_cmds = [c for c in sketch_commands if c.get("type") in ("LINE", "ARC")]
 
-    for step_idx, cmd in enumerate(sketch_commands):
-        cmd_type = cmd.get("type", "")
-        params = cmd.get("params", {})
+    # A loop of only circle(s): the circle is itself a closed wire.
+    if circle_cmds and not curve_cmds:
+        edge = _create_circle_edge(circle_cmds[0].get("params", {}))
+        if edge is None:
+            _log.warning("Failed to create circle edge for sketch loop")
+            return None
+        return _face_from_edges([edge])
 
-        try:
-            if cmd_type == "LINE":
-                edge = _create_line_edge(params)
-            elif cmd_type == "ARC":
-                edge = _create_arc_edge(params)
-            elif cmd_type == "CIRCLE":
-                edge = _create_circle_edge(params)
-            else:
-                _log.warning(f"Unknown sketch command type: {cmd_type}")
-                continue
-
-            if edge is not None:
-                edges.append(edge)
-            else:
-                _log.warning(
-                    f"Failed to create edge for {cmd_type} at step {step_offset + step_idx}"
-                )
-        except Exception as e:
-            _log.error(
-                f"Error creating {cmd_type} edge at step {step_offset + step_idx}: {e}"
-            )
-            raise RuntimeError(
-                f"Error creating {cmd_type} edge at step {step_offset + step_idx}: {e}"
-            ) from e
-
-    if not edges:
-        _log.warning("No valid edges created for sketch")
+    if not curve_cmds:
+        _log.warning("No LINE/ARC/CIRCLE commands in sketch loop")
         return None
 
-    # Create wire from edges
-    try:
-        wire_maker = BRepBuilderAPI_MakeWire()
-        for edge in edges:
-            wire_maker.Add(edge)
+    # Thread endpoints: each curve's start is the previous curve's end.
+    threaded_edges: list[Any] = []
+    current: tuple[float, float] | None = None
+    first: tuple[float, float] | None = None
+    for step_idx, cmd in enumerate(curve_cmds):
+        params = dict(cmd.get("params", {}))
+        cmd_type = cmd.get("type")
+        try:
+            if cmd_type == "LINE":
+                start = current if current is not None else (params.get("x1", 0.0), params.get("y1", 0.0))
+                end = (params.get("x2", 0.0), params.get("y2", 0.0))
+                params.update({"x1": start[0], "y1": start[1], "x2": end[0], "y2": end[1]})
+                edge = _create_line_edge(params)
+            else:  # ARC
+                start = current if current is not None else (params.get("x_start", 0.0), params.get("y_start", 0.0))
+                end = (params.get("x_end", 0.0), params.get("y_end", 0.0))
+                params.update({"x_start": start[0], "y_start": start[1], "x_end": end[0], "y_end": end[1]})
+                edge = _create_arc_edge(params)
+                if edge is None:
+                    # Degenerate arc (collinear/coincident points) -> straight chord.
+                    edge = _create_line_edge({"x1": start[0], "y1": start[1], "x2": end[0], "y2": end[1]})
+        except Exception as e:
+            _log.warning(
+                f"Skipping {cmd_type} edge at step {step_offset + step_idx}: {e}"
+            )
+            edge = None
+        if first is None:
+            first = start
+        # Advance the threading point even if this edge was dropped, so the
+        # remaining curves and the closing segment still connect end-to-end.
+        current = end
+        if edge is not None:
+            threaded_edges.append(edge)
 
-        if not wire_maker.IsDone():
-            _log.error("Failed to create wire from edges")
-            return None
+    if not threaded_edges or first is None or current is None:
+        _log.warning("No valid threaded edges created for sketch loop")
+        return None
 
-        wire = wire_maker.Wire()
-        _log.debug(f"Created wire with {len(edges)} edges")
-    except Exception as e:
-        _log.error(f"Error creating wire: {e}")
-        raise RuntimeError(f"Error creating wire: {e}") from e
+    # Auto-close: connect the last endpoint back to the first start.
+    if math.hypot(current[0] - first[0], current[1] - first[1]) > 1e-7:
+        closing = _create_line_edge(
+            {"x1": current[0], "y1": current[1], "x2": first[0], "y2": first[1]}
+        )
+        if closing is not None:
+            threaded_edges.append(closing)
 
-    # Create face from wire
-    try:
-        face_maker = BRepBuilderAPI_MakeFace(wire, False)
+    return _face_from_edges(threaded_edges)
 
-        if not face_maker.IsDone():
-            _log.error("Failed to create face from wire")
-            return None
 
-        face = face_maker.Face()
-        _log.debug("Created face from wire")
-        return face
-    except Exception as e:
-        _log.error(f"Error creating face: {e}")
-        raise RuntimeError(f"Error creating face: {e}") from e
+def _face_from_edges(edges: list[Any]) -> TopoDS_Shape | None:
+    """Build a wire from connected edges and a planar face from that wire.
+
+    Args:
+        edges: Ordered, end-to-end connected ``TopoDS_Edge`` objects forming a
+            closed loop.
+
+    Returns:
+        The planar ``TopoDS_Face``, or None if wire/face construction fails.
+    """
+    wire_maker = BRepBuilderAPI_MakeWire()
+    for edge in edges:
+        wire_maker.Add(edge)
+    if not wire_maker.IsDone():
+        _log.error("Failed to create wire from edges")
+        return None
+    face_maker = BRepBuilderAPI_MakeFace(wire_maker.Wire(), False)
+    if not face_maker.IsDone():
+        _log.error("Failed to create face from wire")
+        return None
+    return face_maker.Face()
 
 
 def _create_line_edge(params: dict[str, Any]) -> TopoDS_Shape | None:

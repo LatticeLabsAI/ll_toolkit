@@ -121,6 +121,11 @@ class TestModelWiring:
             def __init__(self):
                 super().__init__()
                 self.embed = torch.nn.Embedding(50, n_embed)
+                # Real HF models expose .config.hidden_size; the model derives
+                # n_embed from it so the projector/splice match the LLM width.
+                self.config = types.SimpleNamespace(
+                    hidden_size=n_embed, vocab_size=50
+                )
 
             def get_input_embeddings(self):
                 return self.embed

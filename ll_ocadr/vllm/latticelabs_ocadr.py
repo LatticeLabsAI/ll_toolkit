@@ -22,6 +22,19 @@ class LatticelabsOCADRForCausalLM(nn.Module):
         super().__init__()
         self.config = config
 
+        # Language model — loaded FIRST so every projection is sized to its
+        # hidden dimension. Mesh/image tokens are spliced INTO the LLM's input
+        # embeddings (see get_input_embeddings/_splice_tokens), so the projector
+        # output and all learnable separators MUST match the LLM hidden size.
+        # A hardcoded config.n_embed (1280) matches no real base
+        # (Qwen2-0.5B=896, 1.5B=1536, 7B=3584), so the splice raised a shape
+        # mismatch and the configured model could not run. Derive n_embed from
+        # the actual LLM so any base size wires correctly.
+        self.language_model = AutoModelForCausalLM.from_pretrained(
+            config.language_model_name
+        )
+        config.n_embed = int(self.language_model.config.hidden_size)
+
         # Initialize 3D encoders
         self.geometry_model = build_geometry_net()  # Local geometry features
         self.shape_model = build_shape_net(
@@ -30,13 +43,9 @@ class LatticelabsOCADRForCausalLM(nn.Module):
             num_heads=config.shape_num_heads,
         )  # Global shape features
 
-        # MLP Projector: concatenated features -> LLM embedding space
+        # MLP Projector: concatenated features -> LLM embedding space (n_embed
+        # == LLM hidden size, set above).
         self.projector = MlpProjector(config)
-
-        # Language model
-        self.language_model = AutoModelForCausalLM.from_pretrained(
-            config.language_model_name
-        )
 
         # Special tokens (learnable parameters)
         self.mesh_boundary = nn.Parameter(
@@ -312,7 +321,14 @@ class LatticelabsOCADRForCausalLM(nn.Module):
                 .squeeze(-1)
             )
             if len(positions) > 0 and batch_idx < len(embeddings):
-                emb = embeddings[batch_idx]
+                # The language model may run in reduced precision (its weights
+                # often load as bfloat16 while the 3D encoders/projector emit
+                # float32) and may sit on a different device. Cast the modality
+                # embeddings to the destination embeddings' dtype and device so
+                # the in-place splice does not raise a dtype/device mismatch.
+                emb = embeddings[batch_idx].to(
+                    dtype=inputs_embeds.dtype, device=inputs_embeds.device
+                )
                 num = emb.shape[0]
                 if len(positions) >= num:
                     inputs_embeds[batch_idx, positions[:num]] = emb

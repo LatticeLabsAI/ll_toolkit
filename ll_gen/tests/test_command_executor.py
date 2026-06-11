@@ -613,3 +613,112 @@ class TestWithFixtures:
         """Test command_proposal_token_ids fixture has expected structure."""
         assert hasattr(command_proposal_token_ids, "token_ids")
         assert len(command_proposal_token_ids.token_ids) > 0
+
+
+# ============================================================================
+# SECTION: Closure-aware sketch construction (real OCC)
+# ============================================================================
+
+from ll_gen.disposal import command_executor as _ce  # noqa: E402
+
+
+def _quant(v: float) -> int:
+    """Continuous coord in [-2,2] -> 8-bit quantized slot (executor's scheme)."""
+    return max(0, min(255, int(round((v + 2.0) / 4.0 * 255))))
+
+
+def _line(x1, y1, x2, y2):
+    p = [0] * 16
+    m = [False] * 16
+    for i, v in zip((0, 1, 2, 3), (x1, y1, x2, y2)):
+        p[i] = _quant(v)
+        m[i] = True
+    return {"command_type": "LINE", "parameters": p, "parameter_mask": m}
+
+
+def _bare(ctype):
+    return {"command_type": ctype, "parameters": [0] * 16, "parameter_mask": [False] * 16}
+
+
+def _extrude(depth=1.0):
+    p = [0] * 16
+    m = [False] * 16
+    p[0] = _quant(depth)
+    for i in range(8):
+        m[i] = True
+    return {"command_type": "EXTRUDE", "parameters": p, "parameter_mask": m}
+
+
+@pytest.mark.skipif(not _ce._OCC_AVAILABLE, reason="requires pythonocc-core")
+class TestClosureAwareSketch:
+    """The executor must close multi-line sketch loops by threading endpoints.
+
+    A non-autoregressive decoder emits each line's coordinates independently, so
+    consecutive segments almost never share a vertex. The closure-aware builder
+    threads endpoints and auto-closes the loop, so such sketches still produce a
+    valid non-degenerate solid instead of failing wire construction. Without the
+    fix only self-closing primitives (circles) ever validated.
+    """
+
+    def _volume(self, shape):
+        from OCC.Core.GProp import GProp_GProps
+        from OCC.Core.BRepGProp import brepgprop
+
+        props = GProp_GProps()
+        brepgprop.VolumeProperties(shape, props)
+        return props.Mass()
+
+    def test_non_connecting_square_closes_to_solid(self) -> None:
+        # Four lines with a ~0.03 gap at every corner — they do NOT connect.
+        cmds = [
+            _bare("SOL"),
+            _line(0.00, 0.00, 1.02, -0.01),
+            _line(0.98, 0.03, 1.01, 0.99),
+            _line(1.03, 1.02, -0.02, 0.97),
+            _line(0.01, 1.01, -0.01, 0.02),
+            _extrude(1.0),
+            _bare("EOS"),
+        ]
+        prop = CommandSequenceProposal(
+            command_dicts=cmds, quantization_bits=8, normalization_range=2.0
+        )
+        shape = execute_command_proposal(prop)
+        assert shape is not None, "closure-aware builder must close the gapped square"
+        assert self._volume(shape) > 0.1, "closed square extrusion must have real volume"
+
+    def test_triangle_closes_to_solid(self) -> None:
+        # Three lines whose endpoints do not coincide — must still close.
+        cmds = [
+            _bare("SOL"),
+            _line(0.0, 0.0, 1.0, 0.05),
+            _line(0.95, 0.0, 0.5, 1.0),
+            _line(0.55, 0.95, 0.02, 0.03),
+            _extrude(0.8),
+            _bare("EOS"),
+        ]
+        prop = CommandSequenceProposal(
+            command_dicts=cmds, quantization_bits=8, normalization_range=2.0
+        )
+        shape = execute_command_proposal(prop)
+        assert shape is not None
+        assert self._volume(shape) > 0.05
+
+    def test_single_circle_still_valid(self) -> None:
+        # Regression guard: a lone circle loop must remain a valid solid.
+        circ_p = [0] * 16
+        circ_m = [False] * 16
+        circ_p[0], circ_p[1], circ_p[2] = _quant(0.0), _quant(0.0), _quant(2.0)
+        for i in (0, 1, 2):
+            circ_m[i] = True
+        cmds = [
+            _bare("SOL"),
+            {"command_type": "CIRCLE", "parameters": circ_p, "parameter_mask": circ_m},
+            _extrude(1.0),
+            _bare("EOS"),
+        ]
+        prop = CommandSequenceProposal(
+            command_dicts=cmds, quantization_bits=8, normalization_range=2.0
+        )
+        shape = execute_command_proposal(prop)
+        assert shape is not None
+        assert self._volume(shape) > 0.1
