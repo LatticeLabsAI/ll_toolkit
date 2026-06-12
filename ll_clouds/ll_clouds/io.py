@@ -1,8 +1,9 @@
 """Point-cloud I/O for ll_clouds.
 
 Supports ASCII PLY, PCD, and XYZ read/write (points and, where the format
-allows, per-point normals). Mesh -> point-cloud sampling uses trimesh, imported
-lazily so the core I/O has no hard trimesh dependency.
+allows, per-point normals), plus reading LAS/LAZ/COPC (lidar / geospatial point
+clouds). Mesh -> point-cloud sampling uses trimesh and LAS/LAZ reading uses
+laspy, both imported lazily so the core I/O has no hard dependency on them.
 """
 
 from __future__ import annotations
@@ -44,6 +45,8 @@ def read_point_cloud(path: str) -> PointCloud:
         return _read_pcd(path)
     if ext == ".ply":
         return _read_ply(path)
+    if ext in (".las", ".laz"):
+        return _read_las(path)
     raise ValueError(f"Unsupported point-cloud format for reading: {ext!r}")
 
 
@@ -185,6 +188,31 @@ def _read_ply(path: str) -> PointCloud:
     if {"nx", "ny", "nz"} <= set(idx):
         normals = data[:, [idx["nx"], idx["ny"], idx["nz"]]]
     return PointCloud(points=points, normals=normals)
+
+
+# ---------------------------------------------------------------------------
+# LAS / LAZ / COPC (laspy, lazy)
+# ---------------------------------------------------------------------------
+
+
+def _read_las(path: str) -> PointCloud:
+    """Read a LAS/LAZ/COPC lidar point cloud (lazy laspy; LAZ/COPC need a lazrs/laszip backend).
+
+    COPC files are valid LAZ 1.4, so ``points.copc.laz`` is read by this same path. Coordinates
+    are returned in the file's own CRS (which the dataset carries separately in its ``crs``
+    metadata column, so no pyproj round-trip is needed here). This is what lets ll_clouds consume
+    the Three Indexer's geospatial ``pointcloud_file_name`` artifacts directly (SPEC-2 §4.4).
+    """
+    try:
+        import laspy
+    except ImportError as exc:  # pragma: no cover - exercised only without laspy
+        raise ImportError(
+            "reading LAS/LAZ/COPC requires laspy; install 'laspy[lazrs]'"
+        ) from exc
+
+    las = laspy.read(path)
+    points = np.asarray([las.x, las.y, las.z], dtype=np.float64).T
+    return PointCloud(points=points)
 
 
 # ---------------------------------------------------------------------------

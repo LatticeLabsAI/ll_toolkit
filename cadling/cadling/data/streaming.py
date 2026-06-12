@@ -81,6 +81,9 @@ class CADStreamingConfig:
 
     dataset_id: str
     split: str = "train"
+    # HF dataset config name (load_dataset ``name=``). Required to pick one config from a
+    # multi-config repo — e.g. a Three Indexer repo bundling "3d"/"cad"/"geo" (SPEC-2 §6.1).
+    config_name: Optional[str] = None
     streaming: bool = True
     columns: Optional[List[str]] = None
     batch_size: int = 8
@@ -168,6 +171,10 @@ class CADStreamingDataset:
             "streaming": self.config.streaming,
             "trust_remote_code": self.config.trust_remote_code,
         }
+
+        # Select one config from a multi-config repo (e.g. Three Indexer "3d"/"cad"/"geo").
+        if self.config.config_name:
+            load_kwargs["name"] = self.config.config_name
 
         if self.config.token:
             load_kwargs["token"] = self.config.token

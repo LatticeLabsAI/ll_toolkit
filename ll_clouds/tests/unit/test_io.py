@@ -105,6 +105,30 @@ def test_read_ply_missing_end_header_raises(tmp_path) -> None:
         read_point_cloud(str(bad))
 
 
+def _write_las(laspy, path, pts) -> None:
+    hdr = laspy.LasHeader(point_format=3, version="1.4")
+    hdr.offsets = pts.min(axis=0)
+    hdr.scales = [1e-4, 1e-4, 1e-4]
+    las = laspy.LasData(hdr)
+    las.x, las.y, las.z = pts[:, 0], pts[:, 1], pts[:, 2]
+    las.write(str(path))
+
+
+@pytest.mark.parametrize("ext", [".las", ".laz"])
+def test_read_las_laz_roundtrip(tmp_path, rng, ext) -> None:
+    """LAS/LAZ reading (laspy) — lets ll_clouds consume lidar / Three Indexer geo clouds.
+    ``.laz`` additionally needs a lazrs/laszip backend (COPC is read by this same path)."""
+    laspy = pytest.importorskip("laspy")
+    if ext == ".laz":
+        pytest.importorskip("lazrs")
+    pts = rng.normal(size=(40, 3)).astype(np.float64)
+    path = tmp_path / f"cloud{ext}"
+    _write_las(laspy, path, pts)
+    loaded = read_point_cloud(str(path))
+    assert loaded.num_points == 40
+    np.testing.assert_allclose(loaded.points, pts, atol=1e-3)
+
+
 def test_read_ply_with_face_element_ignores_face_properties(tmp_path) -> None:
     """PLY with an extra 'element face' must not fold face properties into the
     per-vertex column count."""

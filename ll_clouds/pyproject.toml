@@ -41,6 +41,11 @@ data = [
     "huggingface-hub>=0.17",
 ]
 
+# Lidar / geospatial point clouds (LAS/LAZ/COPC reading, e.g. Three Indexer geo artifacts)
+lidar = [
+    "laspy[lazrs]>=2.5",
+]
+
 # Conditioning (text/image/multimodal encoders)
 conditioning = [
     "transformers>=4.35",

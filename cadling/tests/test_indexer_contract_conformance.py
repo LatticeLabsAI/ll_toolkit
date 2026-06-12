@@ -1,18 +1,24 @@
 """Conformance: the LatticeLabs Toolkit consumes a Three Indexer (SPEC-2) dataset.
 
-Drives the REAL cadling consumer — ``CADStreamingDataset`` (license-family cohort filter +
-per-sample transform) and ``BRepGraphBuilder`` (raw STEP → B-Rep face graph) — against a
-committed fixture laid out exactly as the Three Indexer publishes a ``cad/`` config (MeshFolder
-+ ``metadata.parquet``). It proves the producer→consumer dataset contract from the *consumer*
-side: SPEC-2 §4.1 (B-Rep bridge), §4.2 (renders/caption), §5 (license cohort), §6.1 (Mode-A
-streaming), §10 (acceptance).
+Drives the REAL toolkit consumers against a faithful, multi-config fixture laid out exactly as
+the Three Indexer publishes a repo (MeshFolder + per-config ``metadata.parquet``, card
+``data_files`` = ``<config>/*.parquet``), proving every producer→consumer bridge from the
+consumer side with no runtime dependency on the Indexer:
 
-There is no runtime dependency on the Three Indexer — the contract crosses as data only. The
-``REQUIRED_COLUMNS`` tuple below is the consumer's own copy of the SPEC-2 §3.2 column set; if the
-producer ever drops or renames a load-bearing column, this test fails.
+- **turnkey + multi-config** (§6.1 / §10.1): ``CADStreamingDataset(dataset_id=<repo>,
+  config_name=<config>)`` streams each of "3d"/"cad"/"geo" directly.
+- **license cohort** (§5): the streaming filter excludes non-permissive rows.
+- **cad B-Rep bridge** (§4.1): ``BRepGraphBuilder`` reads the raw STEP (``original_file_name``).
+- **mesh bridge** (§4.3): the GLB (``file_name``) feeds ``ll_clouds.io.sample_from_mesh`` and
+  ``geotoken.GeoTokenizer.tokenize``.
+- **point-cloud bridge** (§4.4): the COPC/LAZ (``file_name``) feeds ``ll_clouds.io.read_point_cloud``.
+
+The ``REQUIRED_COLUMNS`` tuple is the consumer's own copy of SPEC-2 §3.2; a dropped/renamed
+producer column fails this test.
 
 Run (from the LatticeLabs_toolkit repo root):
-  PYTHONPATH=cadling /Users/ryanoboyle/miniforge3/envs/cadling/bin/python -m pytest \
+  PYTHONPATH=cadling:ll_clouds:geotoken \
+    /Users/ryanoboyle/miniforge3/envs/cadling/bin/python -m pytest \
       cadling/tests/test_indexer_contract_conformance.py -q
 """
 
@@ -22,8 +28,8 @@ from pathlib import Path
 
 import pytest
 
-FIXTURE = Path(__file__).parent / "fixtures" / "indexer_cad_repo"
-META = FIXTURE / "cad" / "metadata.parquet"
+FIXTURE = Path(__file__).parent / "fixtures" / "indexer_repo"
+CONFIGS = ("3d", "cad", "geo")
 
 # Consumer's copy of the SPEC-2 §3.2 load-bearing columns the producer must emit on every row.
 REQUIRED_COLUMNS = (
@@ -32,112 +38,156 @@ REQUIRED_COLUMNS = (
     "original_file_name", "pointcloud_file_name",
     "render_file_names", "thumbnail_file_name", "split",
 )
-# Clean (redistributable, commercial-OK) families — the complement of SPEC-1's private routing.
 PERMISSIVE = {"cc0", "public-domain", "public_domain", "cc-by", "cc-by-4.0", "permissive"}
 
-pytestmark = pytest.mark.skipif(not META.exists(), reason="Three Indexer fixture missing")
+pytestmark = pytest.mark.skipif(
+    not (FIXTURE / "cad" / "metadata.parquet").exists(), reason="Three Indexer fixture missing"
+)
 
 
-def _require_consumer():
-    """Import the real cadling consumer stack; skip cleanly if its deps are absent."""
+def _meta(config: str) -> Path:
+    return FIXTURE / config / "metadata.parquet"
+
+
+def _rows(config: str) -> list[dict]:
+    """Mode-A: stream a config's metadata.parquet (the documented consumer path)."""
+    from datasets import load_dataset
+
+    return list(load_dataset("parquet", data_files={"train": str(_meta(config))},
+                             split="train", streaming=True))
+
+
+def _streaming():
     pytest.importorskip("datasets")
     pytest.importorskip("pyarrow")
-    pytest.importorskip("OCC")
-    from cadling.data.hf_builders.brep_graph_builder import BRepGraphBuilder
-    from cadling.data.schemas import get_brep_graph_schema
     from cadling.data.streaming import CADStreamingConfig, CADStreamingDataset
 
-    return CADStreamingConfig, CADStreamingDataset, BRepGraphBuilder, get_brep_graph_schema
+    return CADStreamingConfig, CADStreamingDataset
 
 
-def _load_rows() -> list[dict]:
-    """Mode-A: stream the metadata.parquet contract table (the documented consumer path)."""
-    from datasets import load_dataset
-
-    ds = load_dataset("parquet", data_files={"train": str(META)}, split="train", streaming=True)
-    return list(ds)
-
-
-def test_required_columns_present_and_lineage_intact() -> None:
+# --------------------------------------------------------------------------- contract columns
+def test_required_columns_present_all_configs() -> None:
     pytest.importorskip("datasets")
-    rows = _load_rows()
-    assert len(rows) == 1
-    row = rows[0]
-    missing = [c for c in REQUIRED_COLUMNS if c not in row]
-    assert missing == [], f"producer dropped contract column(s): {missing}"
-    # SPEC-2 §5 — lineage reconstructable, routing predicate populated.
-    assert row["asset_id"] and row["source"] and row["sha256"]
-    assert row["license_family"]
+    for config in CONFIGS:
+        rows = _rows(config)
+        assert rows, f"{config}: no rows"
+        for row in rows:
+            missing = [c for c in REQUIRED_COLUMNS if c not in row]
+            assert missing == [], f"{config}: producer dropped column(s): {missing}"
+            assert row["asset_id"] and row["source"] and row["sha256"]  # §5 lineage
+            assert row["license_family"]
+            assert row["domain"] == ({"3d": "mesh"}.get(config, config))
 
 
-def test_turnkey_cadstreamingdataset_consumes_indexer_repo() -> None:
-    """SPEC-2 §6.1 / §10.1 — the canonical entry point works against a faithful Indexer repo.
-
-    The published HF card declares ``data_files`` path ``<config>/*.parquet``, so
-    ``load_dataset`` (and therefore ``CADStreamingDataset(dataset_id=...)``) streams the
-    metadata table directly instead of choking on the GLB/STEP/PNG media. Single-config repo ⇒
-    no ``name`` needed; the README ``configs:`` block resolves it.
-    """
+# --------------------------------------------------------------------------- turnkey + config_name
+def test_turnkey_multiconfig_selection() -> None:
+    """SPEC-2 §6.1 / §10.1 — CADStreamingDataset(dataset_id=<repo>, config_name=<c>) selects the
+    right config from a multi-config Indexer repo, end-to-end through the real class."""
     from datasets import load_dataset
 
-    CADStreamingConfig, CADStreamingDataset, *_ = _require_consumer()
+    CADStreamingConfig, CADStreamingDataset = _streaming()
     root = str(FIXTURE)
-
-    # turnkey datasets path, honoring the repo's own README configs block
-    assert len(list(load_dataset(root, name="cad", split="train", streaming=True))) == 1
-    # turnkey cadling path — the REAL class, dataset_id only, streamed end-to-end
-    samples = list(CADStreamingDataset(
-        CADStreamingConfig(dataset_id=root, split="train", streaming=True, shuffle=False)))
-    assert len(samples) == 1
-    assert samples[0]["asset_id"]  # streamed + transformed through the real consumer
+    for config in CONFIGS:
+        # turnkey datasets path with explicit config name
+        assert len(list(load_dataset(root, name=config, split="train", streaming=True))) >= 1
+        # turnkey cadling path — the real class, dataset_id + config_name only
+        samples = list(CADStreamingDataset(CADStreamingConfig(
+            dataset_id=root, config_name=config, split="train", streaming=True, shuffle=False)))
+        assert len(samples) >= 1
+        assert samples[0]["asset_id"]
 
 
 def test_streaming_license_filter_carves_clean_cohort() -> None:
-    """SPEC-2 §5 / §10.3 — the REAL CADStreamingDataset, run end-to-end via dataset_id, applies
-    its license filter and excludes non-permissive rows (defense-in-depth atop repo routing)."""
-    CADStreamingConfig, CADStreamingDataset, *_ = _require_consumer()
+    """SPEC-2 §5 / §10.3 — the real CADStreamingDataset filter excludes non-permissive rows."""
+    CADStreamingConfig, CADStreamingDataset = _streaming()
     root = str(FIXTURE)
 
     kept = list(CADStreamingDataset(CADStreamingConfig(
-        dataset_id=root, split="train", streaming=True, shuffle=False,
+        dataset_id=root, config_name="cad", split="train", streaming=True, shuffle=False,
         filters=[("license_family", "==", "public-domain")])))
-    assert len(kept) == 1
-    assert all(r["license_family"] in PERMISSIVE for r in kept)  # no copyleft / NC leak
-    assert kept[0]["asset_id"]  # lineage passthrough survives the transform
+    assert len(kept) == 1 and all(r["license_family"] in PERMISSIVE for r in kept)
+    assert kept[0]["asset_id"]
 
-    # a non-matching predicate yields an empty (still-clean) cohort — no false positives.
     empty = list(CADStreamingDataset(CADStreamingConfig(
-        dataset_id=root, split="train", streaming=True, shuffle=False,
+        dataset_id=root, config_name="cad", split="train", streaming=True, shuffle=False,
         filters=[("license_family", "==", "odbl")])))
     assert empty == []
 
 
-def test_raw_step_becomes_brep_graph() -> None:
-    """SPEC-2 §4.1 — the raw STEP at ``original_file_name`` feeds the real BRepGraphBuilder."""
-    _, _, BRepGraphBuilder, get_brep_graph_schema = _require_consumer()
-    row = _load_rows()[0]
+# --------------------------------------------------------------------------- cad B-Rep bridge
+def test_cad_bridge_raw_step_becomes_brep_graph() -> None:
+    """SPEC-2 §4.1 — the raw STEP at original_file_name feeds the real BRepGraphBuilder."""
+    pytest.importorskip("datasets")
+    pytest.importorskip("OCC")
+    from cadling.data.hf_builders.brep_graph_builder import BRepGraphBuilder
+    from cadling.data.schemas import get_brep_graph_schema
 
+    row = _rows("cad")[0]
     step = FIXTURE / "cad" / row["original_file_name"]
     assert step.exists() and step.suffix == ".step"
 
     record = BRepGraphBuilder()._process_step_file_pythonocc(step)
     assert record is not None
-    assert len(record["faces"]) >= 1 and len(record["edges"]) >= 1  # real B-Rep topology
-    assert "edge_index" in record
+    assert len(record["faces"]) >= 1 and len(record["edges"]) >= 1 and "edge_index" in record
 
-    # the consumer's GNN schema (what the graph populates) has the expected node/edge fields.
     schema_fields = {f.name for f in get_brep_graph_schema()}
     assert {"face_features", "edge_features", "edge_index", "num_faces"} <= schema_fields
 
 
-def test_renders_addressable_for_vision_handoff() -> None:
-    """SPEC-2 §4.2 — renders + caption resolve from metadata (the ll-ocadr vision handoff)."""
+# --------------------------------------------------------------------------- mesh (3d) bridge
+def test_mesh_bridge_glb_to_points_and_tokens() -> None:
+    """SPEC-2 §4.3 — the 3d GLB (file_name) feeds ll_clouds.sample_from_mesh + geotoken."""
     pytest.importorskip("datasets")
-    row = _load_rows()[0]
+    pytest.importorskip("trimesh")
+    io = pytest.importorskip("ll_clouds.io")
+    geotoken = pytest.importorskip("geotoken")
+    import numpy as np
+    import trimesh
 
-    renders = row["render_file_names"]
-    assert isinstance(renders, list) and renders
-    for r in renders:
-        assert (FIXTURE / "cad" / r).exists()
-    assert (FIXTURE / "cad" / row["thumbnail_file_name"]).exists()
-    assert row["caption"] and row["caption"].strip()
+    row = _rows("3d")[0]
+    glb = FIXTURE / "3d" / row["file_name"]
+    assert glb.exists() and glb.suffix == ".glb"
+
+    # ll_clouds: GLB -> sampled point cloud
+    pc = io.sample_from_mesh(str(glb), 256)
+    assert pc.num_points == 256 and pc.points.shape == (256, 3)
+
+    # geotoken: GLB -> (vertices, faces) -> token sequence
+    mesh = trimesh.load(str(glb), force="mesh")
+    tokens = geotoken.GeoTokenizer().tokenize(np.asarray(mesh.vertices), np.asarray(mesh.faces))
+    assert tokens is not None and type(tokens).__name__ == "TokenSequence"
+
+
+# --------------------------------------------------------------------------- geo point-cloud bridge
+def test_geo_bridge_copc_to_point_cloud() -> None:
+    """SPEC-2 §4.4 — the geo COPC/LAZ (file_name) feeds ll_clouds.io.read_point_cloud.
+
+    Exercises the LAS/LAZ reader added to ll_clouds.io so the toolkit can consume the Three
+    Indexer's geospatial point-cloud artifacts directly (laspy[lazrs] backend)."""
+    pytest.importorskip("datasets")
+    pytest.importorskip("laspy")
+    io = pytest.importorskip("ll_clouds.io")
+
+    row = _rows("geo")[0]
+    assert row["crs"] and row["point_count"] == 512
+    cloud = FIXTURE / "geo" / row["file_name"]
+    assert cloud.exists() and cloud.name.endswith(".copc.laz")
+
+    pc = io.read_point_cloud(str(cloud))
+    assert pc.num_points == 512 and pc.points.shape == (512, 3)
+
+
+# --------------------------------------------------------------------------- renders / vision
+def test_renders_addressable_for_vision_handoff() -> None:
+    """SPEC-2 §4.2 — cad + 3d renders + caption resolve from metadata; geo has none."""
+    pytest.importorskip("datasets")
+    for config in ("cad", "3d"):
+        row = _rows(config)[0]
+        renders = row["render_file_names"]
+        assert isinstance(renders, list) and renders
+        for r in renders:
+            assert (FIXTURE / config / r).exists()
+        assert (FIXTURE / config / row["thumbnail_file_name"]).exists()
+        assert row["caption"] and row["caption"].strip()
+    # geo point clouds aren't rendered — render list is empty, not missing.
+    assert _rows("geo")[0]["render_file_names"] == []
