@@ -36,7 +36,8 @@ REQUIRED_COLUMNS = (
     "file_name", "asset_id", "source", "source_id", "domain", "license_id",
     "license_family", "requires_attribution", "sha256",
     "original_file_name", "pointcloud_file_name",
-    "render_file_names", "thumbnail_file_name", "split",
+    "render_file_names", "thumbnail_file_name",
+    "render_front", "render_top", "render_iso", "split",
 )
 PERMISSIVE = {"cc0", "public-domain", "public_domain", "cc-by", "cc-by-4.0", "permissive"}
 
@@ -114,6 +115,27 @@ def test_streaming_license_filter_carves_clean_cohort() -> None:
     assert empty == []
 
 
+def test_license_tier_configs_select_subsets() -> None:
+    """SPEC-2 §7 / OQ-2 (E3) — per-license-tier HF configs (cad-public-domain / cad-permissive)
+    select the right subset of the umbrella config, via the real CADStreamingDataset."""
+    from datasets import load_dataset
+
+    CADStreamingConfig, CADStreamingDataset = _streaming()
+    root = str(FIXTURE)
+
+    # umbrella "cad" = both tiers (public-domain NIST + permissive MIT)
+    assert len(list(load_dataset(root, name="cad", split="train", streaming=True))) == 2
+
+    pd_rows = list(CADStreamingDataset(CADStreamingConfig(
+        dataset_id=root, config_name="cad-public-domain", split="train", streaming=True, shuffle=False)))
+    assert len(pd_rows) == 1 and pd_rows[0]["license_family"] == "public-domain"
+
+    perm_rows = list(CADStreamingDataset(CADStreamingConfig(
+        dataset_id=root, config_name="cad-permissive", split="train", streaming=True, shuffle=False)))
+    assert len(perm_rows) == 1 and perm_rows[0]["license_family"] == "mit"
+    assert perm_rows[0]["requires_attribution"] is True  # permissive tier carries attribution
+
+
 # --------------------------------------------------------------------------- cad B-Rep bridge
 def test_cad_bridge_raw_step_becomes_brep_graph() -> None:
     """SPEC-2 §4.1 — the raw STEP at original_file_name feeds the real BRepGraphBuilder."""
@@ -184,10 +206,16 @@ def test_renders_addressable_for_vision_handoff() -> None:
     for config in ("cad", "3d"):
         row = _rows(config)[0]
         renders = row["render_file_names"]
-        assert isinstance(renders, list) and renders
+        assert isinstance(renders, list) and renders            # turntable bag (§4.2 E1)
         for r in renders:
             assert (FIXTURE / config / r).exists()
         assert (FIXTURE / config / row["thumbnail_file_name"]).exists()
+        # canonical fixed views (OQ-3) — render_front/top/iso resolve to real files
+        for col in ("render_front", "render_top", "render_iso"):
+            assert row[col], f"{config}: missing {col}"
+            assert (FIXTURE / config / row[col]).exists()
         assert row["caption"] and row["caption"].strip()
-    # geo point clouds aren't rendered — render list is empty, not missing.
-    assert _rows("geo")[0]["render_file_names"] == []
+    # geo point clouds aren't rendered — turntable empty, canonical views null.
+    geo = _rows("geo")[0]
+    assert geo["render_file_names"] == []
+    assert geo["render_front"] is None and geo["render_top"] is None and geo["render_iso"] is None
